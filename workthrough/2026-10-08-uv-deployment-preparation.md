@@ -44,6 +44,14 @@ Dependabot PR #4·#5의 이력을 함께 포함해 init/analyze를 동일한 ups
 - uv 전환 #10은 [전체 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37697312852) 및 독립 읽기 전용 검토를 통과했다. 후보 준비·실패 정리·환경 격리·복구 문서에서 추가 수정 사항은 발견되지 않았다.
 - Gunicorn #1의 원본 변경을 통합하면서 삭제한 requirements.txt는 복원하지 않고 uv.lock에 26.2.0을 반영한다. 선언 하한 25.1은 유지하며 상한은 27 미만이다.
 - 26.2.0으로 전체 Python 262개 검사 통과. TCP 신원 위조 거부·Unix 신원·Origin·CSRF 검사는 sync 및 운영 설정 gthread에서 검증한다. 최소 25.1에서도 두 transport 검사를 통과했다. CI는 Python 3.11/3.14 × locked/minimum 전체 행렬을 확인한다.
-- 실제 운영용 후보는 최종 main CI 이후 별도 경로에 생성한다. 서비스 재시작·current 변경·운영 venv 갱신·실제 계정 수신 검증은 수행하지 않는다.
+- 운영 후보는 검증한 main을 별도 최종 경로에 내보내 생성하며, 정확한 커밋·파일 해시·환경 버전은 비공개 candidate.json과 준비 기록에 보존한다. 서비스 재시작·current 변경·운영 venv 갱신·실제 계정 수신 검증은 수행하지 않는다.
 
 - 실제 GitHub [Dependabot uv 실행](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37697527127)이 성공해 #12를 생성했다. #12의 pyproject·lock 업데이트도 #11에 통합했다. bot의 lock revision 3을 uv 0.12.23의 lock --check 및 sync --locked가 수용하며 별도 재해석·다른 의존성 변경은 없음을 확인했다.
+
+## 최종 검증과 운영 경계
+
+- Gunicorn #11(원본 #1 및 uv #12 포함)은 [최종 통합 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37697806963) 성공 후 main에 병합했다.
+- 전환 후 새로 생성된 setup-uv #13도 검토했다. v10의 주요 변경은 민감 이벤트의 자동 캐시 비활성화이며 이 저장소는 enable-cache: false를 명시한다. uv 0.12.23 고정은 유지하고 Action만 v10.2.0 전체 SHA로 갱신한다.
+- 후보에 대한 실제 배포 전 검증은 합성 transport, 소스/lock 해시, 의존성 일치와 systemd 유닛 구문 검사다. health와 실제 계정·제공사 수신은 서로 다른 검증으로 기록한다.
+- 작업 중 웹·수집기의 PID/시작 시각/실행 경로와 운영 venv 1,796개 일반 파일 SHA256이 작업 전과 일치했고 health가 정상임을 확인했다. 마지막에도 동일 기준으로 재확인한다.
+- 운영 전환은 수행하지 않는다. 후보·복구 자료·Git 백업은 보존하고 작업 브랜치·worktree·검증용 산출물은 병합 확인 후 정리한다.
