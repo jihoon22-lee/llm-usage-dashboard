@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "llm-usage-dashboard"
+version = "0.1.0"
+description = "Private self-hosted LLM quota and usage dashboard"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["Flask>=3.1,<4", "gunicorn>=25.1,<26", "Werkzeug>=3.1.9,<4"]
+[project.urls]
+Homepage = "https://github.com/jihoon22-lee/llm-usage-dashboard"
+Documentation = "https://github.com/jihoon22-lee/llm-usage-dashboard/tree/main/docs"
+Issues = "https://github.com/jihoon22-lee/llm-usage-dashboard/issues"
+[project.scripts]
+llm-usage = "llm_usage.cli:main"
+[tool.setuptools.package-data]
+llm_usage = ["web/*"]
+[tool.setuptools.packages.find]
+include = ["llm_usage*"]

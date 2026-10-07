@@ -1,0 +1,163 @@
+name: Shared validation
+on:
+  workflow_call:
+    outputs:
+      artifact-id:
+        description: Immutable ID of the tested wheel, source archive and manifests
+        value: ${{ jobs.package.outputs.artifact-id }}
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements.txt
+      - name: Exercise the minimum supported Gunicorn on Python 3.11
+        if: matrix.python == '3.11'
+        run: python -m pip install gunicorn==25.1.0
+      - run: python -m unittest discover -s tests -q
+  javascript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - run: for file in llm_usage/web/*.js; do node --check "$file"; done
+      - run: node --test tests/js/*.test.mjs
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python tests/browser_ci.py
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - run: python -m pip install build==1.6.1
+      - name: Build once with reproducible timestamps
+        run: |
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          python -m build
+          python scripts/normalize_sdist.py dist "$SOURCE_DATE_EPOCH"
+      - name: Verify metadata, strict file manifest and isolated wheel install
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: python scripts/check_package.py
+      - name: Verify documented tagged Git checkout and fresh environment
+        run: python scripts/check_checkout.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: tested-distributions-${{ github.run_attempt }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/release-manifest.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+  public-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - run: python scripts/check_public.py
+      - name: Validate workflows with pinned actionlint
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  '"$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - run: python -m pip install pip-audit==2.10.1
+      - run: python -m pip_audit -r requirements-dev.txt --strict
+      - name: Gitleaks pinned binary and redacted full-history scan
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  '"$RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact=100 --no-banner --log-opts=--all .
+  codeql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@7999b86c43a865dc79d8923397f35af22de63401 # v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          build-mode: none
+      - uses: github/codeql-action/analyze@7999b86c43a865dc79d8923397f35af22de63401 # v4
+        with:
+          output: codeql-results
+      - name: Reject high and critical security findings
+        run: python scripts/check_sarif.py codeql-results
+  ci-required:
+    if: ${{ always() }}
+    needs: [python, javascript, browser, package, public-checks, security, codeql]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require success from every job including every matrix child
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/release_guard.py ci "$NEEDS_JSON"

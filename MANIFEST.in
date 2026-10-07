@@ -1,0 +1,11 @@
+include README.md LICENSE pyproject.toml
+recursive-include llm_usage *.py *.js *.css *.html *.json *.svg *.png
+prune tests
+prune docs
+prune workthrough
+prune packaging
+prune scripts
+prune .github
+prune .githooks
+exclude AGENTS.md CONTRIBUTING.md SECURITY.md CHANGELOG.md requirements*.txt install.sh .gitignore
+global-exclude __pycache__ *.py[cod] *.db *.sqlite* .env*

@@ -1,0 +1,4 @@
+-r requirements.txt
+build==1.6.1
+pip-audit==2.10.1
+playwright==1.62.0

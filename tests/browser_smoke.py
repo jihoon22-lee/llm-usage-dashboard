@@ -1,0 +1,180 @@
+"""Portable Chromium regression checks using disposable synthetic data and local assets."""
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+import argparse
+from urllib.parse import urlsplit
+from pathlib import Path
+from playwright.sync_api import sync_playwright,expect
+from llm_usage.notify import notification_url
+
+parser=argparse.ArgumentParser()
+parser.add_argument('--preview-assets',type=Path)
+parser.add_argument('--artifacts',type=Path)
+parser.add_argument('--origin',help='Explicit HTTPS origin for optional read-only live smoke; never used in CI')
+args=parser.parse_args()
+if args.origin:
+    try:
+        parsed=notification_url(args.origin)
+        if parsed.path not in ('','/') or '?' in args.origin or '#' in args.origin:
+            raise ValueError
+    except ValueError:
+        parser.error('--origin must be a complete HTTPS origin without credentials, path, query or fragment')
+    live=args.origin.rstrip('/')
+    with sync_playwright() as p:
+        browser=p.chromium.launch()
+        page=browser.new_page(service_workers='block',viewport={'width':1440,'height':1000})
+        def read_only(route):
+            request=route.request
+            destination=urlsplit(request.url)
+            if request.method!='GET' or destination.scheme!='https' or destination.hostname!=parsed.hostname or (destination.port or 443)!=(parsed.port or 443):
+                route.abort('blockedbyclient')
+            else:route.continue_()
+        page.route('**/*',read_only)
+        errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
+        assert page.goto(live+'/').status==200
+        expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+        expect(page.locator('#cards .stat').first).to_be_visible()
+        page.locator('#tab-analysis').click()
+        expect(page.locator('#chart > svg')).to_be_visible()
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        assert not errors,errors
+        browser.close()
+    print('Optional live read-only smoke passed; no provider collection or settings writes attempted.')
+    raise SystemExit(0)
+url='https://dashboard.test/'
+artifacts=artifact_directory(args.artifacts)
+artifacts.mkdir(exist_ok=True)
+with sync_playwright() as p:
+    browser=p.chromium.launch()
+    page=browser.new_page(service_workers='block',viewport={'width':1440,'height':1000})
+    fixture_page(page)
+    errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
+    if args.preview_assets:
+        web=args.preview_assets.resolve()
+        def serve(route):
+            path=urlsplit(route.request.url).path
+            if path=='/':
+                route.fulfill(path=web/'index.html',content_type='text/html',headers=CSP_HEADERS)
+            elif path.startswith('/assets/'):
+                route.fulfill(path=web/Path(path).name,content_type='text/css' if path.endswith('.css') else 'text/javascript')
+            else:
+                route.fallback()
+        # Match query strings too: view URLs like /?view=analysis must serve preview HTML.
+        page.route(url+'**',serve)
+    assert page.goto(url).status==200
+    expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+    # Overview is the default view: summary cards and quota cards.
+    expect(page.locator('section[data-view="overview"]')).to_be_visible()
+    expect(page.locator('#cards .stat').first).to_be_visible()
+    # Dormant routes (ended or past quota_hide_days) fold into .quota-dormant;
+    # every route still renders a card somewhere inside #limits.
+    assert page.locator('#limits .limit-card').count()==5
+    assert page.locator('#limits > .limit-card').count()>=3
+    expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단')
+    # Tab bar switches views and syncs ?view= to the URL.
+    page.locator('#tabs [data-view="analysis"]').click()
+    expect(page.locator('section[data-view="analysis"]')).to_be_visible()
+    assert 'view=analysis' in page.url
+    expect(page.locator('#chart > svg')).to_be_visible()
+    expect(page.locator('#composition .donut')).to_be_visible()
+    expect(page.locator('#ranking svg').first).to_be_visible()
+    assert page.locator('#chart rect').count()>0
+    # Check rendered arithmetic against the synthetic Flask response.
+    expect(page.get_by_role('heading',name='모델별 사용량 상세',exact=True)).to_be_visible()
+    cells=page.locator('#rows tr').first.locator('td').all_text_contents()
+    values=[int(cells[i].replace(',','')) for i in (5,6,7,8,10)]
+    assert values[3]==values[0]+values[1]+values[2]+values[4], 'Total = uncached + cached + output + cache creation'
+    labels=page.evaluate('lastUsage.labels')
+    page.locator('#chart > svg').focus()
+    expect(page.locator('#chart-tooltip .tooltip-row:not(.tooltip-missing)')).to_have_count(min(len(labels),8))
+    page.keyboard.press('Escape')
+    # Metric picker and share modes render without refetch failures.
+    page.locator('#metric').select_option('requests')
+    expect(page.locator('#chart-caption')).to_contain_text('요청 수')
+    page.locator('#cumulative').select_option('share-area')
+    expect(page.locator('#chart svg path').first).to_be_visible()
+    page.locator('#cumulative').select_option('share-line')
+    expect(page.locator('#chart svg path').first).to_be_visible()
+    page.locator('#metric').select_option('tokens');page.locator('#cumulative').select_option('0')
+    # Compare overlay draws a dashed ghost line and a legend chip.
+    with page.expect_response(lambda r:'/api/usage?' in r.url and 'compare=week' in r.url and r.status==200):
+        page.locator('#compare').select_option('week')
+    expect(page.locator('#chart svg path[stroke-dasharray]')).to_be_visible()
+    expect(page.locator('#legend')).to_contain_text('7일 전 동일 구간')
+    page.locator('#chart > svg').focus()
+    expect(page.locator('#chart-tooltip')).to_contain_text('7일 전')
+    page.keyboard.press('Escape')
+    with page.expect_response(lambda r:'/api/usage?' in r.url and r.status==200):page.locator('#compare').select_option('')
+    # Instant shared tooltip on the heatmap.
+    page.locator('.heat-cell').first.dispatch_event('pointerover')
+    expect(page.locator('#tip')).to_be_visible()
+    page.screenshot(path=str(artifacts/'dashboard-desktop.png'),full_page=True)
+    # Insights view: subscription value rows and the activity calendar.
+    page.locator('#tabs [data-view="insights"]').click()
+    assert 'view=insights' in page.url
+    expect(page.locator('#subvalue .sub-row').first).to_be_visible()
+    # Insights load lazily after the tab switch; wait for the calendar before
+    # counting its cells.
+    expect(page.locator('#calendar .cal-cell[data-tip]').first).to_be_visible()
+    assert page.locator('#calendar .cal-cell[data-tip]').count()>90
+    expect(page.locator('#sessions tr').first).to_be_visible()
+    expect(page.locator('#projects tr').first).to_be_visible()
+    page.locator('#calendar .cal-cell[data-tip]').last.dispatch_event('pointerover')
+    expect(page.locator('#tip')).to_be_visible()
+    # Sources view lists collectors.
+    page.locator('#tabs [data-view="sources"]').click()
+    assert page.locator('#sources .source').count()>0
+    # Settings view renders config editors (read-only checks; no mutation on live).
+    page.locator('#tabs [data-view="settings"]').click()
+    assert 'view=settings' in page.url
+    expect(page.locator('#cfg-subs .cfg-row').first).to_be_visible()
+    assert page.locator('#cfg-pricing tbody tr').count()>0
+    assert page.locator('#cfg-thresholds input').count()==4
+    expect(page.locator('#cfg-refresh')).to_be_visible()
+    # Auto refresh and browser alerts moved here from the header.
+    assert page.locator('.cfg-toggles input').count()==6
+    # Back to analysis for chart interactions.
+    page.locator('#tabs [data-view="analysis"]').click()
+    page.locator('#cumulative').select_option('1')
+    expect(page.locator('#chart path').first).to_be_visible()
+    page.locator('#cumulative').select_option('0')
+    page.locator('#legend button').first.click()
+    expect(page.locator('#legend button').first).to_have_attribute('aria-pressed','false')
+    page.locator('#legend button').first.click()
+    # Answers now arrive within ~100 ms: wait for the previous refresh, and change to a
+    # different value each time (re-selecting the current one fetches nothing new).
+    expect(page.locator('#refresh')).to_be_enabled()
+    for group in ['model','provider','project','agent','route']:
+        expect(page.locator('#refresh')).to_be_enabled()
+        with page.expect_response(lambda r:'/api/usage?' in r.url and r.status==200):page.locator('#group').select_option(group)
+    for period in ['today','30d','all','custom','7d']:
+        expect(page.locator('#refresh')).to_be_enabled()
+        with page.expect_response(lambda r:'/api/usage?' in r.url and r.status==200):page.locator('#period').select_option(period)
+        expect(page.locator('#refresh')).to_be_enabled()
+    page.locator('#granularity').select_option('hour');expect(page.locator('#refresh')).to_be_enabled()
+    page.locator('#granularity').select_option('day');expect(page.locator('#refresh')).to_be_enabled()
+    page.set_viewport_size({'width':390,'height':844})
+    page.screenshot(path=str(artifacts/'dashboard-mobile.png'),full_page=True)
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
+    page.clock.install()
+    calls=[];page.on('request',lambda r:calls.append(r.url) if '/api/usage?' in r.url else None)
+    page.locator('#tabs [data-view="settings"]').click()  # the toggle lives in settings
+    page.locator('#auto').uncheck();page.locator('#auto').check()
+    expect(page.get_by_label('자동 갱신')).to_be_checked()
+    page.clock.fast_forward(299000);assert len(calls)==0
+    with page.expect_response(lambda r:'/api/usage?' in r.url):page.clock.fast_forward(2000)
+    expect(page.locator('#refresh')).to_be_enabled()
+    assert len(calls)==1
+    page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))")
+    page.clock.fast_forward(600000);assert len(calls)==1
+    page.locator('#auto').uncheck()
+    page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
+    page.evaluate('Promise.all([refresh(),refresh(),refresh()])');expect(page.locator('#refresh')).to_be_enabled();assert len(calls)==2
+    page.clock.fast_forward(600000);assert len(calls)==2
+    # Manual refresh uses authenticated POST; return completion via a browser-only fixture to avoid provider rate-limit calls.
+    page.route('**/api/refresh',lambda r:r.fulfill(status=202,json={'accepted':True,'requested':1}))
+    page.route('**/api/collection',lambda r:r.fulfill(json={'completed':1}))
+    page.locator('#refresh').click();expect(page.locator('#refresh')).to_be_enabled();assert len(calls)==3
+    assert not errors,errors
+    browser.close()
+print('Browser passed: synthetic Flask API, tabs+view URL, charts, metric/share modes, tooltips, insights, sources, mobile, auto/hidden/coalesced refresh, manual UI with completion fixture.')
