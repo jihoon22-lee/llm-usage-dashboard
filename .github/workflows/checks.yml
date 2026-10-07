@@ -127,6 +127,9 @@ jobs:
   codeql:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      # PRs must enforce the same full-tree security gate as main and release tags.
+      CODEQL_ACTION_DIFF_INFORMED_QUERIES: 'false'
     permissions:
       contents: read
       security-events: write

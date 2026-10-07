@@ -380,7 +380,10 @@ def _tls_ready(host,port,context,timeout):
 def _agy_post(servers,method,timeout=10,probe=2):
     import ssl
     # Loopback only, to a port owned by the server process; its certificate is self-signed.
-    context=ssl.create_default_context();context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+    context=ssl.create_default_context()
+    # Do not inherit a weaker protocol floor from the host OpenSSL configuration.
+    context.minimum_version=ssl.TLSVersion.TLSv1_2
+    context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
     body=json.dumps({'metadata':{'ideName':'antigravity','extensionName':'antigravity','locale':'en'}}).encode()
     for pid in set(_agy_endpoints)-{pid for pid,_ in servers}:del _agy_endpoints[pid]
     last=None

@@ -55,6 +55,7 @@ with tempfile.TemporaryDirectory(prefix='llm-checkout-') as temporary:
     python = environment/'bin/python'
     run([str(python),'-m','pip','install','-q','-r','requirements.txt'],cwd=checkout)
     run([str(python),'-m','pip','install','-q','--no-deps','-e','.'],cwd=checkout)
+    run([str(python),'-m','pip','check'],cwd=checkout)
     binaries = temp/'bin'
     binaries.mkdir()
     tailscale = binaries/'tailscale'

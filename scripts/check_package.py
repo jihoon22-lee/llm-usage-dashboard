@@ -49,6 +49,7 @@ with tempfile.TemporaryDirectory(prefix='llm-package-') as temporary:
     venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / 'bin/python'
     subprocess.run([str(python), '-m', 'pip', 'install', str(wheel)], cwd=temp, check=True)
+    subprocess.run([str(python), '-m', 'pip', 'check'], cwd=temp, check=True)
     env = {k:v for k,v in os.environ.items() if k != 'PYTHONPATH'}
     subprocess.run([str(environment / 'bin/llm-usage'), '--help'], cwd=temp, env=env, check=True)
     smoke = '''
