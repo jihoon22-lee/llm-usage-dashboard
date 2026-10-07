@@ -56,7 +56,29 @@ def preview(page, limits):
     page.route(origin+'/**', serve)
 
 
+PLAN_NOTE = '<scr<script>ipt>window.quotaInjected=true</script><img src=x onerror="window.quotaInjected=true"> & quota < 20%'
+PLAN_PREVIEWS = ['계획 대비 +12.3%p 여유 · 창 42% 경과', '계획 대비 -6.8%p 빠름 · 창 23% 경과']
+
+
+def check_plan_text(page):
+    card = page.locator('#quota-claude-code')
+    expect(card.locator('.bucket-detail > summary small')).to_have_text(PLAN_PREVIEWS)
+    expect(card.locator('.plan strong')).to_have_text(['+12.3%p 여유', '-6.8%p 빠름'])
+    expect(card.locator('.plan strong.warn-text')).to_have_text('-6.8%p 빠름')
+    # Provider text that resembles nested tags remains literal text. It cannot
+    # create elements or execute handlers when the collapsed summary is rendered.
+    expect(card.locator('.quota-note')).to_have_text(PLAN_NOTE)
+    expect(card.locator('.quota-note script, .quota-note img')).to_have_count(0)
+    assert page.evaluate('window.quotaInjected===undefined')
+
+
 blocked = fixture(120)
+for item in blocked['limits']:
+    if item['route'] == 'claude-code':
+        positive = item['bucket'] == 'five_hour'
+        item['plan'] = dict(ahead=12.34 if positive else -6.78,
+                            elapsed_fraction=.42 if positive else .23, expected_remaining=50)
+        if positive:item['note'] = PLAN_NOTE
 row = next(r for r in blocked['limits'] if r['bucket'] == '3p-5h')
 assert row['remaining'] == 90.0 and row['blocked_by']['bucket'] == '3p-weekly', row
 assert row['forecast'], 'fixture must produce a forecast so hiding it is observable'
@@ -84,6 +106,7 @@ with sync_playwright() as p:
     expect(card.locator('.quota-window-title')).to_have_text(['5시간', '주간'])
     claude = page.locator('#quota-claude-code')
     expect(claude).not_to_contain_text('사용 불가')
+    check_plan_text(page)
     timeline = page.locator('#reset-timeline')
     expect(timeline).to_contain_text('Antigravity 주간 3rd party 소진 중')
     expect(timeline).not_to_contain_text('Antigravity 5시간 3rd party')
@@ -109,6 +132,9 @@ with sync_playwright() as p:
     expect(mobile.locator('#quota-antigravity .quota-blocked-note')).to_be_visible()
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
     mobile.screenshot(path=str(output/'quota-hierarchy-mobile.png'), full_page=True)
+    mobile.locator('[data-quota="claude-code"]').click()
+    expect(mobile.locator('#quota-claude-code')).to_be_visible()
+    check_plan_text(mobile)
     assert not errors, errors
     browser.close()
 print('quota hierarchy browser checks passed')
