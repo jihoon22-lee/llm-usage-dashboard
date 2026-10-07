@@ -20,6 +20,7 @@
    in release mode a failed check rolls back to the previous release
 """
 import argparse
+from contextlib import closing
 import io
 import ipaddress
 import json
@@ -28,6 +29,8 @@ from pathlib import Path
 import shutil
 import re
 import signal
+import shlex
+import pwd
 import sqlite3
 import subprocess
 import sys
@@ -37,7 +40,6 @@ import urllib.request
 import urllib.parse
 
 PROJECT=Path(__file__).resolve().parents[1]
-DATABASE=Path.home()/'.local/share/llm-usage/usage.db'
 RELEASE_ROOT=Path.home()/'.local/lib/llm-usage'
 KEEP=5
 
@@ -57,9 +59,43 @@ def started(name):
     return int(value) if value.isdigit() else 0
 
 
-def heartbeat():
+def deployment_database():
+    """Resolve the two installed services' config before changing a release link.
+
+    Never evaluate systemd environment text as shell code. EnvironmentFile-based
+    overrides need explicit unit configuration so this preflight can prove identity.
+    """
+    databases=[]
     try:
-        with sqlite3.connect(f'file:{DATABASE}?mode=ro',uri=True,timeout=5) as c:
+        for name in ('llm-usage.service','llm-usage-collector.service'):
+            if unit(name,'EnvironmentFiles'):
+                raise ValueError('EnvironmentFile overrides are not supported')
+            env=dict(item.split('=',1) for item in shlex.split(unit(name,'Environment')) if '=' in item)
+            unset=shlex.split(unit(name,'UnsetEnvironment'))
+            if any(item.split('=',1)[0] in ('HOME','LLM_USAGE_CONFIG') for item in unset):
+                raise ValueError('ambiguous service environment')
+            user=unit(name,'User')
+            if not user:raise ValueError('missing service owner')
+            owner=pwd.getpwuid(int(user)) if user.isdigit() else pwd.getpwnam(user)
+            home=Path(env.get('HOME') or owner.pw_dir)
+            config=Path(env.get('LLM_USAGE_CONFIG') or home/'.config/llm-usage/config.json')
+            if not config.is_absolute():raise ValueError('relative configuration')
+            override=os.environ.get('LLM_USAGE_CONFIG')
+            if override is not None and Path(override).resolve()!=config.resolve():
+                raise ValueError('shell and service configurations differ')
+            data=json.loads(config.read_text())
+            database=Path(data['database'])
+            if not database.is_absolute():raise ValueError('relative database')
+            databases.append(database.resolve())
+        if databases[0]!=databases[1]:raise ValueError('service databases differ')
+        return databases[0]
+    except (OSError,ValueError,TypeError,KeyError,subprocess.CalledProcessError):
+        raise ValueError('서비스 설정의 database를 확인할 수 없습니다. 두 유닛의 명시적 설정·경로·권한과 셸 환경을 확인하세요.') from None
+
+
+def heartbeat(database):
+    try:
+        with closing(sqlite3.connect(Path(database).resolve().as_uri()+'?mode=ro',uri=True,timeout=5)) as c:
             row=c.execute("SELECT data FROM state WHERE key='collector'").fetchone()
         return (json.loads(row[0]) if row else {}).get('checked') or 0
     except (sqlite3.Error,ValueError):return 0
@@ -133,12 +169,12 @@ def release_mode(root=RELEASE_ROOT):
 
 # ---- deployment -----------------------------------------------------------
 
-def restart(before_web,before_collector):
+def restart(before_web,before_collector,database):
     if run('sudo','-n','systemctl','restart','llm-usage.service',check=False,capture=True).returncode!=0:return 'denied'
     if not wait(healthy,60):return 'unhealthy'
     if not wait(lambda:started('llm-usage.service')>before_web and started('llm-usage-collector.service')>before_collector,60):return 'not restarted'
     mark=time.time()
-    return None if wait(lambda:heartbeat()>mark,180) else 'no heartbeat'
+    return None if wait(lambda:heartbeat(database)>mark,180) else 'no heartbeat'
 
 
 def checks():
@@ -150,15 +186,15 @@ def checks():
     run(python,'-m','unittest','discover','-s','tests','-q')
 
 
-def deploy_release(target,rollback_to,label):
+def deploy_release(target,rollback_to,label,database):
     before=(started('llm-usage.service'),started('llm-usage-collector.service'))
     switch(target)
-    problem=restart(*before)
+    problem=restart(*before,database)
     if problem is None:
         prune();print(f'배포 완료: {label} (릴리스 {target.name[:12]})');return True
     if rollback_to is not None:
         switch(rollback_to)
-        if problem!='denied':restart(started('llm-usage.service'),started('llm-usage-collector.service'))
+        if problem!='denied':restart(started('llm-usage.service'),started('llm-usage-collector.service'),database)
     if problem=='denied':
         sys.exit('재시작 권한이 없어 릴리스를 되돌렸습니다. sudo .venv/bin/python packaging/system_update.py --owner $USER 를 먼저 실행하세요.')
     sys.exit(f'배포 확인 실패({problem}): 이전 릴리스 {rollback_to.name[:12] if rollback_to else "없음"}로 되돌렸습니다.')
@@ -199,23 +235,28 @@ def main():
         try:args.smoke_origin=smoke_origin(args.smoke_origin)
         except ValueError as exc:parser.error(str(exc))
     python=str(PROJECT/'.venv/bin/python')
+    try:database=deployment_database()
+    except ValueError as exc:parser.error(str(exc))
     if args.rollback:
         if not release_mode():sys.exit('릴리스 모드가 아니어서 되돌릴 이전 릴리스가 없습니다.')
         previous=previous_release()
         if previous is None:sys.exit('이전 릴리스가 없습니다.')
-        deploy_release(previous,current_release(),'롤백')
+        deploy_release(previous,current_release(),'롤백',database)
         return
     checks()
     head=run('git','rev-parse','HEAD',capture=True).stdout.strip()
     if args.prepare:
         switch(build_release(head));print(f'릴리스 준비: {head[:12]} → {RELEASE_ROOT/"current"}');return
     if release_mode():
-        deploy_release(build_release(head),current_release(),head[:7])
+        deploy_release(build_release(head),current_release(),head[:7],database)
     else:
         before_web,before_collector=started('llm-usage.service'),started('llm-usage-collector.service')
-        problem=restart(before_web,before_collector)
+        problem=restart(before_web,before_collector,database)
         if problem=='denied':
-            os.kill(int(unit('llm-usage.service','MainPID')),signal.SIGHUP)
+            pid=unit('llm-usage.service','MainPID')
+            if not pid.isdigit() or int(pid)<=0:
+                sys.exit('웹 서비스의 유효한 PID가 없어 다시 읽지 않았습니다. 서비스 상태와 재시작 권한을 확인하세요.')
+            os.kill(int(pid),signal.SIGHUP)
             print('재시작 권한이 없어 웹 worker만 다시 읽었습니다. 수집기는 이전 코드로 실행 중입니다.')
             print('한 번만 실행: sudo .venv/bin/python packaging/system_update.py')
             if not wait(healthy,60):sys.exit('실패: 웹 healthz 확인 시간 초과')
