@@ -12,14 +12,13 @@ import sys
 import tarfile
 import tempfile
 import tomllib
-import venv
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='llm-checkout-') as temporary:
     temp = Path(temporary)
     home = temp / 'home'
     home.mkdir()
-    env = {k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','LLM_USAGE_CONFIG'} and not k.startswith('GIT_')}
+    env = {k:v for k,v in os.environ.items() if k not in {'LLM_USAGE_CONFIG', 'VIRTUAL_ENV'} and not k.startswith(('GIT_', 'UV_', 'PIP_', 'PYTHON'))}
     env.update(HOME=str(home), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
     source = temp / 'source'
     source.mkdir()
@@ -51,11 +50,9 @@ with tempfile.TemporaryDirectory(prefix='llm-checkout-') as temporary:
     run(['git','clone','--quiet','--branch','v'+version,str(source),str(checkout)],cwd=temp)
     run(['git','switch','-c','main'],cwd=checkout)
     environment = checkout / '.venv'
-    venv.EnvBuilder(with_pip=True).create(environment)
     python = environment/'bin/python'
-    run([str(python),'-m','pip','install','-q','-r','requirements.txt'],cwd=checkout)
-    run([str(python),'-m','pip','install','-q','--no-deps','-e','.'],cwd=checkout)
-    run([str(python),'-m','pip','check'],cwd=checkout)
+    run(['uv','sync','--locked','--no-dev','--python',sys.executable,'--no-python-downloads'],cwd=checkout)
+    run(['uv','pip','check','--python',str(python)],cwd=checkout)
     binaries = temp/'bin'
     binaries.mkdir()
     tailscale = binaries/'tailscale'
@@ -74,4 +71,16 @@ with tempfile.TemporaryDirectory(prefix='llm-checkout-') as temporary:
     branch = subprocess.check_output(['git','branch','--show-current'],cwd=checkout,env=env,text=True).strip()
     assert branch=='main'
     run([str(python),'-c','from llm_usage.webapp import create_app; import llm_usage; print("Fresh Git install imports successfully")'],cwd=temp)
+    candidate = temp / 'candidate'
+    # Exercise the documented preparation command on a clean main and outside its source.
+    uv = shutil.which('uv')
+    assert uv
+    run([sys.executable, str(checkout/'packaging/prepare_deployment.py'), '--uv', uv,
+         '--python', sys.executable, '--destination', str(candidate)], cwd=temp)
+    candidate_env = {k:v for k,v in env.items() if not k.startswith(('UV_', 'PIP_', 'PYTHON'))}
+    subprocess.run([str(candidate/'.venv/bin/python'), '-m', 'unittest', 'discover',
+                    '-s', str(candidate/'tests'), '-p', 'test_gunicorn_transport.py', '-q'],
+                   cwd=temp, env=candidate_env, check=True)
+    assert json.loads((candidate/'candidate.json').read_text())['activated'] is False
+
 print('Tagged Git clone, local main, fresh venv, editable install and synthetic init passed')

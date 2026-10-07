@@ -13,6 +13,7 @@ import unittest
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Gunicorn Unix transport requires Linux')
 class GunicornTransportTests(unittest.TestCase):
+    worker_arguments = []
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix='llm-transport-')
@@ -32,7 +33,7 @@ class GunicornTransportTests(unittest.TestCase):
         unix_listener.listen()
         cls.process = subprocess.Popen([sys.executable, '-m', 'gunicorn', '--workers', '1', '--bind',
             'fd://' + str(listener.fileno()), '--bind', 'fd://' + str(unix_listener.fileno()), '--no-control-socket',
-            'llm_usage.webapp:create_app()'], pass_fds=(listener.fileno(), unix_listener.fileno()),
+            *cls.worker_arguments, 'llm_usage.webapp:create_app()'], pass_fds=(listener.fileno(), unix_listener.fileno()),
             env={**os.environ, 'LLM_USAGE_CONFIG':str(config)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         listener.close()
         unix_listener.close()
@@ -96,3 +97,8 @@ class GunicornTransportTests(unittest.TestCase):
         self.assertEqual(self.request('/api/refresh', method='POST', headers={**post, 'X-CSRF-Token':token,
             'Origin':'https://attacker.example'}, body='{}')[0], 403)
         self.assertEqual(self.request('/api/refresh', method='POST', headers={**post, 'X-CSRF-Token':token}, body='{}')[0], 202)
+
+
+class GunicornThreadedTransportTests(GunicornTransportTests):
+    """Match production: --threads 4 selects the gthread worker."""
+    worker_arguments = ["--threads", "4"]
