@@ -34,3 +34,17 @@ Windows 홈은 init에서, Windows hook 쓰기는 매 실행 선택한다. 기�
 
 단위·합성 브라우저·실제 Gunicorn transport, 공개 Actions·다운로드, 실제 계정·운영 배포는 별도로 보고한다.
 이번 작업은 실제 계정을 재조회하거나 운영을 재시작하지 않는다. 과거 실수신은 구조 문서에 시점 한계와 함께 기록한다.
+
+## 공개 검증
+
+- 최초 정제 main push를 초기 설정 예외로 사용했다. [첫 Actions](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37636211253)의 모든 검사가 성공했다.
+- 이후 관리자에게도 적용하는 PR 필수·`checks / ci-required`·최신 main 기반 검사를 설정했다. v* 태그 수정/삭제 금지와 immutable releases를 활성화했다.
+- 비공개 취약점 제보·비밀 탐지·push protection·의존성 알림을 활성화했다.
+- [검증 PR](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/6)은 manifest 버전/태그 불일치를 검출하는 실패 검사를 먼저 실행한다. 수정 후 성공한 결과로만 병합한다.
+- wheel과 Git 설치의 `pip check`도 검사하여 선언 의존성과 설치된 버전의 불일치를 거부한다.
+
+- 첫 CI 성공 후 GitHub 보안 경고 목록과 교차 확인해 high 경고 2건과 SARIF 확장 규칙 누락을 발견했다. 성공 상태만으로 릴리스하지 않고 집계·TLS 최소 버전·HTML 문자열 처리를 추가 수정한다.
+- [실패 실행](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37636693561)에서 Python 검사와 ci-required가 실패했으며 PR은 BLOCKED였다. 실패 단계에서는 태그·릴리스를 만들지 않았다.
+
+- SARIF driver/extension 규칙 참조를 모두 검사하도록 수정했고 실제 최초 분석 SARIF로 high 2건의 실패를 재현했다. 규칙 누락·모호성·잘못된 점수도 실패 처리한다. PR도 전체 소스를 검사한다.
+- Antigravity loopback RPC의 TLS 최소 버전을 1.2로 명시하고, 한도 요약은 HTML 제거 대신 숫자에서 직접 생성하도록 수정했다. 합성 TLS/데스크톱·모바일 회귀가 통과했다.
