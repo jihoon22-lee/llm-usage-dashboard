@@ -276,6 +276,8 @@ class Store:
         return identity(session) if removed else None
 
     def rebuild_codex(self,c,session,attrs=None):
+        # Rebuilding token deltas must not silently migrate historical project labels.
+        projects=dict(c.execute('SELECT id,project FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,)))
         c.execute('DELETE FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,))
         previous=None;previous_ts=None;seen={};resets=0;partial=False
         zero_baseline=False;zero_baselines=0;ambiguous=0
@@ -309,7 +311,8 @@ class Store:
             inp,cached,out,creation,reasoning=delta
             self.event(c,row['id'],row['ts'],row['provider'],row['route'],row['model'],
                        dict(uncached_input=max(0,inp-cached-creation),cached_input=cached,output=out,
-                            cache_creation=creation,reasoning=reasoning),**(attrs or {}))
+                            cache_creation=creation,reasoning=reasoning),
+                       **({**(attrs or {}),'project':projects[row['id']]} if row['id'] in projects else (attrs or {})))
         c.execute('INSERT OR REPLACE INTO session_quality VALUES (?,?,?,?,?)',(session,resets,int(partial),ambiguous,zero_baselines))
         self.bump_data_version(c)
 
@@ -787,12 +790,14 @@ class Store:
             sessionless=c.execute('SELECT COUNT(*) FROM events WHERE ts>=? AND ts<? AND session IS NULL'+scope_sql,
                                   (a.timestamp(),b.timestamp(),*scope_args)).fetchone()[0]
             projects={}
-            for r in c.execute('''SELECT project,model,date(ts,'unixepoch','+9 hours') AS day,COUNT(DISTINCT session) AS sessions,MAX(ts) AS last_ts,'''+count+','+sums+'''
+            project_sessions=dict(c.execute("SELECT COALESCE(NULLIF(project,''),'미분류'),COUNT(DISTINCT session) FROM events WHERE ts>=? AND ts<?"
+                +scope_sql+" GROUP BY COALESCE(NULLIF(project,''),'미분류')",(a.timestamp(),b.timestamp(),*scope_args)))
+            for r in c.execute('''SELECT project,model,date(ts,'unixepoch','+9 hours') AS day,MAX(ts) AS last_ts,'''+count+','+sums+'''
                 FROM events WHERE ts>=? AND ts<?'''+scope_sql+' GROUP BY project,model,day''',(a.timestamp(),b.timestamp(),*scope_args)):
                 label=r['project'] or '미분류'
-                e=projects.setdefault(label,dict(project=label,sessions=0,last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
+                e=projects.setdefault(label,dict(project=label,sessions=project_sessions[label],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
                     **dict.fromkeys(TOKENS,0)))
-                e['sessions']+=r['sessions'];e['last_ts']=max(e['last_ts'],r['last_ts']);e['requests']+=r['requests']
+                e['last_ts']=max(e['last_ts'],r['last_ts']);e['requests']+=r['requests']
                 for k in TOKENS: e[k]+=r[k]
                 if pricing:
                     rate=rate_for(r['model'],pricing,r['day'])

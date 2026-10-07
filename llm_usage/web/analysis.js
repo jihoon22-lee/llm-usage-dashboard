@@ -289,15 +289,22 @@ const modeAria={'0':'구간별 누적 막대 차트','1':'누적 선 그래프',
 // Model view keeps every observed model, including new low-volume models.
 // Other groupings retain the compact top-7 plus 기타 overview.
 function chartSeries(data){
- const labels=data.labels,points=data.series;
- if($('group').value==='model'||labels.length<=8)return{labels,points};
+ const comparison=data.compare;
+ const labels=[...new Set([...data.labels,...(comparison?.series||[]).flatMap(p=>Object.keys(p.values||{}))])];
+ const points=data.series;
+ const compact=$('group').value!=='model'&&labels.length>8;
  const sum=l=>points.reduce((s,p)=>s+metricValue(p.values[l]||{}),0);
- const kept=new Set([...labels].sort((a,b)=>sum(b)-sum(a)).slice(0,7));
- const merged=points.map(p=>{const v={};let other=null;
-  for(const l of labels){const src=p.values[l]||{};if(kept.has(l)){v[l]=src;continue;}
-   other=other||{};for(const k in src)if(typeof src[k]==='number')other[k]=(other[k]||0)+src[k];}
-  v['기타']=other||{};return{...p,values:v};});
- return{labels:[...labels.filter(l=>kept.has(l)),'기타'],points:merged};
+ const kept=new Set(compact?[...labels].filter(l=>l!=='기타').sort((a,b)=>sum(b)-sum(a)).slice(0,7):labels);
+ const shown=compact?[...labels.filter(l=>kept.has(l)),'기타']:labels;
+ function mapPoints(series){return series.map(p=>{
+  const values=Object.fromEntries(shown.map(l=>[l,{}]));
+  for(const label of labels){
+   const src=p.values[label]||{},target=kept.has(label)?label:'기타';
+   for(const [key,value] of Object.entries(src))if(typeof value==='number')values[target][key]=(values[target][key]||0)+value;
+  }
+  return {...p,values};
+ });}
+ return {labels:shown,points:mapPoints(points),compare:comparison?{...comparison,series:mapPoints(comparison.series)}:null};
 }
 // Stable label→palette index so a model keeps its color across period changes.
 // Active labels always get distinct indices; inactive owners are evicted.

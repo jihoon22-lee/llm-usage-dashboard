@@ -35,11 +35,13 @@ git merge --ff-only v0.1.1
 
 개인 수정 때문에 fast-forward가 안 되면 강제로 초기화하지 않습니다. 변경을 보존하고 통합·검증하세요.
 
+배포기는 두 서비스의 `Environment`에 지정된 `LLM_USAGE_CONFIG` 또는 서비스 소유자의 기본 설정에서 DB 경로를 읽습니다. 두 서비스의 DB가 다르거나 셸의 `LLM_USAGE_CONFIG`가 서비스 설정과 다르면 전환 전에 중단합니다. 기본 경로와 사용자 지정 절대 경로를 모두 지원합니다. `EnvironmentFile`이나 설정 경로를 지우는 `UnsetEnvironment`가 있는 유닛은 이 사전 확인에서 지원하지 않으므로 명시적인 유닛 설정으로 맞춰야 합니다.
+
 ```bash
 .venv/bin/python packaging/deploy.py --rollback
 ```
 
-현재 배포기의 사전 DB 백업은 기본 데이터 경로만 지원합니다. config의 database를 변경했다면 별도 백업을 먼저 확보하세요.
+현재 배포기는 배포 직전 DB 백업을 만들지 않습니다. 수집기의 기존 주기 백업은 별도 기능이며 배포 직전 상태를 보장하지 않습니다. 복구가 필요한 작업 전에는 기존 백업의 시각과 복구 범위를 확인하세요.
 현재 rollback은 코드 전환이며 **공유 .venv의 의존성과 DB까지 복구하지 않습니다.** 의존성 갱신 전에 버전·복구 방법을 확보하세요.
 실제 브라우저 검사는 `--smoke --smoke-origin HTTPS_ORIGIN`을 함께 지정해야 합니다. 생략한 기본 브라우저 스크립트는 합성 데이터 검사입니다.
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.

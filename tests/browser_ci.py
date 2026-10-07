@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 CHECKS = ('smoke','dashboard','features','insights','model_visibility','notifications',
-          'quota_hierarchy','review','status','antigravity','privacy')
+          'quota_hierarchy','review','status','antigravity','privacy','remediation')
 if __name__ == '__main__':
     for check in CHECKS:
         print(f'Browser check: {check}', flush=True)

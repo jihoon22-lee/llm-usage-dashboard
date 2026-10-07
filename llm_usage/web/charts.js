@@ -15,7 +15,7 @@ function chart(data){
  if(data.compare&&!$('cumulative').value.startsWith('share'))$('legend').insertAdjacentHTML('beforeend',`<span class="unavailable-series" data-tip="${esc(data.compare.label)}: ${esc(data.compare.start.slice(0,10))} ~ ${esc(data.compare.end_exclusive.slice(0,10))} (종료 미포함)">⎯⎯ ${esc(data.compare.label)} 합계</span>`);
  if(!labels.length){$('chart').innerHTML='<div class="empty">표시할 항목을 범례에서 선택하세요. 기록이 없으면 수집 후 표시됩니다.</div>';return;}
  const mode=$('cumulative').value,cumulative=mode==='1',share=mode.startsWith('share');
- const cmp=data.compare,cmpPoints=(cmp&&cmp.series)||[];
+ const cmp=grouped.compare,cmpPoints=(cmp&&cmp.series)||[];
  const cmpTotal=i=>{const vals=(cmpPoints[i]||{}).values||{};return labels.reduce((s,label)=>s+metricValue(vals[label]),0);};
  const cmpTotals=cmpPoints.map((_,i)=>cmpTotal(i));
  if(cumulative){let run=0;cmpTotals.forEach((v,i)=>{cmpTotals[i]=run+=v;});}
@@ -52,7 +52,7 @@ function chart(data){
  }else if(mode==='share-area'||mode==='share-line'){
   const stacks=points.map(p=>{const denom=labels.reduce((s,l)=>s+metricValue(p.values[l]||{}),0);let acc=0;return labels.map(l=>{const v=denom?metricValue(p.values[l]||{})/denom*100:0;const a=acc;acc+=v;return[a,acc];});});
   labels.forEach((label,li)=>{
-   const edge=points.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(stacks[i][li][1]).toFixed(1)}`).join(' ');
+   const edge=points.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(mode==='share-line'?stacks[i][li][1]-stacks[i][li][0]:stacks[i][li][1]).toFixed(1)}`).join(' ');
    if(mode==='share-line')svg+=`<path d="${edge}" fill="none" stroke="${colorOf(label)}" stroke-width="2.5"/>`;
    else{const floor=points.map((p,i)=>`L${x(i).toFixed(1)},${y(stacks[i][li][0]).toFixed(1)}`).reverse().join(' ');svg+=`<path d="${edge}${floor}Z" fill="${colorOf(label)}" opacity=".78"/>`;}
   });
@@ -61,9 +61,9 @@ function chart(data){
   points.forEach((p,i)=>{const denom=labels.reduce((s,l)=>s+metricValue(p.values[l]),0);let sum=0;labels.forEach(label=>{const v=metricValue(p.values[label]),hv=share&&denom?v/denom*100:v;if(hv)svg+=`<rect x="${x(i)-width/2}" y="${y(sum+hv)}" width="${width}" height="${y(sum)-y(sum+hv)}" fill="${colorOf(label)}"></rect>`;sum+=hv;});});
  }
  $('chart').innerHTML=`<svg tabindex="0" aria-describedby="chart-keyboard-hint" class="chart" viewBox="0 0 ${w} ${h}" data-l="${l}" data-r="${w-r}" role="img" aria-label="${modeAria[mode]} · ${metricName()} 사용 추이">${svg}<line class="chart-cursor" x1="0" x2="0" y1="${top}" y2="${h-b}" visibility="hidden"/></svg><span id="chart-keyboard-hint" class="sr-only">좌우 방향키로 날짜를 선택하고 Enter로 그 구간을 확대하며 Escape로 상세를 닫습니다.</span><div id="chart-tooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>`;
- bindChartTooltip(data,grouped,{w,h,l,r,top,b,x,plot});
+ bindChartTooltip(data,grouped,{w,h,l,r,top,b,x,plot},cmpTotals);
 }
-function bindChartTooltip(data,grouped,geometry){
+function bindChartTooltip(data,grouped,geometry,comparisonTotals){
  const root=$('chart'),svg=root.querySelector('svg'),tooltip=$('chart-tooltip'),cursor=root.querySelector('.chart-cursor');
  const colorOf=paletteFor(grouped.labels);
  // Long lists sit below the plot so scrolling never intercepts a bucket tap.
@@ -77,10 +77,10 @@ function bindChartTooltip(data,grouped,geometry){
   selected=index;
   const date=bucketLabel(p);
   const shareMode=$('cumulative').value.startsWith('share');
-  const allTotal=grouped.labels.reduce((sum,label)=>sum+metricValue(p.values[label]||{}),0);
-  const cmp=data.compare,cmpP=(cmp&&cmp.series||[])[index];
-  const cmpTotal=cmpP?grouped.labels.reduce((s,label)=>s+metricValue((cmpP.values||{})[label]),0):null;
-  tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)} KST</strong><small>${modeNames[$('cumulative').value]}${p.partial&&['week','month'].includes($('granularity').value)?' · 일부 기간':''}${p.range_start&&['week','month'].includes($('granularity').value)?'<br>'+esc(p.range_start.slice(0,10))+' ~ '+esc(p.range_end_exclusive.slice(0,10))+' (종료 미포함)':''}</small></div>${grouped.labels.map(label=>`<div class="tooltip-row${hiddenLabels.has(label)?' muted-series':''}"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colorOf(label)}"/></svg> ${esc(seriesLabel(label))}${hiddenLabels.has(label)?' · 숨김':''}</span><strong>${shareMode?percent(allTotal?metricValue(p.values[label]||{})/allTotal*100:null):metricFmt(metricValue(p.values[label]||{}))+costNote(p.values[label])}</strong></div>`).join('')}${missingRoutes(data).map(row=>`<div class="tooltip-row tooltip-missing"><span>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span><strong>—</strong></div>`).join('')}<div class="tooltip-total"><span>수집된 항목 합계</span><strong>${metricFmt(allTotal)}</strong></div>${cmpTotal!=null&&!shareMode?`<div class="tooltip-row tooltip-missing"><span>⎯⎯ ${esc(cmp.label)} 합계<small>${esc((cmpP.compared_time||cmpP.time).slice(0,10))} 시작</small></span><strong>${metricFmt(cmpTotal)}</strong></div>`:''}${armed===index?'<div class="tooltip-hint">한 번 더 탭하면 이 구간을 확대합니다</div>':''}`;
+  const allTotal=grouped.labels.filter(l=>!hiddenLabels.has(l)).reduce((sum,label)=>sum+metricValue(p.values[label]||{}),0);
+  const cmp=grouped.compare,cmpP=(cmp&&cmp.series||[])[index];
+  const cmpTotal=cmpP?comparisonTotals[index]:null;
+  tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)} KST</strong><small>${modeNames[$('cumulative').value]}${p.partial&&['week','month'].includes($('granularity').value)?' · 일부 기간':''}${p.range_start&&['week','month'].includes($('granularity').value)?'<br>'+esc(p.range_start.slice(0,10))+' ~ '+esc(p.range_end_exclusive.slice(0,10))+' (종료 미포함)':''}</small></div>${grouped.labels.map(label=>`<div class="tooltip-row${hiddenLabels.has(label)?' muted-series':''}"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colorOf(label)}"/></svg> ${esc(seriesLabel(label))}${hiddenLabels.has(label)?' · 숨김':''}</span><strong>${shareMode?percent(!hiddenLabels.has(label)&&allTotal?metricValue(p.values[label]||{})/allTotal*100:null):metricFmt(metricValue(p.values[label]||{}))+costNote(p.values[label])}</strong></div>`).join('')}${missingRoutes(data).map(row=>`<div class="tooltip-row tooltip-missing"><span>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span><strong>—</strong></div>`).join('')}<div class="tooltip-total"><span>표시 항목 합계</span><strong>${metricFmt(allTotal)}</strong></div>${cmpTotal!=null&&!shareMode?`<div class="tooltip-row tooltip-missing"><span>⎯⎯ ${esc(cmp.label)} 합계<small>${esc((cmpP.compared_time||cmpP.time).slice(0,10))} 시작</small></span><strong>${metricFmt(cmpTotal)}</strong></div>`:''}${armed===index?'<div class="tooltip-hint">한 번 더 탭하면 이 구간을 확대합니다</div>':''}`;
   tooltip.hidden=false;
   const center=geometry.x(index);
   cursor.setAttribute('x1',center);cursor.setAttribute('x2',center);cursor.setAttribute('visibility','visible');

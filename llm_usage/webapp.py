@@ -151,10 +151,19 @@ def create_app(config=None):
                 request_id+=1;store.save_state(c,'refresh_request_id',request_id)
         return jsonify(accepted=True,requested=requested,request_id=request_id),202
 
+    config_lock=threading.RLock()
+
     def persist(patch):
-        config.update(patch)
-        if config.get('config_file'):
-            update_local(patch,config)
+        with config_lock:
+            try:
+                if config.get('config_file'):
+                    update_local(patch,config)
+                else:
+                    config.update(patch(dict(config)) if callable(patch) else patch)
+            except (OSError,ValueError):
+                abort(500,description='설정을 저장하지 못했습니다. 저장 상태와 권한을 확인하세요.')
+            store.thresholds.update(config.get('thresholds') or {})
+            return dict(config)
 
     # ~/.config is read-only under ProtectHome; reads may fall back to it but
     # writes always go to the data directory (ReadWritePaths).
@@ -259,14 +268,13 @@ def create_app(config=None):
     @app.post('/api/config/thresholds')
     def set_thresholds():
         body=request.get_json(silent=True) or {}
-        patch=dict(store.thresholds)
+        patch={}
         for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90)}.items():
             if key not in body:continue
             if not number(body[key],lo,hi):abort(400,description=f'{key}는 {lo}~{hi} 범위여야 합니다.')
             patch[key]=body[key]
-        persist({'thresholds':patch})
-        store.thresholds.update(patch)
-        return jsonify(thresholds=store.thresholds)
+        saved=persist(lambda current: {'thresholds':{**Store.DEFAULT_THRESHOLDS,**(current.get('thresholds') or {}),**patch}})
+        return jsonify(thresholds=saved['thresholds'])
 
     @app.post('/api/config/refresh')
     def set_refresh():
@@ -294,28 +302,30 @@ def create_app(config=None):
     def set_notify():
         from .notify import CHANNEL_KEYS,EVENTS,masked,notification_url
         body=request.get_json(silent=True) or {}
-        current=dict(config.get('notify') or {})
-        for key in CHANNEL_KEYS:
-            if key not in body:continue  # omitted keeps the stored secret
-            value=body[key]
-            if value in ('',None):current.pop(key,None);continue
-            if not isinstance(value,str) or len(value)>500:abort(400,description='알림 채널 값을 확인하세요.')
-            if key.endswith('_url'):
-                try:notification_url(value)
-                except ValueError:abort(400,description='알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.')
-            current[key]=value.strip()
-        if 'events' in body:
-            events=body['events']
-            if not isinstance(events,dict) or not all(k in EVENTS and isinstance(v,bool) for k,v in events.items()):
-                abort(400,description='알림 종류를 확인하세요.')
-            current['events']={**(current.get('events') or {}),**events}
-        if 'quiet' in body:
-            quiet=body['quiet']
-            if quiet is not None and not (isinstance(quiet,list) and len(quiet)==2 and all(isinstance(h,int) and 0<=h<=23 for h in quiet) and quiet[0]!=quiet[1]):
-                abort(400,description='방해 금지 시간은 서로 다른 0~23시 두 개여야 합니다.')
-            current['quiet']=quiet
-        persist({'notify':current})
-        return jsonify(masked(current))
+        def change(latest):
+            current=dict(latest.get('notify') or {})
+            for key in CHANNEL_KEYS:
+                if key not in body:continue  # omitted keeps the stored secret
+                value=body[key]
+                if value in ('',None):current.pop(key,None);continue
+                if not isinstance(value,str) or len(value)>500:abort(400,description='알림 채널 값을 확인하세요.')
+                if key.endswith('_url'):
+                    try:notification_url(value)
+                    except ValueError:abort(400,description='알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.')
+                current[key]=value.strip()
+            if 'events' in body:
+                events=body['events']
+                if not isinstance(events,dict) or not all(k in EVENTS and isinstance(v,bool) for k,v in events.items()):
+                    abort(400,description='알림 종류를 확인하세요.')
+                current['events']={**(current.get('events') or {}),**events}
+            if 'quiet' in body:
+                quiet=body['quiet']
+                if quiet is not None and not (isinstance(quiet,list) and len(quiet)==2 and all(isinstance(h,int) and 0<=h<=23 for h in quiet) and quiet[0]!=quiet[1]):
+                    abort(400,description='방해 금지 시간은 서로 다른 0~23시 두 개여야 합니다.')
+                current['quiet']=quiet
+            return {'notify':current}
+        saved=persist(change)
+        return jsonify(masked(saved['notify']))
 
     @app.post('/api/notify/test')
     def test_notify():
