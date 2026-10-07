@@ -787,12 +787,14 @@ class Store:
             sessionless=c.execute('SELECT COUNT(*) FROM events WHERE ts>=? AND ts<? AND session IS NULL'+scope_sql,
                                   (a.timestamp(),b.timestamp(),*scope_args)).fetchone()[0]
             projects={}
-            for r in c.execute('''SELECT project,model,date(ts,'unixepoch','+9 hours') AS day,COUNT(DISTINCT session) AS sessions,MAX(ts) AS last_ts,'''+count+','+sums+'''
+            project_sessions=dict(c.execute("SELECT COALESCE(NULLIF(project,''),'미분류'),COUNT(DISTINCT session) FROM events WHERE ts>=? AND ts<?"
+                +scope_sql+" GROUP BY COALESCE(NULLIF(project,''),'미분류')",(a.timestamp(),b.timestamp(),*scope_args)))
+            for r in c.execute('''SELECT project,model,date(ts,'unixepoch','+9 hours') AS day,MAX(ts) AS last_ts,'''+count+','+sums+'''
                 FROM events WHERE ts>=? AND ts<?'''+scope_sql+' GROUP BY project,model,day''',(a.timestamp(),b.timestamp(),*scope_args)):
                 label=r['project'] or '미분류'
-                e=projects.setdefault(label,dict(project=label,sessions=0,last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
+                e=projects.setdefault(label,dict(project=label,sessions=project_sessions[label],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
                     **dict.fromkeys(TOKENS,0)))
-                e['sessions']+=r['sessions'];e['last_ts']=max(e['last_ts'],r['last_ts']);e['requests']+=r['requests']
+                e['last_ts']=max(e['last_ts'],r['last_ts']);e['requests']+=r['requests']
                 for k in TOKENS: e[k]+=r[k]
                 if pricing:
                     rate=rate_for(r['model'],pricing,r['day'])
