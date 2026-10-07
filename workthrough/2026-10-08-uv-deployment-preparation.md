@@ -36,3 +36,14 @@ Dependabot PR #4·#5의 이력을 함께 포함해 init/analyze를 동일한 ups
 - 기존 경로 충돌·더러운 main·부모 symlink·설치 실패·환경변수 격리·최종 경로 사용의 6개 회귀 검사를 추가했다. 구현 전 실패 확인 후 구현, 총 261개 Python 검사 통과.
 - 준비 도구는 독립 환경에 --locked --no-dev --no-editable로 설치한다. 실패하면 이번에 생성한 후보만 제거하며 기존 current·유닛·DB·운영 venv에 쓰지 않는다.
 - 복구는 두 서비스의 기존 drop-in 복원으로 코드와 환경을 함께 되돌린다. 활성화에는 재시작이 필요하며 이번 범위는 준비까지다.
+
+## GitHub 반영과 Gunicorn
+
+- CodeQL init/analyze는 PR #9에서 동일 SHA로 통합하고 원래 #4/#5도 이력에 포함했다. [CI 성공](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37695878410).
+- MarkupSafe #3과 Playwright #2는 각각 최신 main 재검증 후 merge commit으로 병합했다.
+- uv 전환 #10은 [전체 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37697312852) 및 독립 읽기 전용 검토를 통과했다. 후보 준비·실패 정리·환경 격리·복구 문서에서 추가 수정 사항은 발견되지 않았다.
+- Gunicorn #1의 원본 변경을 통합하면서 삭제한 requirements.txt는 복원하지 않고 uv.lock에 26.2.0을 반영한다. 선언 하한 25.1은 유지하며 상한은 27 미만이다.
+- 26.2.0으로 전체 Python 262개 검사 통과. TCP 신원 위조 거부·Unix 신원·Origin·CSRF 검사는 sync 및 운영 설정 gthread에서 검증한다. 최소 25.1에서도 두 transport 검사를 통과했다. CI는 Python 3.11/3.14 × locked/minimum 전체 행렬을 확인한다.
+- 실제 운영용 후보는 최종 main CI 이후 별도 경로에 생성한다. 서비스 재시작·current 변경·운영 venv 갱신·실제 계정 수신 검증은 수행하지 않는다.
+
+- 실제 GitHub [Dependabot uv 실행](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37697527127)이 성공해 #12를 생성했다. #12의 pyproject·lock 업데이트도 #11에 통합했다. bot의 lock revision 3을 uv 0.12.23의 lock --check 및 sync --locked가 수용하며 별도 재해석·다른 의존성 변경은 없음을 확인했다.
