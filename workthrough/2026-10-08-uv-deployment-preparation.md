@@ -64,3 +64,5 @@ Dependabot PR #4·#5의 이력을 함께 포함해 init/analyze를 동일한 ups
 - 실제 의존성 배포에는 기존 구조에서 두 서비스 정지·환경 동기화·코드 전환·재시작 및 의존성 복원 검증이 필요하다. 무중단 전환이 검증됐다고 보고하지 않는다.
 
 - 최종 범위 수정 후 Python 256개 및 새 Git checkout의 uv 고정 설치·합성 init·소스 밖 import 검사가 통과했다. 삭제한 후보 도구의 과거 6개 테스트는 최종 검사 수에 포함하지 않는다.
+
+- 기존 구조의 환경 전환/복원을 임시 checkout의 동일 .venv 경로에서 검증했다. Git 67bb498의 의존성(Gunicorn 25.3.0, MarkupSafe 3.0.3) → 최종 lock(26.2.0, 3.0.4) → 이전 Git 의존성 복원이 일치했다. 새 환경 sync/gthread 및 복원된 환경의 실제 Gunicorn 인증/CSRF 검사 통과. 임시 checkout·venv는 즉시 삭제했고 운영 프로세스는 건드리지 않았다.
