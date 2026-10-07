@@ -100,6 +100,36 @@ def _alias(api, kind, value):
     return hashlib.sha256(json.dumps(['antigravity', api, kind, value.hex()], sort_keys=True).encode()).hexdigest()
 
 
+def _original_requests(observations):
+    """Independently group source observations by transitive identity overlap."""
+    parents={}
+    def root(alias):
+        parents.setdefault(alias,alias)
+        while parents[alias]!=alias:
+            parents[alias]=parents[parents[alias]]
+            alias=parents[alias]
+        return alias
+    for ids,_,_,_ in observations:
+        for alias in ids[1:]:parents[root(alias)]=root(ids[0])
+    groups={}
+    for observation in observations:groups.setdefault(root(observation[0][0]),[]).append(observation)
+    original={};conflicts=0
+    for key,rows in groups.items():
+        # Completed observations beat partial snapshots. Within a completion class,
+        # use one coherent maximal snapshot, not component-wise sums of copies.
+        best=max(rows,key=lambda r:(r[3],r[1][2],r[1][0]+r[1][1]+r[1][3],r[1]))
+        conflict=False
+        for completed in (False,True):
+            values=sorted({r[1] for r in rows if r[3]==completed})
+            for i,left in enumerate(values):
+                for right in values[i+1:]:
+                    if not (all(a<=b for a,b in zip(left,right)) or all(a>=b for a,b in zip(left,right))):
+                        conflict=True
+        conflicts+=int(conflict)
+        original[key]=(sorted({alias for r in rows for alias in r[0]}),best[1],min(r[2] for r in rows))
+    return original,len(observations)-len(groups),conflicts
+
+
 def _antigravity(path, settings):
     paths = set()
     for home in settings.get('homes', []):
@@ -108,7 +138,7 @@ def _antigravity(path, settings):
     for source in settings.get('sources', []):
         if source.get('kind') == 'antigravity':
             root = Path(source['path']); paths.update(root.glob('*.db') if root.is_dir() else [root])
-    original = {}; errors = 0; duplicates = 0; conflicts = 0; split_errors = 0
+    observations = []; errors = 0; split_errors = 0
     for source in sorted(paths):
         try:
             with closing(open_readonly(source)) as c:
@@ -124,31 +154,32 @@ def _antigravity(path, settings):
                         timestamp = stamp[1]+stamp.get(2, 0)/10**9
                         values = tuple(usage.get(k, 0) for k in (2, 5, 3, 4, 9))
                         if 10 in usage and values[2] != values[4]+usage[10]: split_errors += 1
-                        if ids[0] in original:
-                            duplicates += 1
-                            if original[ids[0]][1] != values: conflicts += 1
-                        else: original[ids[0]] = (ids, values, timestamp)
+                        completed=bool(_decode(metadata.get(8,b'')).get(1))
+                        observations.append((ids,values,timestamp,completed))
                     except (ValueError, TypeError): errors += 1
         except (OSError, sqlite3.Error): errors += 1
-    missing = wrong = alias_errors = 0; used = set()
+    original,duplicates,conflicts=_original_requests(observations)
+    missing = wrong = alias_errors = matched = 0; used = set()
     with closing(sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro', uri=True)) as c:
         c.execute('BEGIN')
         for ids, values, timestamp in original.values():
-            keys = {r[0] for r in c.execute('SELECT DISTINCT request_id FROM antigravity_request_aliases WHERE alias IN ('
-                                            + ','.join('?' for _ in ids) + ')', ids)}
+            mapped = dict(c.execute('SELECT alias,request_id FROM antigravity_request_aliases WHERE alias IN ('
+                                     + ','.join('?' for _ in ids) + ')', ids))
+            keys=set(mapped.values())
             if not keys: missing += 1; continue
-            if len(keys) != 1: alias_errors += 1; continue
+            if len(keys) != 1 or len(mapped)!=len(ids): alias_errors += 1; continue
             key = next(iter(keys))
-            if key in used: alias_errors += 1
+            if key in used: alias_errors += 1; continue
             used.add(key)
             actual = c.execute("SELECT uncached_input,cached_input,output,cache_creation,reasoning,ts FROM events WHERE id=? AND route='antigravity'", (key,)).fetchone()
             if actual is None: missing += 1
             elif tuple(actual[:5]) != values or abs(actual[5]-timestamp) > 1e-6: wrong += 1
+            else: matched += 1
         retained = {r[0] for r in c.execute("SELECT id FROM events WHERE route='antigravity'")}
     return dict(source_dbs=len(paths), original_requests=len(original), duplicate_source_rows=duplicates,
                 source_errors=errors, source_conflicts=conflicts, output_split_errors=split_errors,
                 missing_events=missing, mismatched_events=wrong, alias_errors=alias_errors,
-                retained_without_current_source=len(retained-used), matched_requests=len(original)-missing-wrong-alias_errors,
+                retained_without_current_source=len(retained-used), matched_requests=matched,
                 input=sum(v[1][0] for v in original.values()), cached=sum(v[1][1] for v in original.values()),
                 output=sum(v[1][2] for v in original.values()), cache_creation=sum(v[1][3] for v in original.values()),
                 reasoning=sum(v[1][4] for v in original.values()))
