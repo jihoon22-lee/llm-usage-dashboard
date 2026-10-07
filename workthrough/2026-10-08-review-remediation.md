@@ -120,7 +120,7 @@ Codex 시각이 불명확한 세션 59개는 원본 제약으로 남으며 전�
 ## 운영 적용 결과
 
 - 구현 PR: https://github.com/jihoon22-lee/llm-usage-dashboard/pull/15 (merge commit `93f13677a7368c9910ff5ac3ae7ef367fea1f8dd`).
-- PR 필수 CI: https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37703776087 — 모든 필수 job 및 ci-required 성공. CodeQL Python/JavaScript 분석도 error/warning 없이 각각 103/50개 규칙 처리, 결과 0개를 확인했다.
+- PR 필수 CI: https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37703776087 — 모든 필수 job 및 ci-required 성공. CodeQL Python/JavaScript 분석도 error/warning 없이 각각 50/103개 규칙 처리, 결과 0개를 확인했다.
 - 병합 main CI: https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/37703938409 — 성공.
 - 기존 deploy 명령으로 위 merge SHA를 운영 current에 전환했다. 배포 명령 자체의 Python 277개, JavaScript 17개 및 문법 검사도 통과했다.
 - 웹·수집기 모두 active, 실행 cwd가 해당 릴리스와 일치하며 자동 재시작 횟수 0이다. health 성공, 재시작 이후 새 heartbeat 확인, 확인 구간 error 우선순위 journal 0줄이었다.
