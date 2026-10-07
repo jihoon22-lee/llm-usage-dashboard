@@ -173,10 +173,9 @@ def entry_key(model,pricing):
 def _resolve(model,pricing):
     if model in pricing:return model
     base=model.split(' (',1)[0]  # 'swe-2 (max)' prices as 'swe-2'
-    for name in {model,base}:
-        matches=[key for key in pricing if _snapshot_of(name,key)]
-        if matches:return max(matches,key=len)
-    return base if base in pricing else None
+    if base in pricing:return base
+    matches=[key for key in pricing if _snapshot_of(base,key)]
+    return max(matches,key=len) if matches else None
 
 
 def _at(entry,day):

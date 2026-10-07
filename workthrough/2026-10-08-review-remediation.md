@@ -41,3 +41,5 @@
 - 운영 변경은 아직 수행하지 않았다.
 
 - Codex 체크포인트: Windows/POSIX/UNC/루트의 신규 기록 경로 잔존 실패를 먼저 확인했다. 정규화와 기존 ID별 프로젝트 보존 후 재시작·복사본·추가 수집 검사 및 collection integrity 13개, privacy 15개, usage 46개가 통과했다.
+
+- 단가/점유율: mini(high) 오선택과 미등록 nano(high)의 상위 모델 추정, 점유율 25/75→50/50에서 두 번째 선 100% 고정 실패를 확인했다. 정확한 기본 모델 우선과 개별 비중 좌표로 수정했고 pricing 2개, usage 46개, 실제 브라우저 좌표/툴팁 및 dashboard 검사가 통과했다. 모바일 resize 재그리기와 focus가 경쟁하던 새 테스트는 두 animation frame 완료를 기다려 안정화했다.
