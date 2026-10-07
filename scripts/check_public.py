@@ -18,7 +18,7 @@ for name in filter(None, tracked):
     parts = Path(name).parts
     if any(p in {'.venv','node_modules','__pycache__','.env'} for p in parts) or path.suffix in {'.db','.sqlite','.sqlite3','.pem','.key','.log'}:
         errors.append(name + ': private/generated file is tracked')
-    if path.suffix.lower() not in {'.md','.py','.sh','.json','.yml','.yaml','.toml','.txt','.js','.mjs','.html','.css'}:
+    if path.suffix.lower() not in {'.md','.py','.sh','.json','.yml','.yaml','.toml','.txt','.lock','.js','.mjs','.html','.css'}:
         continue
     text = path.read_text()
     # Concrete private filesystem paths and tailnet names; documented placeholders are allowed.

@@ -2,17 +2,18 @@
 
 ## 준비와 설치
 
-서버는 Python 3.11+, Git, venv/pip, systemd, 로그인된 Tailscale이 있는 Linux/WSL에서 실행합니다.
+서버는 Python 3.11+, Git, uv 0.12.23, systemd, 로그인된 Tailscale이 있는 Linux/WSL에서 실행합니다.
 WSL은 systemd를 활성화한 배포판을 사용합니다. Windows/macOS 네이티브 서버는 지원하지 않습니다.
 설치 경로·사용자 홈·데이터 경로는 ASCII 영문자·숫자·`_ . / -`만 지원합니다. 공백·한글·systemd 특수문자는 거부합니다. 업데이트 검사에는 Node 24도 필요합니다.
 Tailscale에서 HTTPS와 Serve를 준비하고 `tailscale status`로 본인 로그인을 확인합니다. tagged device는 개인 계정으로 초기화할 수 없습니다.
 HTTPS 9444와 로컬 8766을 사용합니다. 설치기는 기존 Funnel·다른 프록시 충돌을 거부합니다.
 
-[README 설치 명령](../README.md)을 따릅니다. 태그 clone은 detached HEAD이므로 로컬 main을 생성합니다.
+[README 설치 명령](../README.md)을 따릅니다. main은 uv 전환 이후 개발 버전입니다. 릴리스 태그 clone은 detached HEAD이므로 `git switch -c main`으로 로컬 main을 생성하고 그 태그에 포함된 안내를 따릅니다.
 가상환경은 checkout의 `.venv`에 만듭니다. wheel·소스 ZIP만 있는 환경은 Git 기반 서비스 업데이트를 지원하지 않습니다.
 `init`은 설정을 생성하고 `collect --once`는 로컬 수집·계정 조회를 실행합니다.
 설치기는 root로 시스템 유닛·Serve를 설정하지만 서비스는 지정한 일반 사용자로 실행합니다.
 owner를 생략하면 유효한 비root SUDO_USER를 사용합니다. root 직접 실행에서는 일반 사용자 `--owner`를 명시합니다.
+uv 설치는 [공식 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에서 버전 0.12.23을 선택합니다. 프로젝트 환경은 `uv sync --locked --no-dev`로 재현합니다.
 첫 설치는 checkout 실행이며 [릴리스 실행 전환](operations.md)으로 개발과 운영 코드를 분리할 수 있습니다.
 
 ## Windows와 상태줄

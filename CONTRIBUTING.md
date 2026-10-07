@@ -4,13 +4,11 @@
 운영 가상환경을 사용하지 말고 별도 checkout과 독립 .venv에서 개발합니다.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python -m pip install --no-deps -e .
+uv sync --locked
 .venv/bin/python -m playwright install chromium
 .venv/bin/python -m unittest discover -s tests -q
 for script in llm_usage/web/*.js; do node --check "$script" || exit; done
-node --test 'tests/js/*.test.mjs'
+node --test tests/js/*.test.mjs
 PYTHONPATH=. .venv/bin/python tests/browser_ci.py
 ```
 
@@ -26,3 +24,5 @@ Node24를 사용합니다. Linux 브라우저 라이브러리가 없으면 playw
 태그는 공개 main에 포함되고 패키지 버전과 같아야 합니다. 검증한 동일 산출물을 게시하고 게시 job은 재빌드하지 않습니다.
 공개 태그·파일은 덮어쓰지 않습니다. wheel은 런타임이고 시스템 서비스 설치에는 Git checkout이 필요합니다.
 운영 자동 배포·PyPI는 별도 범위입니다. 실제 수신과 fixture 성공을 구분해 기록합니다.
+
+의존성은 pyproject.toml과 uv.lock으로 관리하며 uv 0.12.23을 사용합니다. `uv lock --upgrade-package NAME`으로 의도한 패키지만 갱신하고 lock diff를 검토합니다. `uv sync --locked`는 lock 일치 여부를 검사하며 불필요한 패키지를 제거하므로 운영 환경에서 실행하지 않습니다. 최소 버전 검사에서 별도 override를 적용한 뒤에는 `uv run --no-sync`로 자동 동기화를 막습니다. wheel 호환 검사만 독립된 표준 pip 설치를 유지합니다.

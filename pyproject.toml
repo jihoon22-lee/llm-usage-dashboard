@@ -20,3 +20,6 @@ llm-usage = "llm_usage.cli:main"
 llm_usage = ["web/*"]
 [tool.setuptools.packages.find]
 include = ["llm_usage*"]
+
+[dependency-groups]
+dev = ["pip-audit==2.10.1", "playwright==1.63.0"]

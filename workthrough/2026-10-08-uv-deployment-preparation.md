@@ -21,3 +21,18 @@ Dependabot PR #4·#5의 이력을 함께 포함해 init/analyze를 동일한 ups
 - 완료 시 작업 브랜치·worktree·임시 산출물을 정리하고 복구 백업·배포 후보는 용도를 명시해 보존한다.
 
 검증 결과와 최종 PR·후보 정보는 각 단계 완료 시 이 기록에 갱신한다.
+
+## uv 전환 검증
+
+- pyproject 개발 그룹과 uv.lock을 기준으로 통합하고, 첫 lock의 런타임 버전은 기존 승인 범위를 유지한다. uv 0.12.23 및 setup-uv 전체 SHA를 고정한다.
+- 독립 환경에서 Python 255개, 브라우저 11종, 태그 checkout 설치, 소스 밖 표준 pip wheel 설치·파일 허용목록·SHA256 검사 통과. 전체 lock export의 pip-audit는 알려진 취약점 없음.
+- uv build의 기본 .gitignore 생성 때문에 엄격한 배포 파일 검사가 실패해 --no-create-gitignore로 해결했다. 검사 허용 범위를 넓히지 않았다.
+- Python 3.11/3.14 각각에서 locked/minimum 행렬로 검사한다. 최소 버전 override 후 --no-sync를 사용한다.
+- 기존 v0.1.0은 변경하지 않는다. main의 uv 설치 문서와 기존 태그의 pip 설치 문서를 구분한다. 운영 환경 동기화는 금지한다.
+
+## 배포 준비 경계
+
+- uv 설치와 같은 경계를 사용하는 후보 준비 도구는 uv 전환 PR에 함께 검증한다. 실제 운영용 후보 생성은 Gunicorn 검증과 최종 main CI 이후에 수행한다.
+- 기존 경로 충돌·더러운 main·부모 symlink·설치 실패·환경변수 격리·최종 경로 사용의 6개 회귀 검사를 추가했다. 구현 전 실패 확인 후 구현, 총 261개 Python 검사 통과.
+- 준비 도구는 독립 환경에 --locked --no-dev --no-editable로 설치한다. 실패하면 이번에 생성한 후보만 제거하며 기존 current·유닛·DB·운영 venv에 쓰지 않는다.
+- 복구는 두 서비스의 기존 drop-in 복원으로 코드와 환경을 함께 되돌린다. 활성화에는 재시작이 필요하며 이번 범위는 준비까지다.

@@ -51,6 +51,7 @@
 - 제공사·구독 경로·모델을 구분하고 원본 요청/스레드 ID에 따라 스트리밍·재수집·Windows/WSL 복사본·부모/자식 이력 중복을 제거한다.
 - 캐시 생성과 reasoning을 별도로 보존하되 합계에 중복 추가하지 않는다. 초기화는 제공사의 원본 필드만 사용하고, 시각이 지났다는 이유로 잔여량을 복원하지 않는다.
 - 상태줄 수신 방식은 대시보드가 강제로 계정 조회하는 방식과 구분한다. TUI·원격·headless에서 실제 수신 가능 여부를 확인하며, 수신하지 못한 상태를 숨기지 않는다.
+- 의존성은 독립 checkout에서 uv 0.12.23의 `uv sync --locked`로 준비한다. 운영 `.venv`는 동기화하지 않는다. pyproject.toml과 uv.lock을 함께 관리한다.
 - 로직 변경의 기본 검증: `.venv/bin/python -m unittest discover -s tests -q`.
 - 집계 변경: 적합한 fixture와 `.venv/bin/python tests/verify_record_totals.py`의 원본 대조. 불완전한 이력과 카운터 초기화 사례는 따로 확인한다.
 - UI 변경: `llm_usage/web/*.js` 전체에 `node --check`, `node --test 'tests/js/*.test.mjs'`, Playwright가 설치된 Python으로 `tests/browser_smoke.py`. fixture 검증과 실제 인증/수동 갱신 검증을 구분한다.

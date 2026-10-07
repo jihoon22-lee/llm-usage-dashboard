@@ -31,20 +31,19 @@ Windows는 선택한 프로필의 **기록 수집 대상**입니다. Windows/mac
 
 ## 빠른 시작
 
-Python 3.11+, Git, systemd가 실행되는 Linux/WSL, 로그인된 Tailscale과 HTTPS Serve 환경이 필요합니다.
+Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 Tailscale과 HTTPS Serve 환경이 필요합니다.
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.1.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch main https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
-git switch -c main
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m pip install --no-deps -e .
+uv sync --locked --no-dev
 .venv/bin/llm-usage init
 .venv/bin/llm-usage collect --once
 sudo ./install.sh --owner "$USER"
 ```
+
+현재 main의 uv 설치 절차입니다. 기존 v0.1.0 태그에는 uv.lock이 없으므로 해당 태그의 README를 따르세요.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.
