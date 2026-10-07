@@ -554,8 +554,16 @@ async def main():
             await expect(page.locator('#tab-analysis')).to_have_attribute('tabindex','0')
             await expect(page.locator('#tab-overview')).to_have_attribute('tabindex','-1')
             assert 'view=analysis' in page.url
+            # This page visited settings earlier. Its old controls can satisfy
+            # visibility/count assertions before the next loadConfig replaces
+            # them, detaching a handle during bounding_box(). Wait for that
+            # replacement before checking the new settings layout.
+            previous_save=await page.locator('#cfg-subs-save').element_handle()
+            assert previous_save is not None
             await page.keyboard.press('End')
             await expect(page.locator('#tab-settings')).to_have_attribute('aria-selected','true')
+            await page.wait_for_function('previous=>!previous.isConnected',arg=previous_save)
+            await previous_save.dispose()
             # Settings inputs follow the theme and the pricing table filters
             # client-side; the filters survive loadConfig re-renders (L4).
             await expect(page.locator('#cfg-subs input').first).to_be_visible()

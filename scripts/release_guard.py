@@ -32,6 +32,8 @@ def verify_manifest(folder, *, commit=None, tag=None, run_id=None):
     for key, expected in [('commit', commit), ('tag', tag), ('run_id', run_id)]:
         if expected is not None and str(data.get(key)) != str(expected):
             raise ValueError('Manifest provenance mismatch: ' + key)
+    if data.get('tag'):
+        require_tag(data['tag'], data.get('version', ''), True)
     files = data['files']
     if len(files) != 2 or not any(n.endswith('.whl') for n in files) or not any(n.endswith('.tar.gz') for n in files):
         raise ValueError('Expected exactly one wheel and one source archive')

@@ -39,7 +39,7 @@ class ReleaseGuardTests(unittest.TestCase):
             wheel, source = root/'demo.whl', root/'demo.tar.gz'
             wheel.write_bytes(b'wheel'); source.write_bytes(b'source')
             manifest = root/'release-manifest.json'
-            manifest.write_text(json.dumps(dict(commit='a'*40,tag='v0.1.0',run_id='123',
+            manifest.write_text(json.dumps(dict(commit='a'*40,tag='v0.1.0',version='0.1.0',run_id='123',
                                                  files={p.name:guard.sha256(p) for p in [wheel,source]})))
             (root/'SHA256SUMS').write_text(''.join(f'{guard.sha256(p)}  {p.name}\n' for p in sorted([wheel,source,manifest])))
             guard.verify_manifest(root,commit='a'*40,tag='v0.1.0',run_id='123')
@@ -67,3 +67,16 @@ class ReleaseGuardTests(unittest.TestCase):
             (root/'SHA256SUMS').write_text(sums.replace(sums[:64], '0'*64, 1))
             with self.assertRaises(ValueError):
                 guard.verify_manifest(root)
+
+    def test_release_manifest_version_must_match_its_tag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'a.whl').write_bytes(b'wheel')
+            (root/'a.tar.gz').write_bytes(b'source')
+            data = dict(version='0.2.0', tag='v0.1.0', files={
+                name:guard.sha256(root/name) for name in ['a.whl','a.tar.gz']})
+            (root/'release-manifest.json').write_text(json.dumps(data))
+            names = sorted([*data['files'], 'release-manifest.json'])
+            (root/'SHA256SUMS').write_text(''.join(f'{guard.sha256(root/name)}  {name}\n' for name in names))
+            with self.assertRaises(ValueError):
+                guard.verify_manifest(root,tag='v0.1.0')

@@ -72,7 +72,9 @@ function renderLimits(data){
   const plan=blocked?null:r.plan;
   const forecast=r.forecast&&!blocked?`<p class="forecast${r.forecast.within_window?' warn':''}">최근 ${Math.round(r.forecast.observed_minutes)}분 페이스 ${r.forecast.per_hour.toFixed(1)}%p/시간 유지 시 ${r.forecast.within_window?`<strong>초기화 전 소진 예상</strong> · ${esc(when(r.forecast.depletes_at))} KST`:`초기화까지 약 ${r.forecast.projected_remaining.toFixed(1)}%p 여유 예상`}</p>`:'';
   const win=r.window?`<p class="window-usage">이번 윈도우 사용 <strong>${compact(r.window.tokens)}</strong> 토큰 · ${fmt(r.window.requests)}회 요청${r.window.open?'':' · 종료된 윈도우'}</p>`:'';
-  const planText=plan?`계획 대비 ${plan.ahead>=0?`<strong>+${plan.ahead.toFixed(1)}%p 여유</strong>`:`<strong class="warn-text">${plan.ahead.toFixed(1)}%p 빠름</strong>`} · 창 ${Math.round(plan.elapsed_fraction*100)}% 경과`:'';
+  const planAhead=plan?`${plan.ahead>=0?'+':''}${plan.ahead.toFixed(1)}%p ${plan.ahead>=0?'여유':'빠름'}`:'';
+  const planElapsed=plan?`창 ${Math.round(plan.elapsed_fraction*100)}% 경과`:'';
+  const planText=plan?`계획 대비 <strong${plan.ahead>=0?'':' class="warn-text"'}>${esc(planAhead)}</strong> · ${planElapsed}`:'';
   const capacity=r.capacity&&!blocked?`<p class="capacity">남은 ${percent(r.remaining)} ≈ 약 <strong>${compact(r.capacity.remaining_tokens)}</strong> 토큰 · ${fmt(Math.round(r.capacity.remaining_requests))}회 요청 <small>이번 창 1%p당 ${compact(r.capacity.tokens_per_point)} 토큰 기준 추정</small></p>`:'';
    const hist=(r.capacity_history||[]).filter(h=>h.tokens_per_point);
   const median=hist.length?[...hist].map(h=>h.tokens_per_point).sort((a,b)=>a-b)[Math.floor(hist.length/2)]:null;
@@ -82,7 +84,8 @@ function renderLimits(data){
   const blockedNote=blocked?`<br><span class="quota-blocked-note">주간 한도 소진 · 주간 초기화(${blocked.resets?when(blocked.resets)+' KST · '+left(blocked.seconds_to_reset):'미제공'}) 후 사용 가능</span>`:'';
   const mark=plan?`<span class="pace-mark" data-x="${Math.max(0,Math.min(100,plan.expected_remaining)).toFixed(1)}" title="고른 속도로 썼다면 지금 남아 있을 잔여 ${plan.expected_remaining.toFixed(1)}%"></span>`:'';
   const key=r.route+':'+r.bucket+':detail';
-  const preview=planText?planText.replace(/<[^>]+>/g,''):(r.trends||[]).filter(t=>t.available).map(t=>`${t.window_minutes===60?'1시간':'30분'} −${t.decrease_pp.toFixed(1)}%p`).at(-1)||'';
+  // Derive the plain summary from numeric data; never strip tags from markup.
+  const preview=plan?`계획 대비 ${planAhead} · ${planElapsed}`:(r.trends||[]).filter(t=>t.available).map(t=>`${t.window_minutes===60?'1시간':'30분'} −${t.decrease_pp.toFixed(1)}%p`).at(-1)||'';
   return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges"><span class="badge ${esc(r.status)}">${esc(statuses[r.status])}</span>${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
    +`<div class="bucket-summary"><div class="remaining">${r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${r.status==='fresh'?'잔여':'이전 관측'}${blocked?' · 사용 불가':''}</small></div>`
    +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress>${mark}</div>`)
