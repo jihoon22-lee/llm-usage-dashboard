@@ -1,4 +1,6 @@
 import json
+import fcntl
+import threading
 import os
 from pathlib import Path
 
@@ -33,12 +35,36 @@ def settings():
     return with_local(json.loads(config_path().read_text()))
 
 
+_local_lock = threading.RLock()
+
+
 def update_local(patch, config):
+    """Commit a mapping or a current-config -> patch callable before publishing it.
+
+    The stable sidecar inode serializes processes across atomic local.json replaces.
+    Reading for a write is strict: a broken/unreadable file must not be overwritten.
+    """
     path = local_path(config)
-    data = _read_json(path)
-    data.update(patch)
-    atomic_json(path, data)
-    return data
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with _local_lock:
+        fd = os.open(path.with_name('local.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(fd, 'a+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                try:
+                    data = json.loads(path.read_text())
+                except FileNotFoundError:
+                    data = {}
+                if not isinstance(data, dict):
+                    raise ValueError('invalid local settings')
+                current = {**config, **{k:v for k,v in data.items() if k in LOCAL_KEYS}}
+                changes = patch(current) if callable(patch) else patch
+                data.update(changes)
+                atomic_json(path, data)
+                config.update({k:v for k,v in data.items() if k in LOCAL_KEYS})
+                return data
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def atomic_json(path, data):
