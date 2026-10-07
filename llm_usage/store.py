@@ -276,6 +276,8 @@ class Store:
         return identity(session) if removed else None
 
     def rebuild_codex(self,c,session,attrs=None):
+        # Rebuilding token deltas must not silently migrate historical project labels.
+        projects=dict(c.execute('SELECT id,project FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,)))
         c.execute('DELETE FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,))
         previous=None;previous_ts=None;seen={};resets=0;partial=False
         zero_baseline=False;zero_baselines=0;ambiguous=0
@@ -309,7 +311,8 @@ class Store:
             inp,cached,out,creation,reasoning=delta
             self.event(c,row['id'],row['ts'],row['provider'],row['route'],row['model'],
                        dict(uncached_input=max(0,inp-cached-creation),cached_input=cached,output=out,
-                            cache_creation=creation,reasoning=reasoning),**(attrs or {}))
+                            cache_creation=creation,reasoning=reasoning),
+                       **({**(attrs or {}),'project':projects[row['id']]} if row['id'] in projects else (attrs or {})))
         c.execute('INSERT OR REPLACE INTO session_quality VALUES (?,?,?,?,?)',(session,resets,int(partial),ambiguous,zero_baselines))
         self.bump_data_version(c)
 

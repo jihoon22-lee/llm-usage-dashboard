@@ -129,6 +129,10 @@ def collect_file(store,path,route):
         if not repair_fork and unchanged and not misaligned:
             return store.error_count(c,key)
         offset=checkpoint.get('offset',0);state=checkpoint.get('parser',{})
+        # A resumed file may not repeat session_meta after a code upgrade.
+        project=state.get('project')
+        if isinstance(project,str) and ('/' in project or '\\' in project or ':' in project):
+            state['project']=project_label(project)
         rewritten=(checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')!=stat.st_mtime_ns) or misaligned
         if (repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
                 or _prefix_changed(path,checkpoint)):
