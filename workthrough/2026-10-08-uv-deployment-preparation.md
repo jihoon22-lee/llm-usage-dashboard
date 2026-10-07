@@ -66,3 +66,13 @@ Dependabot PR #4·#5의 이력을 함께 포함해 init/analyze를 동일한 ups
 - 최종 범위 수정 후 Python 256개 및 새 Git checkout의 uv 고정 설치·합성 init·소스 밖 import 검사가 통과했다. 삭제한 후보 도구의 과거 6개 테스트는 최종 검사 수에 포함하지 않는다.
 
 - 기존 구조의 환경 전환/복원을 임시 checkout의 동일 .venv 경로에서 검증했다. Git 67bb498의 의존성(Gunicorn 25.3.0, MarkupSafe 3.0.3) → 최종 lock(26.2.0, 3.0.4) → 이전 Git 의존성 복원이 일치했다. 새 환경 sync/gthread 및 복원된 환경의 실제 Gunicorn 인증/CSRF 검사 통과. 임시 checkout·venv는 즉시 삭제했고 운영 프로세스는 건드리지 않았다.
+
+## 운영 배포 완료
+
+- 후속 요청에서 실제 운영 배포·재시작을 승인받아 CI가 통과한 main `7f89e6b14f36a3818175cbb6807c51062f50dde0`을 배포했다. 기존 checkout/.venv 및 releases/current 구조를 유지했다.
+- stop은 sudo 인증이 필요하여 사용자가 두 서비스를 정지했고, inactive 상태를 확인한 뒤 uv 0.12.23으로 `sync --locked --no-dev --offline`을 실행했다. Gunicorn 26.2.0, Werkzeug 3.1.9, MarkupSafe 3.0.4를 적용하고 의존성 일치 검사를 통과했다.
+- 기존 current 링크를 새 Git 릴리스로 전환하고 웹·수집기를 시작했다. 두 프로세스의 실제 cwd가 해당 릴리스임을 확인했고 health 및 배포 이후의 새 collector heartbeat가 정상이다. 활성화 명령은 약 9초에 검증을 마쳤으며 사용자 정지 이후 전체 중단 시간을 의미하지는 않는다.
+- 실제 사설 주소의 읽기 전용 Playwright smoke에서 인증 접속, 개요·소비 분석 차트, 모바일 가로 넘침, 브라우저 오류 검사가 통과했다. 수집 상태의 정상·종료 항목을 구분해 확인했으며 모든 제공사의 새 인증/한도 수신을 별도 검증한 것은 아니다.
+- 별도 백업 디렉터리·새 유닛/drop-in은 만들지 않았다. 설치·복원 패키지와 브라우저 검증에 사용한 임시 환경은 배포 후 제거한다. 이전 릴리스는 기존 운영 릴리스 구조의 복귀 대상으로 유지한다.
+
+- 운영 DB의 읽기 전용 원본 대조에서 Codex·Antigravity·Devin의 불일치/누락 오류가 없었다. 동일 시각 관측 순서를 확정할 수 없는 Codex 세션은 모호한 사례로 별도 집계하며 완전 검증됐다고 간주하지 않는다.
