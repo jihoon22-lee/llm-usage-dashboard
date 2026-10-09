@@ -130,7 +130,41 @@ def create_app(config=None):
         return jsonify(reports=recent(store))
 
     @app.get('/api/limits')
-    def limits():return jsonify(store.limits())
+    def limits():
+        from .planning import choices, plan, decide
+        data=store.limits()
+        options=choices(data)
+        if options:
+            try:
+                route=request.args.get('route',options[0]['route'])
+                model=request.args.get('model','common')
+                selected=next((o for o in options if o['route']==route and o['model']==model),None)
+                selected=selected or next((o for o in options if o['route']==route),options[0])
+                hours=float(request.args.get('hours',2));pace=request.args.get('pace','recent')
+                today_hours=float(request.args.get('today_hours',2));week_hours=float(request.args.get('week_hours',10))
+                if not .1<=today_hours<=24 or not .1<=week_hours<=168:raise ValueError
+                data['planning']=plan(data,selected['route'],selected['model'],hours,pace)
+                data['planning']['today']=decide(data,selected['route'],selected['model'],today_hours,pace)
+                data['planning']['week']=decide(data,selected['route'],selected['model'],week_hours,pace)
+                data['planning']['selection_changed']=(route,model)!=(selected['route'],selected['model'])
+            except (ValueError,TypeError,OverflowError):abort(400,description='작업 시간·속도 기준을 확인하세요.')
+        return jsonify(data)
+
+    def manual_resource(rid=None,delete=False):
+        from .resources import write_manual,Conflict
+        try:return jsonify(write_manual(store,request.get_json(silent=True),rid,delete))
+        except Conflict as error:abort(409,description=str(error))
+        except KeyError:abort(404,description='수동 기록을 찾을 수 없습니다.')
+        except (ValueError,TypeError):abort(400,description='입력값·단위·적용 범위·연결 자원을 확인하세요.')
+
+    @app.post('/api/resources/manual')
+    def add_resource():return manual_resource()
+
+    @app.patch('/api/resources/manual/<rid>')
+    def edit_resource(rid):return manual_resource(rid)
+
+    @app.delete('/api/resources/manual/<rid>')
+    def delete_resource(rid):return manual_resource(rid,True)
 
     @app.get('/api/collection')
     def collection():

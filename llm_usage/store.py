@@ -77,7 +77,7 @@ def repository_root(cwd):
     try:
         for folder in (path,*path.parents):
             marker=folder/'.git'
-            if marker.is_dir():return str(folder)
+            if marker.is_dir() and (marker/'HEAD').is_file():return str(folder)
             if marker.is_file():
                 line=marker.read_text(errors='replace').strip()
                 gitdir=Path(line[7:].strip()) if line.startswith('gitdir:') else None
@@ -172,6 +172,8 @@ class Store:
             c.execute('CREATE INDEX IF NOT EXISTS events_session ON events(session)')
             # Quota windows and per-route scopes filter one route over a time range.
             c.execute('CREATE INDEX IF NOT EXISTS events_route_ts ON events(route,ts)')
+            from .resources import initialize
+            initialize(c)
         self._ensure_rollup()
         os.chmod(path, 0o600)
 
@@ -358,14 +360,31 @@ class Store:
             retention=now-self.thresholds['retention_days']*86400
             c.execute('DELETE FROM limit_history WHERE checked<?',(retention,))
             c.execute('DELETE FROM quota_interruptions WHERE checked<?',(retention,))
+            c.execute('DELETE FROM resource_history WHERE checked<?',(retention,))
             self.save_state(c,'history_pruned',now)
 
-    def limit(self, c, route, bucket, remaining, resets, checked, source):
+    def limit(self, c, route, bucket, remaining, resets, checked, source, metadata=None):
+        from .resources import account, number, quota_context, SKEW
+        received=time.time()
+        if not number(checked) or checked>received+SKEW:
+            return False
         resets=stamp(resets)
-        c.execute('''INSERT INTO limits VALUES (?,?,?,?,?,?) ON CONFLICT(route,bucket)
+        owner=account(c,route)
+        previous=c.execute('SELECT * FROM limits WHERE route=? AND bucket=?',(route,bucket)).fetchone()
+        # Unidentified terminal replays do not replace a current account response.
+        canonical='claude-oauth' if route=='claude-code' else 'codex' if route=='codex' else None
+        prefer_account=bool(owner and owner['account_key'] and canonical and source!=canonical and previous
+                            and previous['source']==canonical and 0<=checked-previous['checked']<=self.thresholds['stale_seconds'])
+        changed=False
+        if not prefer_account:
+            changed=c.execute('''INSERT INTO limits VALUES (?,?,?,?,?,?) ON CONFLICT(route,bucket)
         DO UPDATE SET remaining=excluded.remaining,resets=excluded.resets,checked=excluded.checked,
-        source=excluded.source WHERE excluded.checked >= limits.checked''',
-                  (route, bucket, remaining, resets, checked, source))
+        source=excluded.source WHERE excluded.checked >= limits.checked OR limits.checked>?''',
+                  (route, bucket, remaining, resets, checked, source,received+SKEW)).rowcount>0
+            if changed:
+                meta=dict(metadata or {})
+                if owner and canonical and source!=canonical:meta['identity_unverified']=True
+                quota_context(c,route,bucket,checked,meta)
         # Local replay must not manufacture a historical stream at migration time.
         # Keep only observations made within the retention window.
         cutoff=time.time()-self.thresholds['retention_days']*86400
@@ -373,6 +392,7 @@ class Store:
             c.execute('INSERT OR IGNORE INTO limit_history VALUES (?,?,?,?,?,?)',
                       (route,bucket,checked,remaining,resets,source))
         self.prune_history(c)
+        return changed
 
     def limits(self, now=None):
         from .insights import quota_history,quota_pace,quota_plan,quota_trends,quota_decreases,quota_forecast,pace_lookback,window_seconds,token_total
@@ -383,23 +403,36 @@ class Store:
             sources = {r['name']:dict(r) for r in c.execute('SELECT * FROM sources')}
             for row in rows:
                 row['display_name']=self.state(c,'label:'+row['route']+':'+row['bucket'],row['bucket'])
-            history=quota_history(c,now)
+            from .resources import inventory, SKEW
+            accounts={r['route']:dict(r) for r in c.execute('SELECT * FROM resource_accounts')}
+            contexts={(r['route'],r['bucket']):dict(r) for r in c.execute('SELECT * FROM quota_context')}
+            policies={route:self.state(c,'quota_policy:'+route,{}) for route in SUPPORTED_ROUTES}
+            resources=inventory(c,now,sources)
+            history=quota_history(c,now,selected_sources={(r['route'],r['bucket']):r['source'] for r in rows},
+                                  since_by_route={route:a['since'] for route,a in accounts.items()})
         routes = SUPPORTED_ROUTES
         for route in routes:
             if not any(r['route']==route for r in rows):
                 rows.append(dict(route=route,bucket='미제공',remaining=None,resets=None,checked=None,source=route))
         for row in rows:
             checked, resets = row['checked'], row['resets']
+            owner=accounts.get(row['route'])
+            context=contexts.get((row['route'],row['bucket']),{})
+            metadata=json.loads(context.get('data','{}'))
+            previous_account=bool(owner and (context.get('epoch')!=owner['epoch'] or (checked or 0)<owner['since']))
+            row.update(account_epoch=owner['epoch'] if owner else None,identity_verified=bool(owner and owner['account_key']),
+                       previous_account=previous_account,scope=metadata)
             src = sources.get(row['source'], {})
             account=sources.get('claude-oauth',{}) if row['route']=='claude-code' else {}
             if account.get('checked',0)>=(row['checked'] or 0) and account.get('status') in ('error','unavailable'):
                 src=account
-            stale = bool(checked and (now-checked > self.thresholds['stale_seconds'] or (resets and resets <= now) or src.get('status')=='unavailable'))
+            stale = bool(previous_account or (checked and (checked>now+SKEW or now-checked > self.thresholds['stale_seconds'] or (resets and resets <= now) or src.get('status')=='unavailable')))
             row.update(status='error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
                        stale=stale, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
                        seconds_to_reset=max(0,int(resets-now)) if resets else None,
                        detail=src.get('detail',''),last_attempt=src.get('checked'))
             row['history']=history.get((row['route'],row['bucket']),[])
+            if previous_account:row['history']=[]
             pace=quota_pace(row['history'],now,row['status'],pace_lookback(row['bucket'])[0])
             row['pace_per_hour']=pace[0] if pace else None
             row['pace_minutes']=pace[1] if pace else None
@@ -417,7 +450,10 @@ class Store:
         # is not carried onto another bucket, and the lower bucket's value is kept.
         by_key={(r['route'],r['bucket']):r for r in rows}
         for row in rows:
-            parent=by_key.get((row['route'],QUOTA_PARENTS.get((row['route'],row['bucket']))))
+            parent_bucket=QUOTA_PARENTS.get((row['route'],row['bucket']))
+            if row['route']=='codex' and row['bucket'].endswith(' · 300분'):
+                parent_bucket=row['bucket'].removesuffix('300분')+'10080분'
+            parent=by_key.get((row['route'],parent_bucket))
             blocked=parent and parent['status']=='fresh' and parent['remaining'] is not None and parent['remaining']<=0
             row['blocked_by']={k:parent[k] for k in ('bucket','resets','seconds_to_reset')} if blocked else None
             # The desktop app reports only the window that currently binds a model family,
@@ -441,7 +477,10 @@ class Store:
                 row['events']=quota_events(c,row['route'],row['bucket'],row['history_source'] or row['source'],now) if row['checked'] else None
                 row['capacity']=capacity(row)
                 row['capacity_history']=self.capacity_history(c,row,now)
+        from .planning import enrich
+        enrich(rows,now)
         return dict(limits=rows, sources=list(sources.values()), now=now,history_days=1,
+                    resources=resources,quota_policies=policies,stale_seconds=self.thresholds['stale_seconds'],
                     retention_days=self.thresholds['retention_days'],low_percent=self.thresholds['low_percent'],
                     quota_hide_days=self.thresholds['quota_hide_days'])
 

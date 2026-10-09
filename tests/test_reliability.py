@@ -294,7 +294,7 @@ class InsightTests(unittest.TestCase):
             self.assertIsNone(result['pace_per_hour']);self.assertTrue(result['history'][-1]['break_before'])
             with self.store.connect() as c:self.store.source(c,'codex','ok','',self.now)
             self.assertIsNone(self.store.limits(self.now)['limits'][0]['pace_per_hour'])
-            with self.store.connect() as c:
+            with patch('llm_usage.store.time.time',return_value=self.now+300),self.store.connect() as c:
                 self.store.limit(c,'codex','weekly',100,self.now+7200,self.now+300,'codex')
             result=self.store.limits(self.now+300)['limits'][0]
             self.assertTrue(result['history'][-1]['break_before']);self.assertIsNone(result['pace_per_hour'])
