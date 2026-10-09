@@ -187,6 +187,7 @@ def create_app(config=None):
     @app.get('/api/config')
     def get_config():
         from .pricing import BUILTIN,entry_key,pricing_origins,rate_for,upcoming_for
+        from .store import SUPPORTED_ROUTES
         from .store import KST
         from datetime import datetime
         pricing=load_pricing(config)
@@ -194,12 +195,14 @@ def create_app(config=None):
         with store.connect() as c:
             providers={r[0]:r[1] for r in c.execute('SELECT model,MAX(provider) FROM events GROUP BY model ORDER BY model')}
             models=list(providers)
+            routes=set(SUPPORTED_ROUTES)|set(config.get('subscription_prices') or {})
+            routes.update(r[0] for r in c.execute('SELECT DISTINCT route FROM events'))
         upcoming={m:e for m in {*models,*pricing} if (e:=upcoming_for(m,pricing,today))}
         from .notify import masked
         since=time.time()-30*86400
         with store.connect() as c:
             usage30={r[0]:r[1] for r in c.execute('SELECT model,SUM(uncached_input+cached_input+output+cache_creation) FROM events WHERE ts>=? GROUP BY model',(since,))}
-        return jsonify(subscription_prices=config.get('subscription_prices') or {},notify=masked(config.get('notify')),
+        return jsonify(subscription_routes=sorted(routes),subscription_prices=config.get('subscription_prices') or {},notify=masked(config.get('notify')),
                        project_budgets=config.get('project_budgets') or {},model_usage_30d=usage30,
                        thresholds=store.thresholds,pricing=pricing,refresh_seconds=config.get('refresh_seconds',300),
                        value_alert_usd=config.get('value_alert_usd'),

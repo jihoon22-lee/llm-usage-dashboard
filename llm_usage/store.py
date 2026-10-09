@@ -19,6 +19,7 @@ SERIES_KEYS = (*TOKENS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+SUPPORTED_ROUTES = ('codex','claude-code','antigravity','opencode-go','devin')
 # (route, shorter-window bucket) -> the longer window that also gates usage.
 QUOTA_PARENTS = {('claude-code', 'five_hour'): 'seven_day', ('devin', 'daily'): 'weekly',
                  ('antigravity', 'gemini-5h'): 'gemini-weekly', ('antigravity', '3p-5h'): '3p-weekly'}
@@ -383,7 +384,7 @@ class Store:
             for row in rows:
                 row['display_name']=self.state(c,'label:'+row['route']+':'+row['bucket'],row['bucket'])
             history=quota_history(c,now)
-        routes = ('codex','claude-code','antigravity','opencode-go','devin')
+        routes = SUPPORTED_ROUTES
         for route in routes:
             if not any(r['route']==route for r in rows):
                 rows.append(dict(route=route,bucket='미제공',remaining=None,resets=None,checked=None,source=route))

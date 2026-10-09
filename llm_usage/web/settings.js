@@ -2,8 +2,34 @@
 // Settings: subscription prices, model rates, thresholds, external alerts and budgets.
 const RATE_KEYS=['input','cached','output','cache_write'];
 const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90']];
-function cfgMsg(id,text){const el=$(id);el.textContent=text;setTimeout(()=>{if(el.textContent===text)el.textContent='';},5000);}
+function cfgMsg(id,text){const el=$(id);el.textContent=text;el.setAttribute('role','status');}
 let settingsEpoch=0,settingsOnline=false;
+const priceOperations=new Map(),priceMessages=new Map();
+let priceBatch=null;
+// Drafts only live in this document. Offline invalidation clears the DOM and maps.
+function draftKey(input){
+ if(input.closest('#cfg-notify')&&['ntfy-url','webhook-url','tg-token','tg-chat'].includes(input.id))return null;
+ if(input.id)return '#'+CSS.escape(input.id);
+ if(input.dataset.model)return `input[data-model="${CSS.escape(input.dataset.model)}"][data-key="${input.dataset.key}"]`;
+ if(input.dataset.route)return `input[data-route="${CSS.escape(input.dataset.route)}"]`;
+ if(input.dataset.budgetKey)return `[data-budget="${CSS.escape(input.closest('[data-budget]').dataset.budget)}"] input[data-budget-key="${input.dataset.budgetKey}"]`;
+ if(input.dataset.notifyEvent)return `input[data-notify-event="${input.dataset.notifyEvent}"]`;
+ return null;
+}
+function settingsDrafts(){
+ return [...$('view-settings').querySelectorAll('input[data-draft]')].map(input=>[draftKey(input),input.value,input.checked]).filter(([key])=>key);
+}
+function restoreDrafts(drafts){
+ for(const [key,value,checked] of drafts){const input=$('view-settings').querySelector(key);if(!input||input.disabled)continue;
+  input.value=value;input.checked=checked;input.dataset.draft='1';input.closest('tr[data-price-row]')?.classList.add('dirty');}
+ syncPriceDirty();
+}
+function draftsIn(selector){return settingsDrafts().filter(([key])=>$('view-settings').querySelector(key)?.closest(selector));}
+function savedDrafts(before){
+ for(const [key,value,checked] of before){const input=$('view-settings').querySelector(key);
+  if(input&&input.value===value&&input.checked===checked)delete input.dataset.draft;}
+}
+$('view-settings').addEventListener('input',event=>{if(event.target.matches('input')&&draftKey(event.target))event.target.dataset.draft='1';});
 function settingsAvailable(available,message=''){
  if(!available)settingsEpoch++;
  settingsOnline=available;
@@ -14,6 +40,8 @@ function settingsAvailable(available,message=''){
   if(!available&&control.matches('input')){control.value='';control.checked=false;}
  }
  if(!available){
+  priceOperations.clear();priceMessages.clear();priceBatch=null;
+  for(const input of $('view-settings').querySelectorAll('[data-draft]'))delete input.dataset.draft;
   for(const id of ['cfg-subs','cfg-pricing','cfg-thresholds','cfg-budgets','notify-events','notify-log'])$(id).replaceChildren();
   for(const id of ['ntfy-state','webhook-state','telegram-state'])$(id).textContent='연결 후 확인';
   $('price-save-all').hidden=true;
@@ -33,26 +61,18 @@ $('local-statistics-clear').addEventListener('click',async()=>{
  try{await clearStatisticsCache();$('local-statistics-status').textContent='이 기기의 통계 사본을 지웠습니다. 온라인에서 다음 조회 시 다시 저장됩니다.';}
  catch{$('local-statistics-status').textContent='브라우저 저장소에 접근할 수 없어 삭제를 확인하지 못했습니다.';}
 });
-async function loadConfig(){
- const epoch=++settingsEpoch;
- let cfg;
- try{cfg=await api('/api/config');}
- catch(e){settingsAvailable(false,'설정을 불러오지 못했습니다. 온라인 연결 후 다시 설정을 여세요. '+e.message);return;}
- if(epoch!==settingsEpoch)return;
- settingsAvailable(true);
- const prices=cfg.subscription_prices||{};
- const routes=[...new Set([...Object.keys(prices),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
- $('cfg-subs').innerHTML=(routes.map(r=>`<label class="cfg-row"><span>${esc(routeNames[r]||r)}<small>${esc(r)}</small></span><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정"></label>`).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
-  +'<button type="button" class="mini-btn" id="cfg-subs-save">저장</button>';
+function priceModels(cfg){
+ const usage=cfg.model_usage_30d||{};
+ return [...new Set([...(cfg.models||[]).map(m=>m.model),...Object.keys(cfg.pricing||{}),...Object.keys(cfg.pricing_origins||{})])]
+  .sort((a,b)=>(usage[b]||0)-(usage[a]||0)||compareText.compare(a,b));
+}
+function priceRowHtml(cfg,m){
  const eff=cfg.pricing||{},resolved=Object.fromEntries((cfg.models||[]).map(m=>[m.model,m.rate]));
  const origins=cfg.pricing_origins||{},builtinSet=new Set(cfg.pricing_builtin||[]);
  const today=cfg.today;
  const currentRate=m=>{const e=eff[m];return Array.isArray(e)?e.filter(x=>x.since<=today).pop()||e[0]:e;};
  // Models used in the last 30 days come first, by volume; unused table entries follow by name.
  const usage30=cfg.model_usage_30d||{},providerOf=Object.fromEntries((cfg.models||[]).map(m=>[m.model,m.provider]));
- const models=[...new Set([...Object.keys(resolved),...Object.keys(eff),...Object.keys(origins)])]
-  .sort((a,b)=>(usage30[b]||0)-(usage30[a]||0)||compareText.compare(a,b));
- $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+models.map(m=>{
   const entry=eff[m],origin=origins[m];
   const rate=origin==='hidden'?{}:(currentRate(m)||resolved[m]||{});
   const up=(cfg.upcoming||{})[m];
@@ -67,17 +87,34 @@ async function loadConfig(){
     +(origin?`<button type="button" class="mini-btn" data-price-hide="${esc(m)}">숨기기</button>`:'');
   }
   return `<tr data-price-row="${esc(m)}"><td>${esc(m)}${providerOf[m]?`<small>${esc(providerOf[m])}</small>`:''}${state}</td><td class="price-usage">${usage30[m]?compact(usage30[m]):'—'}</td>`+RATE_KEYS.map(k=>`<td><input type="number" min="0" max="10000" step="0.001" data-model="${esc(m)}" data-key="${k}" value="${rate[k]??''}" placeholder="—"${origin==='hidden'?' disabled':''}></td>`).join('')
-   +`<td>${buttons}</td></tr>`;
- }).join('')+'</tbody></table></div>';
+   +`<td>${buttons}<span class="price-message" role="status">${esc(priceMessages.get(m)||'')}</span></td></tr>`;
+
+}
+async function loadConfig(){
+ if(settingsOnline&&(priceOperations.size||priceBatch))return;
+ const epoch=++settingsEpoch;
+ let cfg;
+ try{cfg=await api('/api/config');}
+ catch(e){settingsAvailable(false,'설정을 불러오지 못했습니다. 온라인 연결 후 다시 설정을 여세요. '+e.message);return;}
+ if(epoch!==settingsEpoch)return;
+ const drafts=settingsOnline?settingsDrafts():[];
+ settingsAvailable(true);
+ const prices=cfg.subscription_prices||{};
+ const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
+ $('cfg-subs').innerHTML=(routes.map(r=>`<label class="cfg-row"><span>${esc(routeNames[r]||r)}<small>${esc(r)}</small></span><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정"></label>`).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
+  +'<button type="button" class="mini-btn" id="cfg-subs-save">저장</button>';
+ $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
  renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});loadNotifyLog();
  $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save">저장</button>';
  $('cfg-refresh').value=cfg.refresh_seconds;
  $('cfg-valert').value=cfg.value_alert_usd??'';
  for(const k of['low','dep','reset','ops'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
+ restoreDrafts(drafts);
 }
 $('cfg-subs').addEventListener('click',async e=>{
  if(e.target.id!=='cfg-subs-save')return;
+ const drafts=draftsIn('#cfg-subs');
  const prices={};
  for(const i of $('cfg-subs').querySelectorAll('input[data-route]')){
   if(i.value==='')continue;
@@ -85,7 +122,7 @@ $('cfg-subs').addEventListener('click',async e=>{
   if(!Number.isFinite(v)||v<0){cfgMsg('cfg-subs-msg','금액을 확인하세요: '+i.dataset.route);return;}
   prices[i.dataset.route]=v;
  }
- try{await settingsApi('/api/config/subscription-prices',{prices});cfgMsg('cfg-subs-msg','저장했습니다.');refresh();}
+ try{await settingsApi('/api/config/subscription-prices',{prices});savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다.');refresh();}
  catch(err){cfgMsg('cfg-subs-msg',err.message);}
 });
 function priceBody(model){
@@ -105,24 +142,62 @@ function syncPriceDirty(){
  $('price-save-all').hidden=!dirty;$('price-save-all').textContent=`변경 ${dirty}개 저장`;
 }
 $('cfg-pricing').addEventListener('input',e=>{const row=e.target.closest('tr[data-price-row]');if(row){row.classList.add('dirty');syncPriceDirty();}});
+function priceRow(model){return $('cfg-pricing').querySelector(`tr[data-price-row="${CSS.escape(model)}"]`);}
+function priceMessage(model,text){
+ priceMessages.set(model,text);const row=priceRow(model);if(row)row.querySelector('.price-message').textContent=text;
+}
+async function savePrice(model,body){
+ if(priceOperations.has(model))return false;
+ try{body=body||priceBody(model);}catch(error){priceMessage(model,error.message);return false;}
+ const operation=Symbol(),epoch=settingsEpoch,row=priceRow(model);
+ if(!row)return false;
+ priceOperations.set(model,operation);row.querySelectorAll('input,button').forEach(el=>el.disabled=true);
+ priceMessage(model,'저장 중…');
+ try{
+  await settingsApi('/api/config/pricing',body);
+  const cfg=await api('/api/config');
+  if(epoch!==settingsEpoch||!settingsOnline)return false;
+  priceMessages.set(model,body.delete?'복원했습니다.':body.hide?'숨겼습니다.':'저장했습니다.');
+  if(priceModels(cfg).includes(model))row.outerHTML=priceRowHtml(cfg,model);else row.remove();
+  applyPriceFilter();return true;
+ }catch(error){
+  if(epoch===settingsEpoch&&settingsOnline)priceMessage(model,error.message);
+  return false;
+ }finally{
+  if(priceOperations.get(model)===operation){
+   priceOperations.delete(model);
+   // A successful response replaces the row, preserving hidden-rate disabling.
+   if(row.isConnected)row.querySelectorAll('input,button').forEach(el=>el.disabled=false);
+   syncPriceDirty();
+  }
+ }
+}
 $('price-save-all').addEventListener('click',async()=>{
- const epoch=settingsEpoch;
+ if(priceBatch)return;
+ const batch=Symbol(),epoch=settingsEpoch;priceBatch=batch;$('price-save-all').disabled=true;
  const models=[...$('cfg-pricing').querySelectorAll('tr.dirty')].map(tr=>tr.dataset.priceRow);
- const failed=[];
- for(const model of models){try{await settingsApi('/api/config/pricing',priceBody(model));}catch(err){failed.push(`${model} (${err.message})`);}}
- if(epoch!==settingsEpoch||!settingsOnline)return;
- cfgMsg('cfg-pricing-msg',failed.length?'저장 실패: '+failed.join(', '):`${models.length}개 저장했습니다.`);
- loadConfig();refresh();
+ const failed=[];let saved=0;
+ try{
+  for(const model of models){
+   if(epoch!==settingsEpoch||!settingsOnline)break;
+   if(!priceRow(model)?.classList.contains('dirty')||priceOperations.has(model))continue;
+   if(await savePrice(model))saved++;else failed.push(model);
+  }
+  if(epoch!==settingsEpoch||!settingsOnline)return;
+  cfgMsg('cfg-pricing-msg',failed.length?`저장 실패: ${failed.join(', ')} · 입력을 확인하고 다시 저장하세요. (${saved}개 저장됨)`:`${saved}개 저장했습니다.`);
+  refresh();
+ }finally{if(priceBatch===batch){priceBatch=null;$('price-save-all').disabled=false;syncPriceDirty();}}
 });
 $('cfg-pricing').addEventListener('click',async e=>{
  const save=e.target.dataset.priceSave,del=e.target.dataset.priceDel,hide=e.target.dataset.priceHide;
  if(!save&&!del&&!hide)return;
- const model=save||del||hide;let body={model};
- if(del)body.delete=true;
- else if(hide){if(!confirm(`"${model}" 단가를 숨길까요? 비용이 미산정으로 표시되고 설정에서 되돌릴 수 있습니다.`))return;body.hide=true;}
- else try{body=priceBody(model);}catch(err){cfgMsg('cfg-pricing-msg',err.message);return;}
- try{await settingsApi('/api/config/pricing',body);cfgMsg('cfg-pricing-msg',(del?'복원':hide?'숨김':'저장')+'했습니다: '+model);loadConfig();refresh();}
- catch(err){cfgMsg('cfg-pricing-msg',err.message);}
+ const model=save||del||hide;
+ if(hide&&!confirm(`"${model}" 단가를 숨길까요? 비용이 미산정으로 표시되고 설정에서 되돌릴 수 있습니다.`))return;
+ const body=del?{model,delete:true}:hide?{model,hide:true}:undefined;
+ const ok=await savePrice(model,body);
+ if(!settingsOnline)return;
+ cfgMsg('cfg-pricing-msg',ok?'저장했습니다: '+model:'저장 실패: '+model+' · 해당 행의 안내를 확인하세요.');
+ if(ok)refresh();
 });
 // External alerts: secrets are write-only here; the page only learns which channels are set.
 const NOTIFY_EVENTS={low:'잔여 적음',exhausted:'소진',recovered:'초기화 후 회복',spike:'사용량 급증',collector:'수집기 재시작',source:'수집 실패 지속',budget:'프로젝트 예산',report:'주간 리포트'};
@@ -142,10 +217,11 @@ $('budget-add').addEventListener('click',()=>{
  const kept=Object.fromEntries([...$('cfg-budgets').querySelectorAll('[data-budget]')].map(row=>{
   const t=row.querySelector('[data-budget-key="tokens"]').value,u=row.querySelector('[data-budget-key="usd"]').value;
   return [row.dataset.budget,{tokens:t===''?null:parseFloat(t)*1e6,usd:u===''?null:parseFloat(u)}];}).filter(([,b])=>b.tokens!=null||b.usd!=null));
- renderBudgets(kept);
+ const drafts=settingsDrafts();renderBudgets(kept);restoreDrafts(drafts);
  $('cfg-budgets').querySelector(`[data-budget="${CSS.escape(name)}"] input`)?.focus();
 });
 $('budgets-save').addEventListener('click',async()=>{
+ const drafts=draftsIn('#cfg-budgets');
  const budgets={};
  for(const row of $('cfg-budgets').querySelectorAll('[data-budget]')){
   const t=row.querySelector('[data-budget-key="tokens"]').value,u=row.querySelector('[data-budget-key="usd"]').value;
@@ -154,7 +230,7 @@ $('budgets-save').addEventListener('click',async()=>{
   if((tokens!=null&&!(tokens>0))||(dollars!=null&&!(dollars>0))){cfgMsg('budgets-msg','예산은 0보다 커야 합니다: '+row.dataset.budget);return;}
   budgets[row.dataset.budget]={tokens,usd:dollars};
  }
- try{const r=await settingsApi('/api/config/project-budgets',{budgets});cfgMsg('budgets-msg',`${Object.keys(r.project_budgets).length}개 프로젝트 예산을 저장했습니다.`);renderBudgets(r.project_budgets);refresh();}
+ try{const r=await settingsApi('/api/config/project-budgets',{budgets});cfgMsg('budgets-msg',`${Object.keys(r.project_budgets).length}개 프로젝트 예산을 저장했습니다.`);savedDrafts(drafts);const pendingDrafts=settingsDrafts();renderBudgets(r.project_budgets);restoreDrafts(pendingDrafts);refresh();}
  catch(err){cfgMsg('budgets-msg',err.message);}
 });
 function renderNotifySettings(n){
@@ -176,7 +252,8 @@ async function loadNotifyLog(){
  catch(e){if(epoch!==settingsEpoch||!settingsOnline)return;$('notify-log').innerHTML=`<p class="hint">이력을 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
 async function saveNotify(body,message){
- try{renderNotifySettings(await settingsApi('/api/config/notify',body));cfgMsg('notify-msg',message);}
+ const drafts=draftsIn('#cfg-notify');
+ try{const result=await settingsApi('/api/config/notify',body);savedDrafts(drafts);const pendingDrafts=settingsDrafts();renderNotifySettings(result);restoreDrafts(pendingDrafts);cfgMsg('notify-msg',message);}
  catch(err){cfgMsg('notify-msg',err.message);}
 }
 $('notify-save').addEventListener('click',()=>{
@@ -200,9 +277,10 @@ $('notify-test').addEventListener('click',async()=>{
 });
 $('cfg-thresholds').addEventListener('click',async e=>{
  if(e.target.id!=='cfg-thresholds-save')return;
+ const drafts=draftsIn('#cfg-thresholds');
  const body={};
  for(const[k]of THRESHOLD_FIELDS){const v=parseFloat($('cfg-'+k).value);if(Number.isFinite(v))body[k]=v;}
- try{await settingsApi('/api/config/thresholds',body);cfgMsg('cfg-thresholds-msg','저장했습니다.');refresh();}
+ try{await settingsApi('/api/config/thresholds',body);savedDrafts(drafts);cfgMsg('cfg-thresholds-msg','저장했습니다.');refresh();}
  catch(err){cfgMsg('cfg-thresholds-msg',err.message);}
 });
 // The pricing filter lives outside #cfg-pricing because loadConfig replaces
@@ -228,14 +306,16 @@ $('price-unset').addEventListener('click',event=>{
 });
 for(const k of['low','dep','reset','ops'])$('ntf-'+k).addEventListener('change',e=>{storage.set('llmNotify:'+k,e.target.checked?'1':'0');});
 $('cfg-refresh-save').addEventListener('click',async()=>{
+ const drafts=draftsIn('#cfg-refresh');
  const v=parseInt($('cfg-refresh').value,10);
  if(!Number.isFinite(v)||v<30||v>3600){cfgMsg('cfg-refresh-msg','30~3600초 범위로 입력하세요.');return;}
- try{const r=await settingsApi('/api/config/refresh',{refresh_seconds:v});applyRefreshMs(r.refresh_seconds*1000);schedule();cfgMsg('cfg-refresh-msg','저장했습니다.');}
+ try{const r=await settingsApi('/api/config/refresh',{refresh_seconds:v});savedDrafts(drafts);applyRefreshMs(r.refresh_seconds*1000);schedule();cfgMsg('cfg-refresh-msg','저장했습니다.');}
  catch(err){cfgMsg('cfg-refresh-msg',err.message);}
 });
 $('cfg-valert-save').addEventListener('click',async()=>{
+ const drafts=draftsIn('#cfg-valert');
  const raw=$('cfg-valert').value.trim(),v=raw===''?null:parseFloat(raw);
  if(v!==null&&(!Number.isFinite(v)||v<0||v>1000000)){cfgMsg('cfg-refresh-msg','0 이상 USD로 입력하거나 비워서 해제하세요.');return;}
- try{await settingsApi('/api/config/value-alert',{value_alert_usd:v});cfgMsg('cfg-refresh-msg','저장했습니다.');refresh();}
+ try{await settingsApi('/api/config/value-alert',{value_alert_usd:v});savedDrafts(drafts);cfgMsg('cfg-refresh-msg','저장했습니다.');refresh();}
  catch(err){cfgMsg('cfg-refresh-msg',err.message);}
 });
