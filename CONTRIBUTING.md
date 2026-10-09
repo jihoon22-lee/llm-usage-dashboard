@@ -14,6 +14,7 @@ PYTHONPATH=. .venv/bin/python tests/browser_ci.py
 
 Node24를 사용합니다. Linux 브라우저 라이브러리가 없으면 playwright install --with-deps chromium이 필요합니다.
 기본 브라우저 검사는 임시 DB·합성 응답·예제 origin을 사용합니다. 실제 레이아웃·CSP·모바일 검사와 실제 계정 인증은 다릅니다.
+`tests/browser_resource_planning.py`는 실제 Flask API와 320/390/1440px에서 작업 판단·모델 제약·수동 기록 충돌·중복 저장 방지·오프라인 복구를 검사합니다. 제공사 읽기와 초기화권 소비·구매 검증을 혼동하지 않습니다. 공개 fixture에는 실제 잔액·계정 식별자·인증정보를 넣지 않습니다.
 `browser_smoke.py --origin https://dashboard.example.ts.net:9444`는 본인의 사설 사이트를 명시하는 운영 검사이며 공개 CI에서 실행하지 않습니다.
 
 ## 변경과 릴리스
@@ -23,6 +24,7 @@ Node24를 사용합니다. Linux 브라우저 라이브러리가 없으면 playw
 한 작업의 계획·실제 결과·제약은 workthrough의 날짜별 문서 하나에 기록하고 개인 주소·경로·로그는 넣지 않습니다.
 태그는 공개 main에 포함되고 패키지 버전과 같아야 합니다. 검증한 동일 산출물을 게시하고 게시 job은 재빌드하지 않습니다.
 공개 태그·파일은 덮어쓰지 않습니다. wheel은 런타임이고 시스템 서비스 설치에는 Git checkout이 필요합니다.
+웹 자산을 추가하면 `scripts/check_package.py`의 명시적 자산 목록도 갱신하고 wheel·소스 배포본과 설치된 환경에서 실제로 제공되는지 확인합니다.
 버전은 pyproject.toml과 uv.lock의 프로젝트 항목을 함께 갱신하고 CHANGELOG·설치/업데이트 안내를 맞춥니다. 버전 PR이 병합되고 필수 CI가 성공한 main 커밋에 일치하는 `vX.Y.Z` 태그를 만듭니다.
 태그 push는 Release 워크플로를 실행합니다. 태그/버전/main 포함 검사와 전체 검사를 통과한 wheel·소스 배포본·release-manifest.json·SHA256SUMS를 같은 artifact ID에서 가져와 초안에 업로드하고, 다시 다운로드해 검증한 뒤 게시합니다. 로컬 재빌드 파일로 교체하지 않습니다. 게시 후 내려받은 파일도 manifest·SHA256SUMS와 대조하고 릴리스 노트에 변경 사항·업데이트 주의사항·CI 출처를 남깁니다.
 운영 자동 배포·PyPI는 별도 범위입니다. 실제 수신과 fixture 성공을 구분해 기록합니다.
