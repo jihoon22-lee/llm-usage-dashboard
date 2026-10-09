@@ -1,9 +1,10 @@
 'use strict';
 // Settings: subscription prices, model rates, thresholds, external alerts and budgets.
 const RATE_KEYS=['input','cached','output','cache_write'];
+const RATE_LABELS={input:'입력',cached:'캐시 읽기',output:'출력',cache_write:'캐시 쓰기'};
 const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90']];
 function cfgMsg(id,text){const el=$(id);el.textContent=text;el.setAttribute('role','status');}
-let settingsEpoch=0,settingsOnline=false;
+let settingsEpoch=0,settingsOnline=false,configVersion=0;
 const priceOperations=new Map(),priceMessages=new Map();
 let priceBatch=null;
 // Drafts only live in this document. Offline invalidation clears the DOM and maps.
@@ -40,7 +41,7 @@ function settingsAvailable(available,message=''){
   if(!available&&control.matches('input')){control.value='';control.checked=false;}
  }
  if(!available){
-  priceOperations.clear();priceMessages.clear();priceBatch=null;
+  priceOperations.clear();priceMessages.clear();priceBatch=null;extraBudgetProjects.clear();
   for(const input of $('view-settings').querySelectorAll('[data-draft]'))delete input.dataset.draft;
   for(const id of ['cfg-subs','cfg-pricing','cfg-thresholds','cfg-budgets','notify-events','notify-log'])$(id).replaceChildren();
   for(const id of ['ntfy-state','webhook-state','telegram-state'])$(id).textContent='연결 후 확인';
@@ -53,6 +54,7 @@ for(const event of ['offline','llm-api-unavailable'])window.addEventListener(eve
 async function settingsApi(path,body){
  const epoch=settingsEpoch;
  if(!settingsOnline)throw Error('온라인 연결 후 다시 설정을 여세요.');
+ configVersion++; // An older configuration read must not undo this edit.
  const result=await api(path,body);
  if(epoch!==settingsEpoch||!settingsOnline)throw Error('연결 상태가 바뀌었습니다. 설정을 다시 여세요.');
  return result;
@@ -77,36 +79,36 @@ function priceRowHtml(cfg,m){
   const rate=origin==='hidden'?{}:(currentRate(m)||resolved[m]||{});
   const up=(cfg.upcoming||{})[m];
   let state='',buttons;
-  if(origin==='hidden'){state='<small class="warn-text">숨김</small>';buttons=`<button type="button" class="mini-btn" data-price-del="${esc(m)}">숨김 해제</button>`;}
+  if(origin==='hidden'){state='<small class="warn-text">숨김</small>';buttons=`<button type="button" class="mini-btn" data-price-del="${esc(m)}" aria-label="${esc(m)} 단가 숨김 해제">숨김 해제</button>`;}
   else{
    state=(origin==='user'?'<small>사용자</small>':origin==='builtin'?'<small>내장</small>':resolved[m]?'<small>상위 단가 상속</small>':'<small class="warn-text">미설정</small>')
     +(Array.isArray(entry)?'<small>날짜별 이력</small>':'')
     +(up?`<small class="warn-text">${esc(up.since)}부터 $${up.input}/$${up.output} 예정</small>`:'');
-   buttons=`<button type="button" class="mini-btn" data-price-save="${esc(m)}">저장</button>`
-    +(origin==='user'?`<button type="button" class="mini-btn" data-price-del="${esc(m)}">${builtinSet.has(m)?'내장값 복원':'삭제'}</button>`:'')
-    +(origin?`<button type="button" class="mini-btn" data-price-hide="${esc(m)}">숨기기</button>`:'');
+   buttons=`<button type="button" class="mini-btn" data-price-save="${esc(m)}" aria-label="${esc(m)} 단가 저장">저장</button>`
+    +(origin==='user'?`<button type="button" class="mini-btn" data-price-del="${esc(m)}" aria-label="${esc(m)} 단가 ${builtinSet.has(m)?'내장값 복원':'삭제'}">${builtinSet.has(m)?'내장값 복원':'삭제'}</button>`:'')
+    +(origin?`<button type="button" class="mini-btn" data-price-hide="${esc(m)}" aria-label="${esc(m)} 단가 숨기기">숨기기</button>`:'');
   }
-  return `<tr data-price-row="${esc(m)}"><td>${esc(m)}${providerOf[m]?`<small>${esc(providerOf[m])}</small>`:''}${state}</td><td class="price-usage">${usage30[m]?compact(usage30[m]):'—'}</td>`+RATE_KEYS.map(k=>`<td><input type="number" min="0" max="10000" step="0.001" data-model="${esc(m)}" data-key="${k}" value="${rate[k]??''}" placeholder="—"${origin==='hidden'?' disabled':''}></td>`).join('')
+  return `<tr data-price-row="${esc(m)}"><td>${esc(m)}${providerOf[m]?`<small>${esc(providerOf[m])}</small>`:''}${state}</td><td class="price-usage">${usage30[m]?compact(usage30[m]):'—'}</td>`+RATE_KEYS.map(k=>`<td><input type="number" min="0" max="10000" step="0.001" data-model="${esc(m)}" data-key="${k}" aria-label="${esc(m)} ${RATE_LABELS[k]} 단가 (USD/100만 토큰)" value="${rate[k]??''}" placeholder="—"${origin==='hidden'?' disabled':''}></td>`).join('')
    +`<td>${buttons}<span class="price-message" role="status">${esc(priceMessages.get(m)||'')}</span></td></tr>`;
 
 }
 async function loadConfig(){
  if(settingsOnline&&(priceOperations.size||priceBatch))return;
- const epoch=++settingsEpoch;
+ const epoch=settingsEpoch,version=++configVersion;
  let cfg;
  try{cfg=await api('/api/config');}
- catch(e){settingsAvailable(false,'설정을 불러오지 못했습니다. 온라인 연결 후 다시 설정을 여세요. '+e.message);return;}
- if(epoch!==settingsEpoch)return;
+ catch(e){if(epoch===settingsEpoch&&version===configVersion)settingsAvailable(false,'설정을 불러오지 못했습니다. 온라인 연결 후 다시 설정을 여세요. '+e.message);return;}
+ if(epoch!==settingsEpoch||version!==configVersion)return;
  const drafts=settingsOnline?settingsDrafts():[];
  settingsAvailable(true);
  const prices=cfg.subscription_prices||{};
  const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
  $('cfg-subs').innerHTML=(routes.map(r=>`<label class="cfg-row"><span>${esc(routeNames[r]||r)}<small>${esc(r)}</small></span><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정"></label>`).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
-  +'<button type="button" class="mini-btn" id="cfg-subs-save">저장</button>';
+  +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="월 구독료 저장">저장</button>';
  $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
  renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});loadNotifyLog();
- $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save">저장</button>';
+ $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save" aria-label="임계값 저장">저장</button>';
  $('cfg-refresh').value=cfg.refresh_seconds;
  $('cfg-valert').value=cfg.value_alert_usd??'';
  for(const k of['low','dep','reset','ops'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
@@ -151,7 +153,8 @@ async function savePrice(model,body){
  try{body=body||priceBody(model);}catch(error){priceMessage(model,error.message);return false;}
  const operation=Symbol(),epoch=settingsEpoch,row=priceRow(model);
  if(!row)return false;
- priceOperations.set(model,operation);row.querySelectorAll('input,button').forEach(el=>el.disabled=true);
+ const controls=[...row.querySelectorAll('input,button')].map(el=>[el,el.disabled]);
+ priceOperations.set(model,operation);controls.forEach(([el])=>el.disabled=true);
  priceMessage(model,'저장 중…');
  try{
   await settingsApi('/api/config/pricing',body);
@@ -167,7 +170,7 @@ async function savePrice(model,body){
   if(priceOperations.get(model)===operation){
    priceOperations.delete(model);
    // A successful response replaces the row, preserving hidden-rate disabling.
-   if(row.isConnected)row.querySelectorAll('input,button').forEach(el=>el.disabled=false);
+   if(row.isConnected)controls.forEach(([el,disabled])=>el.disabled=disabled);
    syncPriceDirty();
   }
  }
@@ -207,7 +210,7 @@ function renderBudgets(budgets){
  const month=lastUsage?.project_month?.projects||{};
  const names=[...new Set([...Object.entries(month).sort((a,b)=>b[1].tokens-a[1].tokens).slice(0,12).map(([n])=>n),...Object.keys(budgets),...extraBudgetProjects])];
  $('cfg-budgets').innerHTML=names.length?names.map(n=>{const b=budgets[n]||{},u=month[n];
-  return `<div class="cfg-row" data-budget="${esc(n)}"><span>${esc(n)}<small>이번 달 ${compact(u?.tokens||0)} 토큰${u?.cost!=null?' · '+usd(u.cost):''}</small></span><span><input type="number" class="cfg-num" min="0" step="1" data-budget-key="tokens" value="${b.tokens?b.tokens/1e6:''}" placeholder="—"> M 토큰 <input type="number" class="cfg-num" min="0" step="0.01" data-budget-key="usd" value="${b.usd??''}" placeholder="—"> USD</span></div>`;}).join('')
+  return `<div class="cfg-row" data-budget="${esc(n)}"><span>${esc(n)}<small>이번 달 ${compact(u?.tokens||0)} 토큰${u?.cost!=null?' · '+usd(u.cost):''}</small></span><span><input type="number" class="cfg-num" min="0" step="1" data-budget-key="tokens" aria-label="${esc(n)} 월 토큰 예산 (백만 토큰)" value="${b.tokens?b.tokens/1e6:''}" placeholder="—"> M 토큰 <input type="number" class="cfg-num" min="0" step="0.01" data-budget-key="usd" aria-label="${esc(n)} 월 비용 예산 (USD)" value="${b.usd??''}" placeholder="—"> USD</span></div>`;}).join('')
   :'<p class="hint">이번 달 프로젝트 기록이 아직 없습니다.</p>';
 }
 // A project with no use this month yet can still get a budget.

@@ -31,7 +31,7 @@ function renderInsights(data){
  const q=insights.quality;
  // Each figure says whether it needs attention or is already handled by the aggregation.
  const qualityRows=[
-  ['기록된 해석 실패',fmt(q.import_errors)+'건',q.import_errors>0?'warn':'ok',q.import_errors>0?'읽지 못한 줄이 있습니다 · 수집 상태에서 원본을 확인하세요':'모든 기록 줄을 해석했습니다'],
+  ['기록된 해석 실패',fmt(q.import_errors)+'건',q.import_errors>0?'warn':'ok',q.import_errors>0?'읽지 못한 줄이 있습니다 · 수집 상태에서 원본을 확인하세요':'현재까지 기록된 해석 실패가 없습니다'],
   ['모델 미확인 토큰 비중',percent(q.unknown_model_percent),q.unknown_model_percent>1?'warn':'ok','모델명이 없는 기록은 unknown으로 따로 집계합니다'],
   ['카운터 초기화 세션',fmt(q.reset_sessions)+'개','info','누적 카운터가 다시 시작된 세션 · 구간을 나눠 집계해 합계에 영향 없음'],
   ['불완전 시작 세션',fmt(q.partial_sessions)+'개','info','기록 시작 전 사용분은 알 수 없어 관측 이후만 집계'],

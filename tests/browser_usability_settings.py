@@ -25,6 +25,19 @@ with sync_playwright() as p:
     expect(b.locator('xpath=ancestor::tr')).to_have_class('dirty')
     page.locator('#tab-overview').click();page.locator('#tab-settings').click()
     expect(a).to_have_value('7.25');expect(b).to_have_value('8.75');expect(subscription).to_have_value('99')
+    # A configuration read started before a save may arrive after it.
+    stale=[]
+    def hold_config(route):
+        response=fixture_response(route.request)
+        try:stale.append((route,response.get_json()))
+        finally:response.close()
+    page.route('**/api/config',hold_config)
+    page.evaluate('void loadConfig()');page.wait_for_timeout(100)
+    assert len(stale)==1
+    page.unroute('**/api/config');a.fill('7.4');page.locator('[data-price-save="gpt-test"]').click()
+    expect(a.locator('xpath=ancestor::tr')).to_contain_text('저장했습니다')
+    route,data=stale.pop();route.fulfill(json=data)
+    expect(a).to_have_value('7.4');expect(b).to_have_value('8.75');expect(subscription).to_have_value('99')
     # One rejected row does not discard its draft or retry action.
     a.fill('7.5');b.fill('10001');page.locator('#price-save-all').click()
     expect(page.locator('#cfg-pricing-msg')).to_contain_text('저장 실패')
@@ -52,6 +65,21 @@ with sync_playwright() as p:
     expect(page.locator('#cfg-subs-msg')).to_contain_text('저장했습니다')
     expect(page.locator('#refresh')).to_be_enabled()
     assert page.evaluate("lastUsage.subscriptions.find(s=>s.route==='codex').monthly_usd")==25
+    # An outage discards newly added, unsaved budget rows as well as their values.
+    page.locator('#budget-new').fill('unsaved-budget');page.locator('#budget-add').click()
+    page.locator('[data-budget="unsaved-budget"] input').first.fill('10')
+    page.evaluate("window.dispatchEvent(new Event('offline'))")
+    expect(page.locator('#cfg-budgets')).to_be_empty()
+    page.evaluate('loadConfig()')
+    assert page.locator('[data-budget="unsaved-budget"]').count()==0
+    # Hidden prices must stay disabled when unhiding fails.
+    page.on('dialog',lambda dialog:dialog.accept())
+    page.locator('[data-price-hide="gpt-test"]').click();expect(a).to_be_disabled()
+    expect(page.locator('[data-price-del="gpt-test"]')).to_be_enabled()
+    page.route('**/api/config/pricing',lambda r:r.fulfill(status=400,json={'error':'synthetic restore failure'}))
+    page.locator('[data-price-del="gpt-test"]').click()
+    expect(a.locator('xpath=ancestor::tr')).to_contain_text('synthetic restore failure')
+    expect(a).to_be_disabled()
     assert not errors,errors
     browser.close()
 print('Usability settings passed: independent drafts, partial failure/retry, row locking, tab navigation, subscription restoration.')

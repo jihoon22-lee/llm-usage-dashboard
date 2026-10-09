@@ -160,7 +160,7 @@ with sync_playwright() as p:
     calls=[];page.on('request',lambda r:calls.append(r.url) if '/api/usage?' in r.url else None)
     page.locator('#tabs [data-view="settings"]').click()  # the toggle lives in settings
     page.locator('#auto').uncheck();page.locator('#auto').check()
-    expect(page.get_by_label('자동 갱신')).to_be_checked()
+    expect(page.get_by_role('checkbox',name='5분 자동 갱신',exact=True)).to_be_checked()
     page.clock.fast_forward(299000);assert len(calls)==0
     with page.expect_response(lambda r:'/api/usage?' in r.url):page.clock.fast_forward(2000)
     expect(page.locator('#refresh')).to_be_enabled()

@@ -1,20 +1,56 @@
 'use strict';
 // Refresh cycle and startup.
 function query(){const q=new URLSearchParams();for(const id of FILTER_IDS)q.set(id,$(id).value);return q;}
-let insightsPending=null;
-function loadInsights(){
- // The insights section (sessions, projects, calendar, quality, month) is only
- // fetched while its tab is open; a merged response marks the key as present.
- if(!lastUsage||'insights' in lastUsage)return insightsPending;
- const qs=query().toString();
- const q=query();q.set('sections','insights');
- insightsPending=(insightsPending||api('/api/usage?'+q).then(data=>{
-  if(query().toString()!==qs||!lastUsage)return;
-  Object.assign(lastUsage,data);renderInsights(lastUsage);
- }).catch(e=>{$('quality').textContent='인사이트를 불러오지 못했습니다. '+e.message;})
-  .finally(()=>insightsPending=null));
- return insightsPending;
+let insightsPending=null,insightsGeneration=0,usageKey='',insightKey='',coreController=null;
+const displayedCopies=new Map();
+function showSource(name,source){
+ if(source.saved)displayedCopies.set(name,source.saved);else displayedCopies.delete(name);
+ offlineSince=displayedCopies.size?Math.min(...displayedCopies.values()):0;
+ offlineText();
 }
+function offlineText(){
+ $('offline').hidden=!offlineSince;
+ if(offlineSince)$('offline').textContent=`오프라인 · ${ago(offlineSince/1000)} 받은 데이터를 표시합니다. 연결되면 다음 갱신에서 최신 값으로 바뀝니다.`;
+}
+window.addEventListener('llm-data-source-change',offlineText);
+function insightsState(state,message=''){
+ const ready=state==='ready',failed=state==='error';
+ $('insights-status').hidden=ready;$('insights-status').setAttribute('role',failed?'alert':'status');
+ $('insights-message').textContent=failed?'인사이트를 불러오지 못했습니다. '+message:ready?'':'인사이트를 불러오는 중…';
+ $('insights-retry').hidden=!failed;
+ for(const id of ['csv-projects','csv-sessions'])$(id).disabled=!ready;
+ if(!ready){
+  if(lastUsage)for(const key of ['insights','sessions','sessions_total','sessionless_requests','projects','calendar'])delete lastUsage[key];
+  const text=failed?'불러오지 못했습니다. 위의 다시 불러오기를 이용하세요.':'불러오는 중…';
+  for(const id of ['projects','sessions'])$(id).innerHTML=`<tr><td colspan="8" class="empty">${text}</td></tr>`;
+  for(const id of ['calendar','comparison','quality','cache-overview'])$(id).textContent=text;
+  for(const id of ['cache-rows','cache-series','cache-trend'])$(id).replaceChildren();
+  $('sess-page').textContent='';$('sess-prev').disabled=true;$('sess-next').disabled=true;
+ }
+}
+function cancelInsights(){
+ insightsGeneration++;insightsPending?.controller.abort();insightsPending=null;insightKey='';
+ displayedCopies.delete('insights');
+}
+function loadInsights(){
+ const key=query().toString();
+ if(!lastUsage||usageKey!==key){insightsState('loading');return null;}
+ if(insightKey===key&&'insights' in lastUsage)return null;
+ if(insightsPending?.key===key)return insightsPending.promise;
+ cancelInsights();insightsState('loading');
+ const q=query();q.set('sections','insights');
+ const operation={key,generation:insightsGeneration,controller:new AbortController(),promise:null};
+ const source={};insightsPending=operation;
+ const current=()=>insightsPending===operation&&operation.generation===insightsGeneration&&query().toString()===key&&usageKey===key;
+ operation.promise=api('/api/usage?'+q,undefined,undefined,{signal:operation.controller.signal,source}).then(data=>{
+  if(!current()||!lastUsage)return;
+  Object.assign(lastUsage,data);insightKey=key;insightsState('ready');renderInsights(lastUsage);showSource('insights',source);
+ }).catch(error=>{
+  if(current()&&!operation.controller.signal.aborted)insightsState('error',error.message);
+ }).finally(()=>{if(insightsPending===operation)insightsPending=null;});
+ return operation.promise;
+}
+$('insights-retry').addEventListener('click',()=>loadInsights());
 let lastRefresh=0,busyTimer=null;
 function setBusy(on){
  clearTimeout(busyTimer);
@@ -24,10 +60,9 @@ function setBusy(on){
  else document.body.classList.remove('busy');
 }
 function updatedText(){
- if(!lastRefresh)return;
+ offlineText();
+ if(!lastRefresh||pending||!$('error').hidden)return;
  const parts=['마지막 갱신 '+ago(lastRefresh)];
- $('offline').hidden=!offlineSince;
- if(offlineSince)$('offline').textContent=`오프라인 · ${ago(offlineSince/1000)} 받은 데이터를 표시합니다. 연결되면 다음 갱신에서 최신 값으로 바뀝니다.`;
  const collected=lastUsage&&lastUsage.collected_at;
  if(collected)parts.push('수집 '+ago(collected));
  $('updated').title=['마지막 갱신 '+when(lastRefresh),collected?'수집 '+when(collected):''].filter(Boolean).join(' · ')+' KST';
@@ -40,16 +75,15 @@ function updatedText(){
 setInterval(updatedText,30000);
 async function refresh(manual=false){
  if(pending){
-  if(query().toString()!==activeQuery)queued=true;
+  if(query().toString()!==activeQuery){queued=true;coreController?.abort();cancelInsights();insightsState('loading');}
   queuedManual=queuedManual||manual;
   return pending;
  }
  pending=(async()=>{
   $('refresh').disabled=true;setBusy(true);
   try{
-   offlineSince=0;
    do{
-    queued=false;activeQuery=query().toString();
+    queued=false;activeQuery=query().toString();cancelInsights();insightsState('loading');
     const collect=manual||queuedManual;manual=false;queuedManual=false;
     $('error').hidden=true;$('updated').textContent='불러오는 중…';
     try{
@@ -60,25 +94,31 @@ async function refresh(manual=false){
       const job=await api('/api/refresh',{});$('updated').textContent='수집 요청 중…';
       const deadline=Date.now()+90000;let completed=false;
       while(Date.now()<deadline){
-       const state=await api('/api/collection');
+       const state=await api('/api/collection',undefined,undefined,{deadline:Math.min(deadline,Date.now()+10000)})
+        .catch(error=>{throw Error('수집 완료 여부를 아직 확인하지 못했습니다. '+error.message);});
        if((state.completed_id??state.completed)>=(job.request_id??job.requested)){completed=true;break;}
        await new Promise(resolve=>setTimeout(resolve,1000));if(document.hidden)break;
       }
       if(!completed&&!document.hidden)throw Error('수집 응답을 기다리는 중입니다. 잠시 후 다시 갱신하세요. 기존 기록은 유지됩니다.');
      }
-     const core=query();core.set('sections','core');
-     const reqs=[api('/api/usage?'+core),api('/api/limits')];
-     if(currentView==='insights'){const extra=query();extra.set('sections','insights');reqs.push(api('/api/usage?'+extra));}
-     const [usage,limits,insightsData]=await Promise.all(reqs);
-     if(insightsData)Object.assign(usage,insightsData);
+     activeQuery=query().toString();queued=false;
+     const core=query();core.set('sections','core');coreController=new AbortController();
+     const sources={core:{},limits:{}};
+     const [usage,limits]=await Promise.all([api('/api/usage?'+core,undefined,undefined,{signal:coreController.signal,source:sources.core}),
+       api('/api/limits',undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
      if(activeQuery!==query().toString()){queued=true;continue;}
-     renderUsage(usage);checkNotify(limits);checkOpsNotify(usage);renderLimits(limits);renderAlerts(limits,usage);lastRefresh=Date.now()/1000;updatedText();
+     usageKey=activeQuery;
+     renderUsage(usage);checkNotify(limits);checkOpsNotify(usage);renderLimits(limits);renderAlerts(limits,usage);lastRefresh=Date.now()/1000;
+     // Rendering can fall back from an unavailable cost metric to tokens.
+     usageKey=query().toString();activeQuery=usageKey;
+     showSource('core',sources.core);showSource('limits',sources.limits);
+     if(currentView==='insights')await loadInsights();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
      else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';}
     }
    }while(queued||queuedManual);
-  }finally{$('refresh').disabled=false;setBusy(false);pending=null;schedule();}
+  }finally{coreController=null;$('refresh').disabled=false;setBusy(false);pending=null;updatedText();schedule();}
  })();return pending;
 }
 function applyRefreshMs(ms){refreshMs=ms;$('auto-label').textContent=(ms>=60000?`${Math.round(ms/60000)}분`:`${Math.round(ms/1000)}초`)+' 자동 갱신';}
