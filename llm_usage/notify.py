@@ -123,8 +123,8 @@ def quota_messages(rows,previous,low_percent):
     """(messages, new state) from quota rows; the first sight of a bucket only records it."""
     state={};messages=[]
     for row in rows:
-        if row.get('status')!='fresh' or row.get('remaining') is None or row.get('blocked_by'):continue
-        key=f"{row['route']}:{row['bucket']}";remaining=row['remaining']
+        if row.get('status')!='fresh' or row.get('remaining') is None or row.get('blocked_by') or (row.get('scope') or {}).get('identity_unverified'):continue
+        key=f"{row['route']}:{row['bucket']}"+(f":{row['account_epoch']}" if row.get('account_epoch') else '');remaining=row['remaining']
         now_state=dict(zero=remaining<=0,low=remaining<=low_percent,resets=row.get('resets'))
         state[key]=now_state;before=previous.get(key)
         if before is None:continue

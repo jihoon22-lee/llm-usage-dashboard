@@ -87,7 +87,7 @@ def account(c, route):
     return dict(row) if row else None
 
 
-def observe_account(c, route, identity, checked, credential_revision=None):
+def observe_account(c, route, identity, checked, credential_revision=None, plan_revision=None):
     """Unknown identity remains unknown; credential changes only break its epoch."""
     if not number(checked) or checked > time.time() + SKEW:
         return account(c, route)
@@ -98,6 +98,12 @@ def observe_account(c, route, identity, checked, credential_revision=None):
     changed = not current or ident != current['account_key']
     if current and ident is None and credential_revision is not None:
         changed |= str(credential_revision) != current['credential_revision']
+    plan_key='quota_plan_revision:'+route
+    before=c.execute('SELECT data FROM state WHERE key=?',(plan_key,)).fetchone()
+    revision=key(plan_revision) if plan_revision is not None else None
+    if revision is not None:
+        changed |= bool(before and json.loads(before['data'])!=revision)
+        c.execute('INSERT OR REPLACE INTO state VALUES (?,?)',(plan_key,json.dumps(revision)))
     epoch = uuid.uuid4().hex if changed else current['epoch']
     since = checked if changed else current['since']
     c.execute('''INSERT INTO resource_accounts VALUES (?,?,?,?,?,?)
@@ -181,6 +187,7 @@ def codex_resources(c, data, checked):
                        expires=None, expiry_known=False), 'codex')
     else:
         resource_error(c, 'codex', 'reset-grants', 'reset', checked, 'codex')
+    return int(credits is not None)+int(isinstance(reset,dict) and type(reset.get('availableCount')) is int and reset['availableCount']>=0)
 
 
 def money(value):
@@ -200,7 +207,7 @@ def claude_spend(c, data, checked):
     spend = data.get('spend')
     if not isinstance(extra, dict) and not isinstance(spend, dict):
         resource_error(c, 'claude-code', 'spending-allowance', 'usage_credit', checked, 'claude-oauth')
-        return
+        return 0
     extra = extra or {}; spend = spend or {}
     used, currency = money(spend.get('used'))
     limit, limit_currency = money(spend.get('limit'))
@@ -233,6 +240,7 @@ def claude_spend(c, data, checked):
         save_auto(c, 'claude-code', 'prepaid-credits', 'usage_credit', checked,
                   dict(label='Claude 사용 크레딧', amount=balance, unit=balance_currency, scope='subscription',
                        enabled=None, observation='observed', expires=None, expiry_known=False), 'claude-oauth')
+    return 1
 
 
 def claude_balance(c, data, checked):
@@ -288,7 +296,7 @@ def manual_data(body, now):
     if not isinstance(body, dict):
         raise ValueError('자원 내용을 확인하세요.')
     allowed = {'route', 'kind', 'label', 'amount', 'unit', 'scope', 'model', 'expires', 'checked',
-               'enabled', 'spend_remaining', 'spend_unlimited', 'auto_reload', 'linked_id', 'revision'}
+               'enabled', 'spend_remaining', 'spend_unlimited', 'auto_reload', 'linked_id', 'revision', 'request_id'}
     if body.keys() - allowed:
         raise ValueError('지원하지 않는 자원 필드입니다.')
     route, kind, scope = body.get('route'), body.get('kind'), body.get('scope')
@@ -354,9 +362,23 @@ def write_manual(store, body, rid=None, delete=False):
             c.execute('DELETE FROM resource_items WHERE id=?', (rid,))
             return dict(deleted=True, id=rid)
         clean = manual_data(body, now)
+        request_id = body.get('request_id')
+        if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch('[0-9a-f]{32}', request_id)):
+            raise ValueError('기록 요청 식별자를 확인하세요.')
         owner = account(c, clean['route'])
-        account_key = owner['account_key'] if owner else None
-        clean['data']['epoch'] = owner['epoch'] if owner else None
+        independent = clean['kind'] == 'api_credit'
+        binding = None if independent or owner is None else (owner['account_key'],owner['epoch'])
+        fingerprint = key(clean,binding)
+        if not rid and request_id:
+            previous = c.execute("SELECT * FROM resource_items WHERE id=? AND origin='manual'", (request_id,)).fetchone()
+            if previous:
+                if previous['revision']!=1 or json.loads(previous['data']).get('creation_fingerprint') != fingerprint:
+                    raise Conflict('이 저장 요청의 기록이 이미 있습니다. 최신 기록을 확인한 뒤 수정하세요.')
+                return dict(id=previous['id'], revision=previous['revision'], replayed=True)
+        account_key = owner['account_key'] if owner and not independent else None
+        clean['data']['epoch'] = owner['epoch'] if owner and not independent else None
+        clean['data']['account_scope'] = 'independent' if independent else 'current'
+        clean['data']['creation_fingerprint'] = json.loads(old['data']).get('creation_fingerprint') if old else fingerprint
         linked = clean['data']['linked_id']
         if linked:
             target = c.execute("SELECT * FROM resource_items WHERE id=? AND origin='auto'", (linked,)).fetchone()
@@ -367,7 +389,7 @@ def write_manual(store, body, rid=None, delete=False):
                 raise ValueError('연결할 자원의 계정·단위·적용 범위가 다릅니다.')
         if not old and c.execute("SELECT COUNT(*) FROM resource_items WHERE origin='manual'").fetchone()[0] >= 100:
             raise ValueError('수동 자원은 최대 100개까지 기록할 수 있습니다.')
-        rid = rid or uuid.uuid4().hex
+        rid = rid or request_id or uuid.uuid4().hex
         revision = old['revision'] + 1 if old else 1
         c.execute('''INSERT INTO resource_items VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id)
           DO UPDATE SET route=excluded.route,account_key=excluded.account_key,pool_key=excluded.pool_key,
@@ -383,10 +405,12 @@ def inventory(c, now, sources):
     for stored in c.execute('SELECT * FROM resource_items ORDER BY route,origin,id'):
         row = dict(stored); data = json.loads(row.pop('data')); row.update(data)
         owner = owners.get(row['route'])
-        active = (row['account_key'] == owner['account_key'] and row.get('epoch') == owner['epoch']) if owner else row['account_key'] is None
+        independent = row['origin'] == 'manual' and row.get('account_scope') == 'independent'
+        active = independent or ((row['account_key'] == owner['account_key'] and row.get('epoch') == owner['epoch']) if owner else row['account_key'] is None)
+        row.pop('creation_fingerprint',None)
         row['active_account'] = active
         row['identity_verified'] = row['account_key'] is not None
-        row['ttl'] = MANUAL_TTL if row['origin'] == 'manual' else AUTO_TTL
+        row['ttl'] = MANUAL_TTL if row['origin'] == 'manual' else 600 if row.get('source') in ('codex','claude-oauth') else AUTO_TTL
         row['status'] = 'manual' if row['origin'] == 'manual' else 'fresh'
         observed = row.get('value_checked') or row['checked']
         source = sources.get(row.get('source'), {})
@@ -408,7 +432,7 @@ def inventory(c, now, sources):
         # can establish credit burn. Balance deltas cannot distinguish purchases.
         if row['status'] == 'fresh' and row.get('period_reset') and row['period_reset'] > now:
             history = [dict(p) for p in c.execute('SELECT * FROM resource_history WHERE id=? AND checked>=? AND checked<=? ORDER BY checked',
-                                                  (row['id'], now-3600, now))]
+                                                  (row['id'], max(now-3600,(owner or {}).get('since',0)), now))]
             if len(history) >= 3 and history[-1]['checked'] - history[0]['checked'] >= 900:
                 valid = all(p['spent'] is not None and p['period_reset'] == row['period_reset'] for p in history)
                 valid &= all(0 < b['checked']-a['checked'] <= 600 and b['spent'] >= a['spent'] for a, b in zip(history, history[1:]))
@@ -421,4 +445,8 @@ def inventory(c, now, sources):
         row['duplicate_of'] = target['id'] if target and target['active_account'] and row['active_account'] else None
         row['effective'] = not row['duplicate_of'] or target['status'] != 'fresh'
         row['conflicts_with_auto'] = bool(target and row['duplicate_of'] and (row.get('amount'), row.get('unit')) != (target.get('amount'), target.get('unit')))
+        if row['kind']=='usage_credit' and not row.get('allowance') and row.get('scope')=='subscription':
+            allowance=next((r for r in result if r.get('allowance') and r['route']==row['route'] and r['account_key']==row['account_key'] and r['active_account'] and r['status']=='fresh' and r['unit']==row['unit']),None)
+            if allowance:
+                row['usage_conditions']={k:allowance.get(k) for k in ('enabled','spend_remaining','spend_unlimited','checked','ttl')}
     return dict(items=result, accounts=[dict(route=r, verified=bool(a['account_key']), epoch=a['epoch']) for r, a in owners.items()])

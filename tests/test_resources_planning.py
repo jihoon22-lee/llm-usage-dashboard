@@ -105,6 +105,13 @@ class ResourcesPlanningTests(unittest.TestCase):
         row = next(r for r in self.store.limits(self.now)['limits'] if r['bucket'] == 'codex · 300분')
         self.assertEqual(row['remaining'], 10)
 
+    def test_plan_change_starts_a_new_observation_epoch(self):
+        with self.store.connect() as c:
+            first=observe_account(c,'codex','A',self.now-300,plan_revision='plus')
+            second=observe_account(c,'codex','A',self.now,plan_revision='pro')
+            self.assertEqual(first['account_key'],second['account_key'])
+            self.assertNotEqual(first['epoch'],second['epoch'])
+
     def test_old_observation_cannot_change_account_or_current_value(self):
         self.codex(self.now, 10, owner='B')
         self.codex(self.now-60, 90, owner='A')
@@ -123,6 +130,22 @@ class ResourcesPlanningTests(unittest.TestCase):
         data = self.paced()
         next(r for r in data['limits'] if r['bucket'] == 'codex · 10080분')['status'] = 'stale'
         self.assertEqual(decide(data, 'codex')['state'], 'unknown')
+
+    def test_partial_response_does_not_leave_missing_window_fresh(self):
+        self.paced()
+        with self.store.connect() as c:
+            codex_limits(self.store,c,{'accountId':'A','rateLimits':{'primary':dict(usedPercent=20,windowDurationMins=300,resetsAt=self.now+14400)}},self.now+1)
+        data=self.store.limits(self.now+1)
+        weekly=next(r for r in data['limits'] if r['bucket']=='codex · 10080분')
+        self.assertEqual(weekly['status'],'unavailable')
+        self.assertEqual(weekly['remaining'],12)
+        self.assertEqual(decide(data,'codex')['state'],'unknown')
+
+    def test_credit_only_response_is_a_successful_resource_read(self):
+        with self.store.connect() as c:
+            count=codex_limits(self.store,c,{'accountId':'A','rateLimits':{'credits':{'balance':'10','hasCredits':True}}},self.now)
+            self.store.source(c,'codex','ok' if count else 'unavailable',checked=self.now)
+        self.assertEqual(self.item('workspace-credits')['status'],'fresh')
 
     def test_expired_snapshot_cannot_recommend_even_if_status_says_fresh(self):
         data = self.paced()
@@ -163,12 +186,31 @@ class ResourcesPlanningTests(unittest.TestCase):
         self.assertEqual(decide(data, 'claude-code', 'sonnet')['state'], 'room')
         self.assertEqual(decide(data, 'claude-code', 'common')['state'], 'unknown')
 
+    def test_explicitly_absent_optional_model_window_is_not_a_permanent_block(self):
+        for minute in range(30,-1,-5):
+            with self.store.connect() as c:
+                claude_limits(self.store,c,{'five_hour':dict(utilization=20-minute/30,resets_at=self.now+14400),
+                    'seven_day':dict(utilization=20-minute/30,resets_at=self.now+86400),
+                    'seven_day_opus':dict(utilization=100,resets_at=self.now+86400) if minute else None},self.now-minute*60)
+        data=self.store.limits(self.now)
+        self.assertEqual(decide(data,'claude-code','opus')['state'],'room')
+        old=next(r for r in data['limits'] if r['bucket']=='seven_day_opus')
+        self.assertTrue(old['not_applicable']);self.assertEqual(old['remaining'],0)
+
     def test_codex_additional_model_quota_participates_in_decision(self):
         data = self.paced()
         row = copy.deepcopy(next(r for r in data['limits'] if r['bucket'] == 'codex · 300분'))
         row.update(bucket='special · 300분', remaining=0, scope={'role': 'model', 'group': 'special', 'label': 'Special'})
         data['limits'].append(row)
         self.assertEqual(decide(data, 'codex', 'special')['seconds'], 0)
+
+    def test_provider_block_overrides_positive_percent_without_changing_it(self):
+        data=self.paced()
+        row=next(r for r in data['limits'] if r['bucket']=='codex · 300분')
+        row['scope']['locked']=True
+        decision=decide(data,'codex')
+        self.assertEqual(decision['state'],'shortage');self.assertTrue(decision['provider_blocked'])
+        self.assertEqual(row['remaining'],40)
 
     def test_claude_money_and_balance_are_separate_and_zero_is_known(self):
         with self.store.connect() as c:
@@ -213,6 +255,18 @@ class ResourcesPlanningTests(unittest.TestCase):
             self.assertNotIn('PRIVATE', dump)
             self.assertNotIn('test-user', dump)
             self.assertNotIn('test-org', dump)
+
+    def test_missing_native_profile_recovers_without_credential_change(self):
+        folder=self.root/'.claude';folder.mkdir();credentials=folder/'.credentials.json'
+        credentials.write_text(json.dumps({'claudeAiOauth':{'accessToken':'TEST-PRIVATE','expiresAt':(self.now+3600)*1000}}))
+        cfg={'claude_auth':str(credentials)}
+        with patch('llm_usage.limits.time.time',return_value=self.now),patch('llm_usage.limits.urllib.request.build_opener') as opener:
+            poll_claude_resources(self.store,cfg);opener.assert_not_called()
+        (self.root/'.claude.json').write_text(json.dumps({'oauthAccount':{'accountUuid':'u','organizationUuid':'o'}}))
+        with patch('llm_usage.limits.time.time',return_value=self.now+61),patch('llm_usage.limits.urllib.request.build_opener') as opener:
+            opener.return_value.open.side_effect=[BytesIO(b'{"amount":0}'),BytesIO(b'{"cedar_ember":{"eligible":false,"grants":[]}}')]
+            poll_claude_resources(self.store,cfg)
+            self.assertEqual(opener.return_value.open.call_count,2)
 
     def test_credit_balance_cannot_bypass_disabled_or_spent_cap(self):
         from llm_usage.planning import fallback_resources
@@ -261,6 +315,36 @@ class ResourcesPlanningTests(unittest.TestCase):
             write_manual(self.store, {**self.manual(), 'amount': 2, 'revision': created['revision']}, created['id'])
         item = next(r for r in self.store.limits(self.now)['resources']['items'] if r['id'] == created['id'])
         self.assertEqual(item['amount'], 25)
+
+    def test_timed_out_create_can_be_retried_without_duplicate_balance(self):
+        body={**self.manual(), 'request_id': 'a'*32}
+        first=write_manual(self.store,body)
+        second=write_manual(self.store,body)
+        self.assertEqual(first['id'],second['id']); self.assertTrue(second['replayed'])
+        with self.assertRaises(Conflict):write_manual(self.store,{**body,'amount':30})
+        self.assertEqual(len(self.store.limits(self.now)['resources']['items']),1)
+
+    def test_create_replay_does_not_accept_a_later_concurrent_edit(self):
+        body={**self.manual(),'request_id':'b'*32}
+        first=write_manual(self.store,body)
+        write_manual(self.store,{**self.manual(),'amount':22,'revision':1},first['id'])
+        with self.assertRaises(Conflict):write_manual(self.store,body)
+
+    def test_bad_reset_does_not_erase_valid_credits_or_invent_reset_time(self):
+        with self.store.connect() as c:
+            codex_limits(self.store,c,{'accountId':'A','rateLimits':{'credits':{'balance':'10','hasCredits':True},
+                'primary':{'usedPercent':20,'windowDurationMins':300,'resetsAt':'not-a-time'}}},self.now)
+        row=next(r for r in self.store.limits(self.now)['limits'] if r['route']=='codex')
+        self.assertEqual(row['remaining'],80);self.assertIsNone(row['resets'])
+        self.assertTrue(row['scope']['reset_unparsed']);self.assertEqual(self.item('workspace-credits')['amount'],10)
+
+    def test_independent_api_record_survives_subscription_account_switch(self):
+        self.codex(self.now-60,owner='A')
+        record=write_manual(self.store,{**self.manual(),'kind':'api_credit','scope':'api','unit':'USD'})
+        self.codex(self.now,owner='B')
+        item=next(r for r in self.store.limits(self.now)['resources']['items'] if r['id']==record['id'])
+        self.assertEqual(item['status'],'manual')
+        self.assertTrue(item['active_account']);self.assertFalse(item['identity_verified'])
 
     def test_manual_validation_rejects_invalid_values_and_units(self):
         for change in ({'amount': float('nan')}, {'amount': True}, {'amount': -1}, {'scope': 'model'},
@@ -335,6 +419,8 @@ class ResourceApiTests(unittest.TestCase):
         self.assertEqual(data['planning']['state'], 'shortage')
         for query in ('hours=nan', 'hours=-1', 'pace=wrong', 'today_hours=40', 'week_hours=inf'):
             self.assertEqual(self.request('/api/limits?'+query).status_code, 400)
+        changed=self.request('/api/limits?route=codex&model=removed').get_json()['planning']
+        self.assertTrue(changed['selection_changed']);self.assertEqual(changed['state'],'unknown')
 
 
 if __name__ == '__main__':

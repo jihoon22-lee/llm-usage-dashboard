@@ -19,20 +19,26 @@ from .store import stamp,KST
 OPENCODE_GO_USAGE_URL='https://opencode.ai/zen/go/v1/usage'
 
 
+class AccountMetadataMissing(RuntimeError):
+    """A missing native account profile is retryable without rotating credentials."""
+
+
 def number(value):
     return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
 
 
 def codex_limits(store,c,data,checked,source='codex'):
-    from .resources import observe_account, codex_resources, SKEW
+    from .resources import observe_account, codex_resources, SKEW, timestamp
     if not isinstance(data,dict):raise ValueError('한도 응답 형식')
     if not number(checked) or checked>time.time()+SKEW:return 0
+    resource_count=0
     if source=='codex':
         ident=data.get('accountId')
-        owner=observe_account(c,'codex',(ident,data.get('workspaceId')) if isinstance(ident,str) and ident else None,checked)
-        if owner and owner['checked']>checked:return 0
-        codex_resources(c,data,checked)
         groups_for_policy=data.get('rateLimitsByLimitId') or {'codex':data.get('rateLimits') or {}}
+        plans=sorted({str(row['planType']) for row in groups_for_policy.values() if isinstance(row,dict) and row.get('planType')})
+        owner=observe_account(c,'codex',(ident,data.get('workspaceId')) if isinstance(ident,str) and ident else None,checked,plan_revision=plans or None)
+        if owner and owner['checked']>checked:return 0
+        resource_count=codex_resources(c,data,checked)
         store.save_state(c,'quota_policy:codex',dict(checked=checked,
             ordinary_allowed=data.get('ordinaryUsageAllowed') if isinstance(data.get('ordinaryUsageAllowed'),bool) else None,
             spending_blocked=any(row.get('spendControlReached') is True for row in groups_for_policy.values() if isinstance(row,dict))))
@@ -40,24 +46,30 @@ def codex_limits(store,c,data,checked,source='codex'):
     if not groups:
         row = data.get('rateLimits',data)
         groups = {row.get('limitId',row.get('limit_id','codex')):row}
-    count=0
+    count=0;observed=[]
     for group,row in groups.items():
         if not isinstance(row,dict):continue
         for window in ('primary','secondary'):
             w=row.get(window)
             if not isinstance(w,dict): continue
             used=w.get('usedPercent',w.get('used_percent'))
-            if not number(used):continue
+            if not number(used) or used<0:continue
             minutes=w.get('windowDurationMins',w.get('window_minutes'))
+            if not number(minutes) or not 0<minutes<=1000000 or int(minutes)!=minutes:minutes=None
+            raw_reset=w.get('resetsAt',w.get('resets_at'))
+            reset=timestamp(raw_reset)
             label=f'{group} · {minutes}분' if minutes else f'{group} · {window}'
             title=row.get('limitName',row.get('limit_name')) or ('Codex 공통' if group=='codex' else group)
-            duration={300:'5시간',10080:'주간'}.get(minutes,f'{minutes}분' if minutes else window)
-            if store.limit(c,'codex',label,max(0,100-used),w.get('resetsAt',w.get('resets_at')),checked,source,
+            duration={300:'5시간',10080:'주간'}.get(minutes,f'{minutes}분' if minutes else '기본 창' if window=='primary' else '추가 창')
+            if store.limit(c,'codex',label,max(0,100-used),reset,checked,source,
                            dict(role='common' if group=='codex' else 'model',group='common' if group=='codex' else str(group)[:100],
-                                label='공통 한도' if group=='codex' else str(title)[:100])):
+                                label='공통 한도' if group=='codex' else str(title)[:100],locked=bool(row.get('rateLimitReachedType')),
+                                reset_unparsed=raw_reset is not None and reset is None)):
                 store.save_state(c,'label:codex:'+label,str(title)[:100]+' · '+duration)
                 count+=1
-    return count
+                observed.append(label)
+    if source=='codex':store.save_state(c,'quota_snapshot:codex',dict(checked=checked,source=source,buckets=observed))
+    return count+resource_count
 
 
 def status_limits(store,c,route,data,checked):
@@ -99,22 +111,30 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def claude_limits(store,c,data,checked):
     """Internal account usage response; utilization is already a percentage."""
-    count=0
-    for bucket in ('five_hour','seven_day','seven_day_opus','seven_day_sonnet','seven_day_oauth_apps','seven_day_cowork','seven_day_omelette','seven_day_overage_included'):
+    from .resources import SKEW,timestamp
+    if not number(checked) or checked>time.time()+SKEW:return 0
+    count=0;observed=[]
+    optional=('seven_day_opus','seven_day_sonnet','seven_day_oauth_apps','seven_day_cowork','seven_day_omelette','seven_day_overage_included')
+    for bucket in ('five_hour','seven_day',*optional):
         row=data.get(bucket)
         if not isinstance(row,dict) or not number(row.get('utilization')):continue
         used=row['utilization']
         if not 0<=used<=100:continue
-        reset=stamp(row.get('resets_at'))
-        if reset is not None and (not number(reset) or reset<=0):continue
+        reset=timestamp(row.get('resets_at'))
         role='common' if bucket in ('five_hour','seven_day') else 'model' if bucket in ('seven_day_opus','seven_day_sonnet') else 'unknown'
         group='common' if role=='common' else bucket.removeprefix('seven_day_') if role=='model' else bucket
+        label={'seven_day_oauth_apps':'앱 주간','seven_day_cowork':'Cowork 주간','seven_day_omelette':'추가 주간 한도',
+               'seven_day_overage_included':'추가 포함량 주간'}.get(bucket,'공통 한도' if role=='common' else group.title())
         store.limit(c,'claude-code',bucket,100-used,reset,checked,'claude-oauth',
-                    dict(role=role,group=group,label='공통 한도' if role=='common' else group.title(),locked=bool(row.get('locked_reason'))))
+                    dict(role=role,group=group,label=label,locked=bool(row.get('locked_reason')),
+                         reset_unparsed=row.get('resets_at') is not None and reset is None))
+        if role=='unknown':store.save_state(c,'label:claude-code:'+bucket,label)
         count+=1
+        observed.append(bucket)
     from .resources import claude_spend
-    claude_spend(c,data,checked)
-    return count
+    store.save_state(c,'quota_snapshot:claude-code',dict(checked=checked,source='claude-oauth',buckets=observed,
+                                                       absent=[b for b in optional if b in data and data[b] is None]))
+    return count+claude_spend(c,data,checked)
 
 
 DEVIN_CLI_VERSION = '3000.10.27'
@@ -195,6 +215,7 @@ def account_poll(store,path,state_key,source,auth_hint,read,record,interval=300)
             delay=max(delay,retry_delay(exc.headers.get('Retry-After'),checked))
             exc.close()
         if blocked:detail=auth_hint
+        elif isinstance(exc,AccountMetadataMissing):detail='기본 로그인 계정·조직 정보 확인 필요 · 기본 도구에서 계정 정보를 갱신하세요.'
         elif code==429:
             try:waiting=datetime.fromtimestamp(checked+delay,KST).strftime('%m/%d %H:%M KST')+' 이후 재시도'
             except (ValueError,OverflowError,OSError):waiting='제공사 지정 대기 시간 적용'
@@ -241,6 +262,7 @@ def poll_claude(store,settings):
     def read():
         metadata.update(claude_account(path,settings))
         auth=json.loads(path.read_text()).get('claudeAiOauth',{})
+        metadata['plan_revision']=[auth.get('subscriptionType'),auth.get('rateLimitTier')] if auth.get('subscriptionType') or auth.get('rateLimitTier') else None
         if not auth.get('accessToken') or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
             raise PermissionError('native authentication required')
         request=urllib.request.Request('https://api.anthropic.com/api/oauth/usage',headers={
@@ -249,7 +271,7 @@ def poll_claude(store,settings):
         with urllib.request.build_opener(NoRedirect).open(request,timeout=20) as response:return json.load(response)
     def record(c,data,checked):
         from .resources import observe_account
-        observe_account(c,'claude-code',metadata.get('identity'),checked,path.stat().st_mtime_ns)
+        observe_account(c,'claude-code',metadata.get('identity'),checked,path.stat().st_mtime_ns,metadata.get('plan_revision'))
         return claude_limits(store,c,data,checked),'계정 사용량 조회 · 내부 OAuth 경로'
     account_poll(store,path,'claude_oauth_poll','claude-oauth','Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.',read,record)
 
@@ -281,7 +303,7 @@ def poll_claude_resources(store,settings):
             if not auth.get('accessToken') or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
                 raise PermissionError('native authentication required')
             metadata.update(claude_account(path,settings))
-            if not metadata.get('identity'):raise PermissionError('native account identity required')
+            if not metadata.get('identity'):raise AccountMetadataMissing('native account identity required')
             endpoint=('https://api.anthropic.com/api/oauth/organizations/'+metadata['organization']+'/prepaid/credits' if kind=='credits'
                       else 'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1')
             request=urllib.request.Request(endpoint,headers={'Authorization':'Bearer '+auth['accessToken'],

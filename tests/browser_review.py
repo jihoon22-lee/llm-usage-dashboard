@@ -41,6 +41,7 @@ def fixture(folder):
         # Codex weekly: 3 hours of steady use so a forecast exists; Claude 5h: plenty left.
         for k in range(37):
             store.limit(c,'codex','codex · 10080분',70-k*0.5,now+3*86400,now-3*3600+k*300,'codex')
+            store.limit(c,'codex','codex · 300분',75-k*1.5,now+4*3600,now-3*3600+k*300,'codex')
         store.limit(c,'claude-code','five_hour',90,now+2*3600,now-60,'claude-oauth')
         store.limit(c,'claude-code','seven_day',60,now+20*3600,now-60,'claude-oauth')
         for name in ('codex','claude-oauth'):store.source(c,name,'ok','',now-60)
@@ -82,13 +83,11 @@ async def main():
             await page.goto(ORIGIN+'/')
             await expect(page.locator('#updated')).to_contain_text('마지막 갱신')
 
-            # Risk strip, recommendation order and the reset axis.
-            await expect(page.locator('#quota-strip')).to_contain_text('가장 위험한 한도')
-            await expect(page.locator('#quota-strip > div').first).to_contain_text('초기화 전 소진 예상')
-            # Claude's weekly window resets within a day with room left; Codex is on course to run out.
-            picks=page.locator('#quota-strip > div').nth(1)
-            await expect(picks).to_contain_text('주간 60.0% 남음')
-            assert 'Codex' not in await picks.inner_text()
+            # A job decision replaces cross-provider percentage rankings. Claude
+            # has no observed pace here, so it must not become a confident pick.
+            await expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+            await expect(page.locator('#quota-strip')).to_be_hidden()
+            assert await page.locator('.decision-alternatives button').count()==0
             dots=await page.locator('.reset-dot').evaluate_all('ds=>ds.map(d=>parseFloat(d.style.left))')
             assert len(dots)>=2 and all(0<x<=100 for x in dots),dots
             # The pace mark sits at the even-pace position, not at the bar's left edge.

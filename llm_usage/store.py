@@ -383,7 +383,7 @@ class Store:
                   (route, bucket, remaining, resets, checked, source,received+SKEW)).rowcount>0
             if changed:
                 meta=dict(metadata or {})
-                if owner and canonical and source!=canonical:meta['identity_unverified']=True
+                if (owner and not owner['account_key']) or (canonical and source!=canonical):meta['identity_unverified']=True
                 quota_context(c,route,bucket,checked,meta)
         # Local replay must not manufacture a historical stream at migration time.
         # Keep only observations made within the retention window.
@@ -407,6 +407,7 @@ class Store:
             accounts={r['route']:dict(r) for r in c.execute('SELECT * FROM resource_accounts')}
             contexts={(r['route'],r['bucket']):dict(r) for r in c.execute('SELECT * FROM quota_context')}
             policies={route:self.state(c,'quota_policy:'+route,{}) for route in SUPPORTED_ROUTES}
+            snapshots={route:self.state(c,'quota_snapshot:'+route,{}) for route in SUPPORTED_ROUTES}
             resources=inventory(c,now,sources)
             history=quota_history(c,now,selected_sources={(r['route'],r['bucket']):r['source'] for r in rows},
                                   since_by_route={route:a['since'] for route,a in accounts.items()})
@@ -423,11 +424,15 @@ class Store:
             row.update(account_epoch=owner['epoch'] if owner else None,identity_verified=bool(owner and owner['account_key']),
                        previous_account=previous_account,scope=metadata)
             src = sources.get(row['source'], {})
+            snapshot=snapshots.get(row['route'],{})
+            omitted=bool(snapshot.get('source')==row['source'] and snapshot.get('checked',0)>=(checked or 0) and row['bucket'] not in snapshot.get('buckets',[]))
+            row['omitted_latest']=omitted
+            row['not_applicable']=omitted and row['bucket'] in snapshot.get('absent',[])
             account=sources.get('claude-oauth',{}) if row['route']=='claude-code' else {}
             if account.get('checked',0)>=(row['checked'] or 0) and account.get('status') in ('error','unavailable'):
                 src=account
             stale = bool(previous_account or (checked and (checked>now+SKEW or now-checked > self.thresholds['stale_seconds'] or (resets and resets <= now) or src.get('status')=='unavailable')))
-            row.update(status='error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
+            row.update(status='error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if omitted or row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
                        stale=stale, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
                        seconds_to_reset=max(0,int(resets-now)) if resets else None,
                        detail=src.get('detail',''),last_attempt=src.get('checked'))
@@ -461,7 +466,11 @@ class Store:
             agy=re.fullmatch(r'(gemini|3p)-(5h|weekly)',row['bucket']) if row['route']=='antigravity' else None
             other=agy and by_key.get(('antigravity',f"{agy[1]}-{'weekly' if agy[2]=='5h' else '5h'}"))
             row['note']=(f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
-                         if other and row['status']!='fresh' and other['status']=='fresh' and other['source']=='antigravity-app' else None)
+                         if other and row['status']!='fresh' and other['status']=='fresh' and other['source']=='antigravity-app' else
+                         '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.' if row.get('omitted_latest') else
+                         '계정·구독 조건 변경 전 관측입니다.' if row.get('previous_account') else
+                         '로컬 관측의 계정을 확인하지 못했습니다. 계정 조회 후 작업 전망을 제공합니다.' if row['scope'].get('identity_unverified') else
+                         '원본 초기화 시각을 해석하지 못했습니다. 시간 전망을 보류합니다.' if row['scope'].get('reset_unparsed') else None)
         sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)+',COUNT(*) AS requests'
         with self.connect() as c:
             for row in rows:
@@ -474,9 +483,10 @@ class Store:
                                    tokens=token_total(dict(r)))
             from .signals import capacity,quota_events
             for row in rows:
-                row['events']=quota_events(c,row['route'],row['bucket'],row['history_source'] or row['source'],now) if row['checked'] else None
+                row['events']=quota_events(c,row['route'],row['bucket'],row['history_source'] or row['source'],now,
+                                          since=accounts.get(row['route'],{}).get('since',0)) if row['checked'] else None
                 row['capacity']=capacity(row)
-                row['capacity_history']=self.capacity_history(c,row,now)
+                row['capacity_history']=[] if row['route'] in accounts else self.capacity_history(c,row,now)
         from .planning import enrich
         enrich(rows,now)
         return dict(limits=rows, sources=list(sources.values()), now=now,history_days=1,
@@ -957,7 +967,8 @@ class Store:
         for source in sources:
             # Ops pseudo-rows carry daily cadences; they compute staleness themselves.
             if source['name'] in ops_rows:continue
-            if source['status']=='ok' and now.timestamp()-source['checked']>self.thresholds['stale_seconds']:
+            source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
+            if source['status']=='ok' and now.timestamp()-source['checked']>source_stale:
                 source['status']='stale'
         # A status line reports only while a terminal UI runs it (not the desktop apps
         # or headless workers). After a day without a receipt it is shown as unused,

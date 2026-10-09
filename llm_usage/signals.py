@@ -12,11 +12,11 @@ SPIKE_FLOOR=5_000_000
 SPIKE_TOKENS='uncached_input+cached_input+output+cache_creation'
 
 
-def quota_events(c,route,bucket,source,now,days=EVENT_DAYS):
+def quota_events(c,route,bucket,source,now,days=EVENT_DAYS,since=0):
     """Exhaustion (remaining reaching 0 from above) and recovery (a new reset with
     more remaining) observed in one source's history of a bucket."""
     rows=c.execute('SELECT checked,remaining,resets FROM limit_history WHERE route=? AND bucket=? AND source=? '
-                   'AND checked>=? ORDER BY checked',(route,bucket,source,now-days*86400)).fetchall()
+                   'AND checked>=? ORDER BY checked',(route,bucket,source,max(now-days*86400,since))).fetchall()
     events=[];previous=None
     for checked,remaining,resets in rows:
         if remaining is None:continue

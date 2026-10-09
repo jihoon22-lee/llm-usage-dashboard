@@ -136,7 +136,7 @@ def create_app(config=None):
         options=choices(data)
         if options:
             try:
-                route=request.args.get('route',options[0]['route'])
+                route=request.args.get('route','codex' if any(o['route']=='codex' for o in options) else options[0]['route'])
                 model=request.args.get('model','common')
                 selected=next((o for o in options if o['route']==route and o['model']==model),None)
                 selected=selected or next((o for o in options if o['route']==route),options[0])
@@ -147,6 +147,10 @@ def create_app(config=None):
                 data['planning']['today']=decide(data,selected['route'],selected['model'],today_hours,pace)
                 data['planning']['week']=decide(data,selected['route'],selected['model'],week_hours,pace)
                 data['planning']['selection_changed']=(route,model)!=(selected['route'],selected['model'])
+                if data['planning']['selection_changed']:
+                    for result in (data['planning'],data['planning']['today'],data['planning']['week']):
+                        result.update(state='unknown',seconds=None,bottleneck=None,alternatives=[],resources=[],
+                                      reason='이전 선택의 최신 정보를 확인하지 못했습니다. 모델·한도 묶음을 선택하고 다시 확인하세요.')
             except (ValueError,TypeError,OverflowError):abort(400,description='작업 시간·속도 기준을 확인하세요.')
         return jsonify(data)
 

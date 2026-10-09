@@ -20,7 +20,7 @@ version = project['version']
 wheel, = dist.glob('*.whl')
 sdist, = dist.glob('*.tar.gz')
 asset_names = {'analysis.js','app.js','charts.js','core.js','format.js','icon-192.png','icon-512.png',
-               'icon.svg','index.html','insights.js','manifest.json','quota.js','settings.js','style.css','sw.js','theme.js'}
+               'icon.svg','index.html','insights.js','manifest.json','planning.js','resources.js','quota.js','settings.js','style.css','sw.js','theme.js'}
 assert {p.name for p in (root / 'llm_usage/web').iterdir() if p.is_file()} == asset_names
 assets = {'llm_usage/web/' + name:sha256(root / 'llm_usage/web' / name) for name in sorted(asset_names)}
 package_files = {p.relative_to(root).as_posix() for p in (root / 'llm_usage').glob('*.py')} | set(assets)
