@@ -23,6 +23,8 @@ Node24를 사용합니다. Linux 브라우저 라이브러리가 없으면 playw
 한 작업의 계획·실제 결과·제약은 workthrough의 날짜별 문서 하나에 기록하고 개인 주소·경로·로그는 넣지 않습니다.
 태그는 공개 main에 포함되고 패키지 버전과 같아야 합니다. 검증한 동일 산출물을 게시하고 게시 job은 재빌드하지 않습니다.
 공개 태그·파일은 덮어쓰지 않습니다. wheel은 런타임이고 시스템 서비스 설치에는 Git checkout이 필요합니다.
+버전은 pyproject.toml과 uv.lock의 프로젝트 항목을 함께 갱신하고 CHANGELOG·설치/업데이트 안내를 맞춥니다. 버전 PR이 병합되고 필수 CI가 성공한 main 커밋에 일치하는 `vX.Y.Z` 태그를 만듭니다.
+태그 push는 Release 워크플로를 실행합니다. 태그/버전/main 포함 검사와 전체 검사를 통과한 wheel·소스 배포본·release-manifest.json·SHA256SUMS를 같은 artifact ID에서 가져와 초안에 업로드하고, 다시 다운로드해 검증한 뒤 게시합니다. 로컬 재빌드 파일로 교체하지 않습니다. 게시 후 내려받은 파일도 manifest·SHA256SUMS와 대조하고 릴리스 노트에 변경 사항·업데이트 주의사항·CI 출처를 남깁니다.
 운영 자동 배포·PyPI는 별도 범위입니다. 실제 수신과 fixture 성공을 구분해 기록합니다.
 
 의존성은 pyproject.toml과 uv.lock으로 관리하며 uv 0.12.23을 사용합니다. `uv lock --upgrade-package NAME`으로 의도한 패키지만 갱신하고 lock diff를 검토합니다. `uv sync --locked`는 lock 일치 여부를 검사하며 불필요한 패키지를 제거하므로 운영 환경에서 실행하지 않습니다. 최소 버전 검사에서 별도 override를 적용한 뒤에는 `uv run --no-sync`로 자동 동기화를 막습니다. wheel 호환 검사만 독립된 표준 pip 설치를 유지합니다.
