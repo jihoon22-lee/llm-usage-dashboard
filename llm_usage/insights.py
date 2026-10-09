@@ -58,7 +58,7 @@ def usage_insights(c,a,b,now,period,first,totals,rows,buckets,scope_sql='',scope
     return dict(quality=quality,cache=cache,comparison=comparison)
 
 
-def quota_history(c,now,window=86400):
+def quota_history(c,now,window=86400,selected_sources=None,since_by_route=None):
     # At most one original observation per five-minute/source/reset group.
     # SQLite's single MAX selects the other columns from that original row.
     # The UI draws 24 hours; trends (1h), decreases (12h) and pace fit inside it.
@@ -72,12 +72,14 @@ def quota_history(c,now,window=86400):
     for row in rows:streams.setdefault((row['route'],row['bucket']),[]).append(dict(row))
     result={}
     for key,observations in streams.items():
+        observations=[p for p in observations if p['checked']>=(since_by_route or {}).get(key[0],0)]
+        if not observations:continue
         # Account polling and local notifications are separate observation streams.
         # Prefer recent account polling, without alternating between their samples.
         latest=observations[-1]['checked']
         account_source='claude-oauth' if key[0]=='claude-code' else key[0]
         preferred=[p for p in observations if p['source']==account_source and latest-p['checked']<=600]
-        source=preferred[-1]['source'] if preferred else observations[-1]['source']
+        source=(selected_sources or {}).get(key) or (preferred[-1]['source'] if preferred else observations[-1]['source'])
         points=[];epoch_reset=None
         for point in (p for p in observations if p['source']==source):
             point['break_before']=True;point['break_reason']='start'

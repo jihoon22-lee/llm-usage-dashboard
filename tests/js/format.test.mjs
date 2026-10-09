@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -34,6 +34,33 @@ test('reset countdown and relative time',()=>{
   assert.equal(f.ago(now-10),'방금');
   assert.equal(f.ago(now-125),'2분 전');
   assert.equal(f.ago(now-7300),'2시간 전');
+});
+
+test('cached quota, reset countdown and recommendations age together without mutating observations',()=>{
+ const now=10000;
+ const data={now,stale_seconds:600,limits:[{route:'codex',bucket:'weekly',status:'fresh',checked:now,remaining:80,resets:now+1800,
+  seconds_to_reset:1800,forecast:{within_window:true},paces:{recent:{per_hour:2}}}],
+  planning:{route:'codex',applies:['weekly'],state:'room',valid_until:now+600,resources:[{id:'credit'}],alternatives:[{route:'claude-code',valid_until:now+100}]}};
+ const view=f.currentLimits(data,now+7200,true);
+ assert.equal(view.limits[0].status,'stale');assert.equal(view.limits[0].remaining,80);
+ assert.equal(view.limits[0].seconds_to_reset,0);assert.equal(view.limits[0].forecast,null);
+ assert.equal(view.planning.state,'unknown');assert.equal(view.planning.alternatives.length,0);
+ assert.equal(data.limits[0].status,'fresh');assert.equal(data.limits[0].seconds_to_reset,1800);
+ assert.equal(f.currentLimits(data,now+150).planning.alternatives.length,0);
+ assert.equal(f.currentLimits(data,now+700).planning.state,'unknown');
+});
+
+test('resource expiry and spending-condition age do not imply remaining funds or an active cap',()=>{
+ const data={limits:[],resources:{items:[{id:'x',status:'fresh',checked:1000,ttl:1800,amount:50,expires:1100,
+  expiry_is_partial:true,usage_conditions:{checked:100,ttl:600,enabled:true}}]}};
+ const view=f.currentLimits(data,1200);
+ assert.equal(view.resources.items[0].status,'stale');assert.equal(view.resources.items[0].amount,50);
+ assert.equal(view.resources.items[0].usage_conditions,null);
+});
+
+test('conditional duration rounds away floating point noise instead of losing a minute',()=>{
+ assert.equal(f.duration(5399.999999999),'1시간 30분');
+ assert.equal(f.duration(null),'추정 보류');assert.equal(f.duration(0),'현재 소진');
 });
 
 test('the model total is the same total the cards and charts use',()=>{

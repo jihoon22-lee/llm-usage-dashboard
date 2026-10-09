@@ -83,7 +83,7 @@ async function api(path,body,retried,requestOptions={}){
  if(body&&!csrf)csrf=(await api('/api/bootstrap',undefined,undefined,{...requestOptions,deadline})).csrf;
  const controller=new AbortController();
  const options={headers:{Accept:'application/json'},signal:controller.signal};
- if(body){options.method='POST';options.headers['Content-Type']='application/json';options.headers['X-CSRF-Token']=csrf;options.body=JSON.stringify(body);}
+ if(body){options.method=requestOptions.method||'POST';options.headers['Content-Type']='application/json';options.headers['X-CSRF-Token']=csrf;options.body=JSON.stringify(body);}
  let timer,abortListener;
  const forwardAbort=()=>controller.abort(external.reason);
  external?.addEventListener('abort',forwardAbort,{once:true});
@@ -121,7 +121,7 @@ async function api(path,body,retried,requestOptions={}){
   csrf='';csrf=(await api('/api/bootstrap',undefined,undefined,{...requestOptions,deadline})).csrf;
   return api(path,body,true,{...requestOptions,deadline});
  }
- if(!r.ok)throw Error((d&&d.error)||`서버 응답 오류 (HTTP ${r.status})`);
+ if(!r.ok){const error=Error((d&&d.error)||`서버 응답 오류 (HTTP ${r.status})`);error.status=r.status;throw error;}
  if(requestOptions.source)requestOptions.source.saved=0;
  return d;
 }

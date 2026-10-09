@@ -84,6 +84,13 @@ function renderLimits(data){
   const blockedNote=blocked?`<br><span class="quota-blocked-note">주간 한도 소진 · 주간 초기화(${blocked.resets?when(blocked.resets)+' KST · '+left(blocked.seconds_to_reset):'미제공'}) 후 사용 가능</span>`:'';
   const mark=plan?`<span class="pace-mark" data-x="${Math.max(0,Math.min(100,plan.expected_remaining)).toFixed(1)}" title="고른 속도로 썼다면 지금 남아 있을 잔여 ${plan.expected_remaining.toFixed(1)}%"></span>`:'';
   const key=r.route+':'+r.bucket+':detail';
+  const recent=r.paces?.recent,base=r.paces?.baseline;
+  const speed=recent?.per_hour;
+  const usablePace=r.status==='fresh'&&!blocked&&!r.scope?.identity_unverified;
+  const seconds=usablePace&&speed>0&&r.remaining!=null?r.remaining/speed*3600:null;
+  const paceText=!usablePace?'속도 판단 보류 · 현재 한도 확인 필요':speed==null?'속도 관측 중 · 연속 15분 이상 필요':speed===0?'최근 30분 감소 관측 없음':`최근 ${Math.round(recent.observed_minutes)}분 · ${speed.toFixed(1)}%p/시간 소모`;
+  const horizon=seconds==null?'':r.resets&&seconds<r.resets-data.now?`같은 속도 유지 시 약 ${duration(seconds)}`:'초기화 전 소진 징후 없음';
+  const speedChange=r.pace_change&&base?.per_hour!=null?`<small class="pace-change">3시간 비교 ${base.per_hour.toFixed(1)}%p/시간보다 ${r.pace_change==='faster'?'빠르게 사용 중':'느리게 사용 중'}</small>`:'';
   // Derive the plain summary from numeric data; never strip tags from markup.
   const preview=plan?`계획 대비 ${planAhead} · ${planElapsed}`:(r.trends||[]).filter(t=>t.available).map(t=>`${t.window_minutes===60?'1시간':'30분'} −${t.decrease_pp.toFixed(1)}%p`).at(-1)||'';
   return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges"><span class="badge ${esc(r.status)}">${esc(statuses[r.status])}</span>${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
@@ -91,6 +98,7 @@ function renderLimits(data){
    +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress>${mark}</div>`)
    +`<p class="bucket-reset">${r.resets?'초기화 '+esc(left(r.seconds_to_reset)):'초기화 정보 미제공'}${blockedNote}</p></div>`
    +(r.note&&!folded?`<p class="quota-note">${esc(r.note)}</p>`:'')
+   +`<div class="bucket-pace"><span>${esc(paceText)}</span>${horizon?`<strong>${esc(horizon)}</strong>`:''}${speedChange}</div>`
    +`<details class="bucket-detail" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>상세${preview?` <small>${esc(preview)}</small>`:''}</summary>`
    +`<p>${r.resets?'초기화 '+esc(when(r.resets))+' KST':''}${shared?'':(r.resets?'<br>':'')+'마지막 확인 '+when(r.checked)+(r.detail?'<br>'+esc(r.detail):'')}</p>`
    +`${planText?`<p class="plan">${planText}</p>`:''}${capacity}${capacityHistory}${events}${forecast}${win}${quotaHistory(r,opened,data.now)}</details></div>`;
@@ -108,6 +116,7 @@ function renderLimits(data){
   &&(g.rows.some(r=>r.status==='ended')
    ||(Math.max(0,...g.rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...g.rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
  const active=groups.filter(g=>!dormant(g)),folded=groups.filter(dormant);
+ $('limits').classList.toggle('two-services',active.length===2);
  $('quota-overview').classList.toggle('editing',editingQuota);
  $('quota-overview').innerHTML='<div class="overview-caption"><span>서비스</span><span>'+(editingQuota?'화살표로 순서 조정':'현재 잔여 · 선택하면 상세')+'</span></div>'+active.map(({route,rows})=>{
   // A route with a current value is current; older buckets beside it are noted, not
@@ -121,11 +130,8 @@ function renderLimits(data){
  }).join('');
  // The window most likely to stop work (blocked, forecast to deplete, then lowest expected
  // at reset) and the order in which services are worth using now, from current values only.
- const urgent=mostUrgent(active.flatMap(g=>g.rows));
- const picks=recommendations(active).slice(0,3);
- $('quota-strip').hidden=!urgent&&!picks.length;
- $('quota-strip').innerHTML=(urgent?`<div><span>가장 위험한 한도 <small>소진 예측 · 초기화 시점 예상 잔여 기준</small></span><strong>${esc(urgencyText(urgent))}</strong></div>`:'')
-  +(picks.length?`<div><span>지금 쓰기 좋은 순서 <small>곧 초기화될 여유 우선 · 그다음 잔여</small></span><strong>${picks.map(x=>`${esc(shortService[x.route]||x.route)} ${percent(x.value)}${x.note?`<small class="pick-note">${esc(x.note)} · 먼저 쓰면 손해 없음</small>`:''}`).join('<br>')}</strong></div>`:'');
+ // The work decision above uses the selected model and complete constraints.
+ $('quota-strip').hidden=true;$('quota-strip').replaceChildren();
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
  // a window blocked by its exhausted parent is left out because its reset frees nothing.
  const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by);
@@ -239,6 +245,7 @@ let alertsExpanded=false;
 function renderAlerts(limits,usage){
  const items=[];
  (limits.limits||[]).forEach(r=>{
+  if(limits.planning&&(r.route!==limits.planning.route||!limits.planning.applies?.includes(r.bucket)))return;
   const label=quotaLabel(r);
   if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15))items.push({text:`${label} 잔여 ${percent(r.remaining)}`,route:r.route});
   else if(r.forecast&&r.forecast.within_window&&!r.blocked_by)items.push({text:`${label} 초기화 전 소진 예상`,route:r.route});
@@ -327,15 +334,16 @@ function checkNotify(limits){
  const lowPct=limits.low_percent??15;
  (limits.limits||[]).forEach(r=>{
   const key=r.route+':'+r.bucket,label=quotaLabel(r),before=prev.get(key);
-  const fresh=r.status==='fresh'&&r.remaining!=null;
+  if(!before||before.account_epoch!==r.account_epoch)return;
+  const fresh=r.status==='fresh'&&r.remaining!=null&&!r.scope?.identity_unverified;
   // One notification per kind and reset anchor; a toggling forecast or the
   // reset boundary itself must not page the owner twice for the same window.
-  const once=kind=>{const k=`${key}-${kind}-${Math.round((r.resets||0)/60)}`;
+  const once=kind=>{const k=`${key}-${r.account_epoch||'legacy'}-${kind}-${Math.round((r.resets||0)/60)}`;
    if(notifySent.has(k))return false;notifySent.add(k);return true;};
   const low=fresh&&r.remaining<=lowPct,wasLow=!!(before&&before.remaining!=null&&before.remaining<=lowPct);
   if(!first&&low&&!wasLow&&ntfEnabled('low')&&once('low'))void sendNotification('한도 잔여 적음',{body:`${label} 잔여 ${percent(r.remaining)}`,tag:key+'-low'});
-  if(!first&&wasLow&&!low&&fresh&&ntfEnabled('reset')&&once('reset'))void sendNotification('한도 초기화됨',{body:`${label} 잔여 ${percent(r.remaining)}로 회복`,tag:key+'-reset'});
-  const dep=!!(r.forecast&&r.forecast.within_window),wasDep=!!(before&&before.forecast&&before.forecast.within_window);
+  if(!first&&wasLow&&!low&&fresh&&r.resets&&r.resets!==before.resets&&ntfEnabled('reset')&&once('reset'))void sendNotification('한도 회복 확인',{body:`${label} 잔여 ${percent(r.remaining)}로 회복`,tag:key+'-reset'});
+  const dep=!!(fresh&&r.forecast&&r.forecast.within_window),wasDep=!!(before&&before.forecast&&before.forecast.within_window);
   if(!first&&dep&&!wasDep&&ntfEnabled('dep')&&once('dep'))void sendNotification('한도 소진 예상',{body:`${label} 현재 페이스로 초기화 전 소진 예상`,tag:key+'-dep'});
  });
 }

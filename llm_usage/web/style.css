@@ -534,3 +534,88 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
  .cfg-toggles label{min-width:0;word-break:keep-all;overflow-wrap:break-word}
  .cfg-toggles input{flex-shrink:0}
 }
+
+/* Work decisions keep the action and its evidence separate from the inventory. */
+.work-now{margin-bottom:26px}
+@media(min-width:601px){.limits.two-services{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.plan-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.plan-controls label,.resource-fields label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:var(--fs-small);min-width:0}
+.plan-controls label{flex:1 1 150px}
+.plan-controls input,.plan-controls select,.resource-fields input,.resource-fields select{width:100%;min-width:0;max-width:100%;min-height:40px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--ink);padding:8px 10px;font:inherit;font-size:var(--fs-body)}
+.plan-controls label[hidden]{display:none}
+.plan-controls button{min-height:40px}
+#plan-message:empty{display:none}
+.work-decision{border:1px solid var(--border);border-left:4px solid var(--muted);border-radius:11px;background:var(--surface);padding:18px 20px;line-height:1.65}
+.work-decision.room{border-left-color:var(--accent);background:var(--card)}
+.work-decision.shortage{border-left-color:var(--warning-ink)}
+.work-decision.reset_pending{border-left-color:var(--chart-2)}
+.decision-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-small)}
+.decision-state{font-weight:700;color:var(--ink)}
+.decision-time{display:block;font-size:25px;line-height:1.4;margin:8px 0;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.work-decision p{margin:6px 0;font-size:var(--fs-body)}
+.decision-binding{color:var(--muted)}
+.decision-alternatives{display:flex;flex-wrap:wrap;align-items:center;gap:7px;border-top:1px solid var(--line);padding-top:10px;margin-top:12px;font-size:var(--fs-small)}
+.decision-alternatives>span{color:var(--muted);margin-right:5px}
+.decision-resources{padding-top:8px;color:var(--muted)}
+.plan-evidence{margin:9px 0;color:var(--muted);font-size:var(--fs-small)}
+.plan-evidence summary,.reset-fold>summary{cursor:pointer}
+.plan-evidence ul{padding-left:20px;line-height:1.8}
+.work-followup{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:8px}
+.work-followup .mini-btn{flex-shrink:0;margin-top:4px}
+.bucket-pace{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--line);padding-top:8px;margin:9px 0;font-size:var(--fs-small);line-height:1.6;font-variant-numeric:tabular-nums}
+.bucket-pace>span{color:var(--muted)}
+.bucket-pace>strong{font-size:var(--fs-body);font-weight:600}
+.pace-change{color:var(--warning-ink)}
+.reset-fold{margin:14px 0;font-size:var(--fs-small);color:var(--muted)}
+.resource-panel{margin:28px 0}
+.resource-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:12px}
+.resource-card{min-width:0;border:1px solid var(--border);border-radius:10px;padding:16px;background:var(--surface);overflow-wrap:anywhere}
+.resource-card-heading{display:flex;justify-content:space-between;gap:8px;align-items:start;color:var(--muted);font-size:var(--fs-meta)}
+.resource-card h3{font-size:var(--fs-body);margin:10px 0 5px}
+.resource-value{display:block;font-size:23px;font-variant-numeric:tabular-nums;margin:4px 0 10px;line-height:1.4}
+.resource-scope,.resource-condition,.resource-note{font-size:var(--fs-small);line-height:1.7;margin:6px 0}
+.resource-scope{color:var(--accent)}
+.resource-condition,.resource-checked{color:var(--muted)}
+.resource-note{color:var(--warning-ink)}
+.resource-checked{display:block;font-size:var(--fs-meta);margin:10px 0 7px}
+.resource-card details{font-size:var(--fs-small);color:var(--muted);line-height:1.7}
+.resource-card summary{cursor:pointer}
+.resource-grants{padding-left:18px}
+.resource-grants li{margin:8px 0}
+.resource-inactive{margin-top:14px;border:1px dashed var(--border);border-radius:9px;padding:12px;color:var(--muted);font-size:var(--fs-small)}
+.resource-inactive[open]>summary{margin-bottom:12px}
+.resource-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.resource-actions button{min-height:36px}
+.resource-editor{margin-top:18px;padding:20px;border:1px solid var(--border);border-radius:11px;background:var(--raised)}
+.resource-editor[hidden]{display:none}
+.resource-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:800px;margin-top:14px}
+.resource-wide{grid-column:1/-1}
+#resource-message{white-space:pre-wrap}
+.work-budget{margin-bottom:18px}
+.work-budget>summary{cursor:pointer}
+.work-budget>summary h3{margin:0}
+.work-budget:not([open])>summary{margin-bottom:0}
+.work-budget-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}
+.work-budget-result{border:1px solid var(--border);border-radius:9px;padding:14px;background:var(--raised)}
+.work-budget-result>span,.work-budget-result>small{display:block;font-size:var(--fs-small);color:var(--muted);line-height:1.6}
+.work-budget-result>strong{display:block;margin:7px 0;font-size:17px}
+.work-budget-result p{font-size:var(--fs-body);line-height:1.6}
+.work-budget-result.shortage>strong{color:var(--warning-ink)}
+#work-budget-table th{text-align:left;white-space:normal}
+#work-budget-table td{white-space:normal;min-width:95px}
+@media(max-width:600px){
+ .plan-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .plan-controls label{font-size:11px}
+ .plan-controls input,.plan-controls select,.resource-fields input,.resource-fields select{font-size:14px;min-height:42px;padding:8px}
+ .work-decision{padding:14px}
+ .decision-time{font-size:22px}
+ .decision-heading small{font-size:11px}
+ .decision-alternatives>span{flex-basis:100%}
+ .work-budget-results{grid-template-columns:1fr}
+ .resource-editor{padding:13px}
+ .resource-card{padding:14px}
+ .resource-fields{gap:10px}
+ .resource-fields input[type=datetime-local]{font-size:12px;padding:6px 3px}
+ #resource-panel .section-heading{align-items:center;gap:8px;flex-wrap:wrap}
+}
+@media(max-width:360px){.resource-fields{grid-template-columns:1fr}.resource-wide{grid-column:auto}.decision-time{font-size:20px}}

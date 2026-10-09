@@ -104,14 +104,17 @@ async function refresh(manual=false){
      activeQuery=query().toString();queued=false;
      const core=query();core.set('sections','core');coreController=new AbortController();
      const sources={core:{},limits:{}};
+     const workQuery=planningQuery();
      const [usage,limits]=await Promise.all([api('/api/usage?'+core,undefined,undefined,{signal:coreController.signal,source:sources.core}),
-       api('/api/limits',undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
+       api(workQuery,undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
      if(activeQuery!==query().toString()){queued=true;continue;}
      usageKey=activeQuery;
-     renderUsage(usage);checkNotify(limits);checkOpsNotify(usage);renderLimits(limits);renderAlerts(limits,usage);lastRefresh=Date.now()/1000;
+     renderUsage(usage);if(!sources.core.saved)checkOpsNotify(usage);
+     if(workQuery===planningQuery())acceptLimits(limits,sources.limits);
+     lastRefresh=Date.now()/1000;
      // Rendering can fall back from an unavailable cost metric to tokens.
      usageKey=query().toString();activeQuery=usageKey;
-     showSource('core',sources.core);showSource('limits',sources.limits);
+     showSource('core',sources.core);if(workQuery===planningQuery())showSource('limits',sources.limits);
      if(currentView==='insights')await loadInsights();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;

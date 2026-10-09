@@ -120,6 +120,8 @@ class ProjectLabelTests(unittest.TestCase):
 
     def test_paths_outside_a_repository_keep_their_folder_name(self):
         plain=self.base/'notes';plain.mkdir()
+        # An empty marker (including a sandbox mount) is not a Git repository.
+        (self.base/'.git').mkdir()
         self.assertEqual(project_label(str(plain)),'notes')
         self.assertEqual(project_label('/does/not/exist/thing'),'thing')
         self.assertEqual(project_label('E:\\recovery'),'recovery')

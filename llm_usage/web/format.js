@@ -62,7 +62,7 @@ function availability(rows){
 }
 const levelOf=(v,low)=>v<=low?'level-low':v<=50?'level-mid':'level-ok';
 const ring=(row,low)=>row?`<svg class="ring ${levelOf(usable(row),low)}" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.9" class="ring-bg"/><circle cx="18" cy="18" r="15.9" class="ring-fg" pathLength="100" stroke-dasharray="${Math.max(0,Math.min(100,usable(row))).toFixed(1)} 100" transform="rotate(-90 18 18)"/></svg>`:'<span class="ring ring-empty" aria-hidden="true"></span>';
-const modelQuota=r=>r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex';
+const modelQuota=r=>['model','unknown'].includes(r.scope?.role)||(r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex')||(r.route==='claude-code'&&r.bucket.startsWith('seven_day_'));
 const quotaLabel=r=>{
  const agy=r.route==='antigravity'&&agyBucket(r.bucket);
  if(agy)return `Antigravity ${agy.window} ${agy.family}${agy.suffix?' '+agy.suffix:''}`;
@@ -134,3 +134,45 @@ function dayKinds(startIso,endIso,nowSec){
  for(let t=start;t<end;t+=864e5){const dow=new Date(t+9*3600e3).getUTCDay();if(dow===0||dow===6)weekend++;else weekday++;}
  return {weekday,weekend};
 }
+
+// Age the observation itself, not just the offline banner. This is a pure view
+// transform; cached provider data and reset values are never modified in place.
+function currentLimits(data,now,offline=false){
+ const ttl=data.stale_seconds??600;
+ const rows=(data.limits||[]).map(original=>{
+  const r={...original};
+  if(r.resets)r.seconds_to_reset=Math.max(0,r.resets-now);
+  const old=offline||r.checked==null||r.checked>now+120||now-r.checked>ttl||(r.resets&&r.resets<=now);
+  if(old&&r.status==='fresh')r.status='stale';
+  if(r.status!=='fresh'){
+   r.stale=true;r.forecast=null;r.capacity=null;r.plan=null;r.pace_per_hour=null;
+   r.paces={recent:{per_hour:null,reason:'최신 한도 확인 필요'},baseline:{per_hour:null,reason:'최신 한도 확인 필요'}};
+   r.blocked_by=null;
+  }
+  return r;
+ });
+ for(const r of rows)if(r.blocked_by){
+  const parent=rows.find(p=>p.route===r.route&&p.bucket===r.blocked_by.bucket);
+  if(!parent||parent.status!=='fresh')r.blocked_by=null;
+  else r.blocked_by={...r.blocked_by,seconds_to_reset:parent.seconds_to_reset};
+ }
+ const items=(data.resources?.items||[]).map(original=>{
+  const r={...original},checked=r.value_checked??r.checked;
+  if(['fresh','manual'].includes(r.status)&&(offline||checked==null||checked>now+120||now-checked>(r.ttl??1800)))r.status='stale';
+  if(['fresh','manual'].includes(r.status)&&r.expires&&r.expires<=now)r.status=r.expiry_is_partial?'stale':'expired';
+  if(r.usage_conditions&&(offline||now-r.usage_conditions.checked>(r.usage_conditions.ttl??600)))r.usage_conditions=null;
+  return r;
+ });
+ let planning=data.planning?{...data.planning}:null;
+ if(planning)planning.alternatives=(planning.alternatives||[]).filter(p=>p.valid_until!=null&&p.valid_until>now);
+ if(planning&&planning.resources_valid_until<=now){
+  planning.resources=[];
+  planning.conditions=[...(planning.conditions||[]),'추가 자원의 확인·만료 시점이 지났습니다. 제공사에서 재확인하세요.'];
+ }
+ if(planning&&(offline||planning.valid_until<=now||rows.some(r=>r.route===planning.route&&planning.applies?.includes(r.bucket)&&r.status!=='fresh'))){
+  const invalidate=p=>p?{...p,state:'unknown',seconds:null,bottleneck:null,resources:[],alternatives:[],reason:offline?'오프라인 사본입니다. 연결 후 한도를 다시 확인하세요.':'관측값이 오래됐습니다. 한도를 다시 확인하세요.'}:p;
+  planning=invalidate(planning);planning.today=invalidate(planning.today);planning.week=invalidate(planning.week);
+ }
+ return {...data,now,limits:rows,resources:{...data.resources,items},planning,_offline:offline};
+}
+const duration=s=>{if(s==null)return '추정 보류';if(s<=0)return '현재 소진';if(s<60)return '1분 미만';const minutes=Math.round(s/60);return `${Math.floor(minutes/60)?Math.floor(minutes/60)+'시간 ':''}${minutes%60}분`;};
