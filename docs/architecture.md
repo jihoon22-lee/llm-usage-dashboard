@@ -57,3 +57,5 @@ Claude는 정상 조회 최소 5분, 429는 10/20/40/60분과 더 긴 Retry-Afte
 쓰기는 정확한 Origin·JSON·세션 CSRF를 요구합니다. 쿠키는 독립 이름/키와 Secure·HttpOnly·SameSite=Strict를 사용합니다.
 Serve는 0700 폴더의 socket으로 연결하며 Funnel을 거부합니다. 공용 reverse proxy로 임의 대체하지 마세요.
 정적 자산은 내용 해시로 버전 관리합니다. 서버 no-store와 브라우저 명시적 통계 사본 저장은 별개입니다. [개인정보 범위](../SECURITY.md)를 확인하세요.
+
+설정 API `GET /api/config`의 `subscription_routes`는 지원 서비스·관측 route·구독료 설정 route를 중복 없이 합친 문자열 배열입니다. 구독료 미설정과 편집 가능한 서비스 목록을 분리하며 기존 저장 API는 유지합니다.

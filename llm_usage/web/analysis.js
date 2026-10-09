@@ -40,8 +40,11 @@ $('csv-series').addEventListener('click',event=>{
  event.preventDefault();event.stopPropagation();
  if(!lastUsage)return;
  const labels=lastUsage.labels||[];
- downloadCsv('series-'+$('metric').value,['시간 KST',...labels.map(seriesLabel),'합계 '+metricName()],
-  (lastUsage.series||[]).map(p=>[p.time,...labels.map(l=>metricValue(p.values[l]||{})),labels.reduce((s,l)=>s+metricValue(p.values[l]||{}),0)]));
+ const cost=$('metric').value==='cost';
+ const header=['시간 KST',...labels.map(seriesLabel),'합계 '+metricName()];
+ if(cost)header.push(...labels.map(label=>seriesLabel(label)+' 미산정 토큰'),'합계 미산정 토큰');
+ downloadCsv('series-'+$('metric').value,header,(lastUsage.series||[]).map(p=>[p.time,
+  ...(cost?costCsvFields(labels.map(l=>p.values[l]||{})):[...labels.map(l=>metricValue(p.values[l]||{})),labels.reduce((s,l)=>s+metricValue(p.values[l]||{}),0)])]));
 });
 const FILTER_IDS=['period','start','end','granularity','group','cumulative','metric','compare','scope'];
 const FILTER_DEFAULTS={period:'7d',granularity:'day',group:'route',cumulative:'0',metric:'tokens',compare:'',scope:''};
@@ -83,6 +86,7 @@ $('tabs').addEventListener('click',event=>{
 const editFilters=()=>{setView('analysis');$('filter-fold').open=true;$('period').focus();};
 $('context-edit').addEventListener('click',editFilters);
 $('cards-edit').addEventListener('click',editFilters);
+$('first-use-sources').addEventListener('click',()=>{setView('sources');$('tab-sources').focus();});
 $('tabs').addEventListener('keydown',event=>{
  const tabs=[...$('tabs').querySelectorAll('button[data-view]')],i=tabs.indexOf(document.activeElement);
  if(i<0)return;
@@ -186,6 +190,7 @@ foldedPanels.forEach(panel=>panel.addEventListener('toggle',()=>{if(compactMedia
 compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
+ $('first-use').hidden=!!data.scope||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
  $('usage-gaps').innerHTML=gaps.map(row=>`<strong>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</strong><span>${row.observed?'입력·출력·캐시 숫자는 보존되고 있습니다. 반복 수신과 누적값의 의미를 검증하기 전까지 차트·합계에는 포함하지 않습니다. 마지막 수신 '+when(row.observation_checked):'구독 한도와 별개로 소비량 원본이 확보되지 않아 차트·합계에 포함되지 않습니다.'}</span>`).join('');

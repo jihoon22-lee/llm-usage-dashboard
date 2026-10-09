@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -130,4 +130,15 @@ test('what-if pricing uses the cached and write rates with input fallbacks',()=>
   const rows=[{uncached_input:1e6,cached_input:1e6,output:1e6,cache_creation:1e6},{output:2e6}];
   assert.equal(f.estimateWith(rows,{input:2,cached:0.5,output:10,cache_write:3}),2+0.5+10+3+20);
   assert.equal(f.estimateWith(rows,{input:2,output:10}),2+2+10+2+20);
+});
+
+test('cost CSV distinguishes unpriced, partial, free and unused values and totals',()=>{
+ const fields=values=>[...f.costCsvFields(values)];
+ assert.deepEqual(fields([{uncached_input:10,unpriced:10,cost:0}]),['','',10,10]);
+ assert.deepEqual(fields([{uncached_input:10,unpriced:0,cost:0}]),[0,0,0,0]);
+ assert.deepEqual(fields([{}]),[0,0,0,0]);
+ assert.deepEqual(fields([{uncached_input:20,unpriced:10,cost:3}]),[3,3,10,10]);
+ assert.deepEqual(fields([{uncached_input:10,unpriced:10,cost:0},{output:5,cost:2}]),['',2,2,10,0,10]);
+ // Known free usage alongside unpriced usage remains a partial known zero.
+ assert.deepEqual(fields([{uncached_input:20,unpriced:10,cost:0}]),[0,0,10,10]);
 });

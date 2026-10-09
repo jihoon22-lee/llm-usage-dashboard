@@ -75,27 +75,54 @@ async function clearStatisticsCache(){
 }
 // Purge legacy configuration even when this visit only makes online requests.
 void statisticsCache().catch(()=>{});
-async function api(path,body,retried){
- if(body&&!csrf)csrf=(await api('/api/bootstrap')).csrf;
- const options={headers:{Accept:'application/json'}};
+// The deadline covers both headers and body, including one CSRF recovery.
+async function api(path,body,retried,requestOptions={}){
+ const deadline=requestOptions.deadline??Date.now()+(requestOptions.timeout??30000);
+ const external=requestOptions.signal;
+ if(external?.aborted)throw external.reason;
+ if(body&&!csrf)csrf=(await api('/api/bootstrap',undefined,undefined,{...requestOptions,deadline})).csrf;
+ const controller=new AbortController();
+ const options={headers:{Accept:'application/json'},signal:controller.signal};
  if(body){options.method='POST';options.headers['Content-Type']='application/json';options.headers['X-CSRF-Token']=csrf;options.body=JSON.stringify(body);}
- let r;
- try{r=await fetch(path,options);}
- catch(error){
+ let timer,abortListener;
+ const forwardAbort=()=>controller.abort(external.reason);
+ external?.addEventListener('abort',forwardAbort,{once:true});
+ let r,d;
+ try{
+  const aborted=new Promise((_,reject)=>{
+   abortListener=()=>reject(controller.signal.reason);
+   controller.signal.addEventListener('abort',abortListener,{once:true});
+   const timeout=()=>controller.abort(new DOMException('응답 시간 초과','TimeoutError'));
+   if(deadline<=Date.now())timeout();else timer=setTimeout(timeout,deadline-Date.now());
+  });
+  [r,d]=await Promise.race([(async()=>{
+   const response=await fetch(path,options);
+   const data=await response.json().catch(error=>{if(controller.signal.aborted)throw controller.signal.reason;return null;});
+   return [response,data];
+  })(),aborted]);
+ }catch(error){
+  if(external?.aborted)throw external.reason; // Superseded queries are not outages.
   window.dispatchEvent(new Event('llm-api-unavailable'));
   const copy=!body&&cacheablePath(path)?await lastCopy(path):null;
-  if(!copy)throw Error('서버에 연결할 수 없습니다. 네트워크·Tailscale 연결을 확인하세요.');
-  offlineSince=offlineSince?Math.min(offlineSince,copy.saved):copy.saved;
+  if(!copy){
+   const message=error.name==='TimeoutError'?'서버 응답 시간이 초과되었습니다. 다시 불러오세요.':'서버에 연결할 수 없습니다. 네트워크·Tailscale 연결을 확인하세요.';
+   throw Error(message+(body?' 서버 처리 결과는 확인하지 못했습니다. 저장·수집 상태를 확인한 뒤 다시 시도하세요.':''));
+  }
+  if(requestOptions.source)requestOptions.source.saved=copy.saved;
+  else{offlineSince=offlineSince?Math.min(offlineSince,copy.saved):copy.saved;window.dispatchEvent(new Event('llm-data-source-change'));}
   return copy.data;
+ }finally{
+  clearTimeout(timer);external?.removeEventListener('abort',forwardAbort);
+  controller.signal.removeEventListener('abort',abortListener);
  }
  if(r.status>=500)window.dispatchEvent(new Event('llm-api-unavailable'));
- const d=await r.json().catch(()=>null);
- // offlineSince is cleared only when a refresh starts: a later success in the same
- // refresh must not hide that another answer on screen is an old copy.
  if(r.ok&&!body&&cacheablePath(path))await keepCopy(path,d);
- // An expired session rotates the CSRF token; refresh it once and retry.
- if(r.status===403&&body&&!retried){csrf='';csrf=(await api('/api/bootstrap')).csrf;return api(path,body,true);}
+ if(r.status===403&&body&&!retried){
+  csrf='';csrf=(await api('/api/bootstrap',undefined,undefined,{...requestOptions,deadline})).csrf;
+  return api(path,body,true,{...requestOptions,deadline});
+ }
  if(!r.ok)throw Error((d&&d.error)||`서버 응답 오류 (HTTP ${r.status})`);
+ if(requestOptions.source)requestOptions.source.saved=0;
  return d;
 }
 function percentChart(points,label){

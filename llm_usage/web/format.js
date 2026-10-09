@@ -14,6 +14,14 @@ const modelTotal=v=>total(v);
 const usd=v=>v==null?'—':'$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:v>=100?0:2});
 const DETAIL_COLS=new Set(['uncached_input','cached_input','output','cache_creation','reasoning']);
 const total=v=>(v.uncached_input||0)+(v.cached_input||0)+(v.output||0)+(v.cache_creation||0);
+// Cost CSV retains the distinction between a known zero and unpriced tokens.
+function costCsvFields(values){
+ const missing=values.map(v=>v.unpriced||0),tokens=values.map(v=>total(v));
+ const costs=values.map((v,i)=>missing[i]>0&&tokens[i]<=missing[i]?'':(v.cost||0));
+ const unpriced=missing.reduce((a,b)=>a+b,0),allTokens=tokens.reduce((a,b)=>a+b,0);
+ const sum=unpriced>0&&allTokens<=unpriced?'':values.reduce((s,v)=>s+(v.cost||0),0);
+ return [...costs,sum,...missing,unpriced];
+}
 const percent=v=>v==null?'—':Number(v).toFixed(1)+'%';
 const signed=v=>(v>0?'+':'')+fmt(v);
 // These sources do not report reasoning separately: their 0 means not provided.
