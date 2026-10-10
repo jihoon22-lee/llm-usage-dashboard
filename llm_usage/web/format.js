@@ -5,6 +5,11 @@ const fmt=v=>Number(v||0).toLocaleString('ko-KR');
 const compact=v=>Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:2}).format(v||0);
 const when=t=>t?new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'확인 기록 없음';
 const left=s=>s==null?'초기화 정보 미제공':s<=0?'초기화 경과 · 재확인 대기':`${Math.floor(s/86400)?Math.floor(s/86400)+'일 ':''}${Math.floor(s%86400/3600)}시간 ${Math.floor(s%3600/60)}분 남음`;
+// Dense rows (overview, reset schedule): the two largest units, without "남음".
+const soon=s=>s==null?'미제공':s<=0?'재확인 대기':s<3600?`${Math.max(1,Math.floor(s/60))}분`:s<86400?`${Math.floor(s/3600)}시간 ${Math.floor(s%3600/60)}분`:`${Math.floor(s/86400)}일 ${Math.floor(s%86400/3600)}시간`;
+// KST expiry dates; the year is shown only when it differs from the current one.
+const kstYear=t=>new Date(t*1000).toLocaleString('en',{timeZone:'Asia/Seoul',year:'numeric'});
+const stamp=(t,now=Date.now()/1000)=>new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',...(kstYear(t)===kstYear(now)?{}:{year:'numeric'}),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const names={'codex':'OpenAI / Codex','claude-code':'Anthropic / Claude Code','antigravity':'Google / Antigravity','opencode-go':'OpenCode Go','devin':'Cognition / Devin'};
 const routeNames={...names,opencode:'OpenCode'};
 const statuses={fresh:'최근 확인',stale:'오래된 값',error:'수집 실패',unavailable:'미제공',ended:'구독 없음',ok:'수집 완료',partial:'일부 미수집',idle:'미사용'};

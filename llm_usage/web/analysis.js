@@ -230,7 +230,7 @@ function renderSources(list){
  for(const s of [...list].sort((a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name)))
   (groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
  const worst=items=>Math.min(...items.map(s=>SOURCE_RANK[s.status]??4));
- const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><strong>${esc(s.name)}</strong> · ${esc(statuses[s.status]||s.status)}<br>${esc(s.detail||'')}<br>마지막 확인 ${when(s.checked)}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><p class="source-line"><span><strong>${esc(s.name)}</strong> · ${esc(statuses[s.status]||s.status)}</span><small>${s.checked?when(s.checked):'확인 기록 없음'}</small></p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
  const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업')||worst(a[1])-worst(b[1]));
  $('sources').innerHTML=`<div class="source-summary"><span class="ok">정상 <strong>${counts.ok}</strong></span><span class="warn">확인 필요 <strong>${counts.warn}</strong></span><span class="bad">실패·미수집 <strong>${counts.bad}</strong></span><span class="idle">미사용 <strong>${counts.idle}</strong></span></div>`
   +ordered.map(([name,items])=>name==='내부 작업'
