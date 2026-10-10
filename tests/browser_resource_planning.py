@@ -96,6 +96,20 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#work-decision')).to_contain_text('Claude')
             expect(page.locator('#work-decision')).to_contain_text('Sonnet')
             expect(page.locator('#work-decision')).not_to_contain_text('Opus 기준 보기')
+            # One-line plan summary above the quota heading: same decision as the plan tab, opens it.
+            summary=page.locator('#plan-summary')
+            expect(summary).to_be_visible()
+            expect(summary).to_contain_text('계획 · Codex 공통 한도 2시간')
+            expect(summary).to_contain_text('부족 예상 · 약 1시간 30분')
+            expect(summary).to_contain_text('대안 Claude Sonnet')
+            height=summary.bounding_box()['height']
+            assert height<=(60 if width<=600 else 46),(width,height)
+            assert summary.bounding_box()['y']<page.locator('#view-quota > .section-heading').bounding_box()['y']
+            summary.click()
+            expect(page.locator('#work-now')).to_be_visible()
+            expect(page.locator('#view-quota')).to_be_hidden()
+            page.locator('#tab-quota').click()
+            expect(page.locator('#plan-summary')).to_be_visible()
             # Subscription quota must be the first overview content on every width.
             expect(page.locator('#view-quota > .section-heading h2').first).to_have_text('구독 한도')
             if width<600:page.locator('[data-quota="codex"]').click()
@@ -284,6 +298,8 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.evaluate('refresh()')
         expect(page.locator('#offline')).to_be_visible()
         expect(page.locator('#work-decision')).to_contain_text('판단 보류')
+        expect(page.locator('#plan-summary')).to_contain_text('계획 · 판단 보류 — 오프라인 사본')
+        for text in ('부족 예상','1시간 30분','대안','Sonnet','Codex 공통 한도'):expect(page.locator('#plan-summary')).not_to_contain_text(text)
         expect(page.locator('#work-decision')).not_to_contain_text('Sonnet 기준 보기')
         expect(page.locator('#quota-overview')).not_to_contain_text('최근 확인')
         assert page.locator('.decision-alternatives button').count()==0
@@ -292,6 +308,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.unroute('**/api/limits*')
         page.evaluate('refresh()')
         expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+        expect(page.locator('#plan-summary')).to_contain_text('부족 예상 · 약 1시간 30분')
         expect(page.locator('#offline')).to_be_hidden()
         assert not errors,errors
         context.close();browser.close()

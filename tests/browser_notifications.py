@@ -68,6 +68,7 @@ with sync_playwright() as p:
     # already past, not when the kind is switched off).
     soon_item={'id':'r1','route':'codex','kind':'reset','label':'Codex 초기화권','unit':'count','status':'fresh','amount':1,
                'checked':now,'grants':[{'id':'g1','amount':1,'expires':now+1800,'status':'available'},{'id':'g2','amount':1,'expires':now-60,'status':'expired'}]}
+    expect(page.locator('#plan-summary')).to_be_hidden()  # no planning data: no summary
     row['forecast']=None
     limits['resources']={'items':[soon_item]}
     page.evaluate("localStorage.setItem('llmNotify:exp','0')")

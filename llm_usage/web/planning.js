@@ -42,6 +42,7 @@ function ageLimits(){
 }
 setInterval(ageLimits,30000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)ageLimits();});
+const PLAN_STATES=['room','shortage','reset_pending'];
 function planStatus(state){return {room:'관측상 여유',shortage:'부족 예상',reset_pending:'초기화 후 재확인',unknown:'판단 보류'}[state]||'판단 보류';}
 function fillModelOptions(route,choices,selected){
  const options=choices.filter(o=>o.route===route);
@@ -71,8 +72,26 @@ function resultLine(p){
  if(p.state==='shortage')return '계획한 작업량에 부족 예상';
  return p.state==='room'?`${p.hours}시간 사용에 관측상 여유`:p.state==='reset_pending'?'초기화 이후 사용량은 미확정':'작업 가능 시간 추정 보류';
 }
+// One line on the quota tab: the same decision the plan tab shows, never more confident than it.
+// An unknown (also offline or invalidated) decision is stated as pending, with no time or alternative.
+function renderPlanSummary(data,failed=false){
+ const p=data?.planning,box=$('plan-summary');
+ box.hidden=!p;
+ if(!p)return;
+ const known=!failed&&p.state!=='unknown'&&PLAN_STATES.includes(p.state);
+ const selected=p.choices?.find(o=>o.route===p.route&&o.model===p.model);
+ const scope=`${shortService[p.route]||p.route} ${selected?.label||p.model} ${p.hours}시간`;
+ const time=!known||p.seconds==null?'':p.seconds<=0?(p.provider_blocked?'제공사 사용 제한 확인':'구독 한도 소진'):'약 '+duration(p.seconds);
+ const alt=known&&p.alternatives?.[0]?` · 대안 ${esc(p.alternatives[0].service)} ${esc(p.alternatives[0].label)}`:'';
+ const state=known?`→ ${esc(planStatus(p.state))}${time?' · '+esc(time):''}`:`판단 보류 — ${esc(failed?'새 조건을 불러오지 못했습니다':data._offline?'오프라인 사본입니다. 연결 후 한도를 다시 확인하세요':'한도를 다시 확인하세요')}`;
+ box.className='plan-summary '+(known?p.state:'unknown');
+ box.title=p.reason||'';
+ box.innerHTML=`<span class="ps-label">계획 ·</span> <span class="ps-body">${known?esc(scope)+' ':''}${state}${alt}</span> <span class="ps-go" aria-hidden="true">›</span>`;
+}
+$('plan-summary').addEventListener('click',()=>setView('plan'));
 function renderWorkPlan(data){
  const p=data.planning;
+ renderPlanSummary(data);
  $('work-decision').className='work-decision '+(p?.state||'unknown');
  if(!p){$('work-decision').textContent='작업 전망을 확인하려면 최신 한도를 불러오세요.';for(const id of ['work-budget-results','work-budget-table','plan-conditions'])$(id).replaceChildren();return;}
  syncPlanControls(p);
@@ -111,6 +130,7 @@ async function loadWorkPlan(){
   if(generation!==planGeneration)return;
   $('plan-message').textContent=error.message;
   $('work-decision').className='work-decision unknown';$('work-decision').textContent='새 조건의 판단을 불러오지 못했습니다. 다시 확인하세요.';
+  renderPlanSummary(lastLimits,true);
  }finally{if(generation===planGeneration){planRequest=null;$('plan-apply').disabled=false;}}
 }
 function readPlanControls(budget=false){
