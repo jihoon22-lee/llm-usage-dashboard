@@ -580,8 +580,13 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
 .resource-checked{display:block;font-size:var(--fs-meta);margin:10px 0 7px}
 .resource-card details{font-size:var(--fs-small);color:var(--muted);line-height:1.7}
 .resource-card summary{cursor:pointer}
-.resource-grants{padding-left:18px}
-.resource-grants li{margin:8px 0}
+.resource-expiry{display:flex;flex-wrap:wrap;gap:3px 8px;align-items:baseline;margin:8px 0;font-size:var(--fs-small);line-height:1.6}
+.resource-expiry time{font-variant-numeric:tabular-nums}
+.resource-expiry.unknown,.resource-grants small{color:var(--muted)}
+.resource-expired{color:var(--warning-ink)}
+.resource-grants{list-style:none;padding:0;margin:8px 0;font-size:var(--fs-small)}
+.resource-grants li{margin:8px 0;padding:8px 0;border-bottom:1px solid var(--border)}
+.resource-grants small{display:block;line-height:1.6}
 .resource-inactive{margin-top:14px;border:1px dashed var(--border);border-radius:9px;padding:12px;color:var(--muted);font-size:var(--fs-small)}
 .resource-inactive[open]>summary{margin-bottom:12px}
 .resource-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}

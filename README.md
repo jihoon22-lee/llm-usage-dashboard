@@ -5,7 +5,7 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.2.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.2.0)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.2.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.2.1)** · [변경 기록](CHANGELOG.md)
 
 ## 기능
 
@@ -13,6 +13,7 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 - 한도·초기화·수집 상태, 모든 모델의 사용 추이·비용 추정·프로젝트/세션 분석
 - 서비스·모델별 작업 지속 시간과 먼저 제약하는 한도, 최근 30분·비교 3시간 소모 속도
 - Codex·Claude 크레딧·초기화권 읽기 전용 조회, 자동 조회를 보완하는 수동 자원 기록
+- 각 초기화권·크레딧의 만료일을 연도·KST 시각으로 상시 표시, 미제공·부분 만료 구분
 - 오늘·이번 주 작업시간별 전망, 적용 범위·지출 조건·만료·확인 시각 구분
 - 캐시·추론 구분, 스트리밍·재수집·Windows/WSL 사본 중복 제거
 - 데스크톱·모바일, CSV, 제한된 오프라인 통계 사본, 선택적 외부 알림
@@ -45,7 +46,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.2.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.2.1 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -54,7 +55,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.2.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.2.1의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.

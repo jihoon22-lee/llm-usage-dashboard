@@ -23,12 +23,12 @@ sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release
 --prepare는 읽기 전용 명령이 아닙니다. 코드를 `~/.local/lib/llm-usage/releases/<commit>`으로 내보내고 current 링크로 선택합니다.
 아래 기존 배포기는 코드만 전환합니다. uv 의존성 변경을 포함한 업데이트에는 사용하지 마세요. 운영 `.venv`에 `uv sync`를 실행하면 실행 중인 패키지가 바뀝니다. 임시 환경의 사전 검증과 실제 배포 시 코드·환경의 동시 전환이 필요합니다.
 
-아래 명령은 운영 환경이 프로젝트 버전 메타데이터를 포함해 대상 v0.2.0의 lock과 이미 일치하는 경우에만 사용합니다. 환경 동기화가 필요하면 먼저 아래의 **0.2.0 업데이트** 절차를 따르세요.
+아래 명령은 운영 환경이 프로젝트 버전 메타데이터를 포함해 대상 v0.2.1의 lock과 이미 일치하는 경우에만 사용합니다. 환경 동기화가 필요하면 먼저 아래의 **0.2.1 업데이트** 절차를 따르세요.
 
 ```bash
 git fetch origin --tags
 git switch main
-git merge --ff-only v0.2.0
+git merge --ff-only v0.2.1
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python packaging/deploy.py
 ```
@@ -47,9 +47,9 @@ git merge --ff-only v0.2.0
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
 
-## 0.2.0 업데이트
+## 0.2.1 업데이트
 
-0.2.0은 0.1.1과 같은 외부 의존성 버전을 사용하고 프로젝트 버전만 갱신합니다. 운영 `.venv`에 동기화가 필요하면 라이브러리 버전이 같아도 두 서비스를 먼저 정지합니다. v0.1.0의 requirements 기반 환경에서 전환하는 경우에는 uv.lock과 Gunicorn 26.2.0 고정 환경도 함께 적용합니다.
+0.2.1은 0.2.0과 같은 외부 의존성 버전을 사용하고 프로젝트 버전을 갱신합니다. 구독 한도 우선 배치·Claude 자원 누락·만료일 표시 수정이 포함됩니다. 운영 `.venv`에 동기화가 필요하면 라이브러리 버전이 같아도 두 서비스를 먼저 정지합니다. v0.1.0의 requirements 기반 환경에서 전환하는 경우에는 uv.lock과 Gunicorn 26.2.0 고정 환경도 함께 적용합니다.
 
 1. 현재 실행 릴리스와 Python·패키지 버전, 서비스 설정의 DB 경로, 기존 데이터 백업의 시각을 확인합니다. 이전 태그의 의존성 선언으로 가상환경을 복구할 수 있도록 준비합니다.
 2. 대상 태그의 독립 checkout에서 uv 0.12.23으로 `uv sync --locked`와 검사를 수행합니다. 운영 `.venv`는 이 단계에서 변경하지 않습니다.
