@@ -16,7 +16,6 @@ function resourceConditions(row){
  if(row.scope==='cloud'){
   if(row.limit!=null)parts.push('지급액 '+resourceValue(row,row.limit));
   if(row.spent!=null)parts.push('사용액 '+resourceValue(row,row.spent));
-  if(row.expires)parts.push('만료 '+when(row.expires)+' KST');
   parts.push('추가 사용 활성화와 별개 · 모델별 사용 조건 확인');
  }
  if(conditions.enabled===false)parts.push(row.kind==='reset'?'현재 제공 대상 아님·사용 조건 확인':row.scope==='cloud'?'클라우드 크레딧 사용 제한':'추가 사용 비활성화');
@@ -29,19 +28,26 @@ function resourceConditions(row){
  if(row.unlimited)parts.push('제공사 크레딧 제한 없음 표시 · 다른 한도는 별도');
  return parts;
 }
+function resourceExpiry(expires,label='만료'){
+ if(!Number.isFinite(expires)||expires<=0)return `<p class="resource-expiry unknown"><b>${esc(label)}</b><span>정보 미제공</span></p>`;
+ const date=new Date(expires*1000);
+ const display=date.toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+ return `<p class="resource-expiry"><b>${esc(label)}</b><time datetime="${date.toISOString()}">${esc(display)} KST</time>${expires<=observedNow()?'<span class="resource-expired">시각 경과</span>':''}</p>`;
+}
 function resourceCard(row,opened){
- const expiry=row.expires?`${row.expiry_is_partial?'일부 잔액 다음 만료':'만료'} ${when(row.expires)} KST`:'만료 정보 미제공';
  const checked=row.value_checked??row.checked;
  const grantTargets=[...new Set((row.grants||[]).flatMap(g=>g.targets||[]))];
  const scopeText=row.kind==='reset'&&grantTargets.length?'초기화 대상 · '+grantTargets.map(bucket=>bucketName({route:row.route,bucket})).join(' · '):RESOURCE_SCOPES[row.scope]||'적용 범위 확인 필요';
- const details=(row.grants||[]).map(g=>{
+ const grants=(row.grants||[]).map((g,index)=>{
   const targets=(g.targets||[]).map(bucket=>bucketName({route:row.route,bucket})).join(' · ')||'초기화 대상 확인 필요';
-  const eligibility=g.paused?'일시 중지':g.usable===false?'현재 사용 조건 미충족':g.usable===true?'사용 조건 확인됨':'사용 조건 확인 필요';
-  return `<li><b>${g.amount}회</b> · ${esc(targets)}<br>${g.expires?'만료 '+esc(when(g.expires))+' KST':'만료 미제공'} · ${esc(eligibility)}</li>`;
+  const eligibility=g.status==='used'?'사용됨':g.status==='expired'?'만료됨':g.paused?'일시 중지':g.usable===false?'현재 사용 조건 미충족':g.usable===true?'사용 조건 확인됨':'사용 조건 확인 필요';
+  return `<li><b>초기화권 ${index+1} · ${esc(g.amount)}회</b>${resourceExpiry(g.expires)}<small>${esc(targets)} · ${esc(eligibility)}</small></li>`;
  }).join('');
  const partial=row.kind==='reset'&&row.details_known&&row.amount!=null&&row.amount>(row.grants||[]).reduce((sum,g)=>sum+g.amount,0);
+ const expiry=grants?`<ul class="resource-grants" aria-label="초기화권별 만료일">${grants}</ul>${partial?'<p class="resource-note">일부 초기화권 상세만 제공되었습니다. 나머지 만료일은 미제공입니다.</p>':''}`:
+  resourceExpiry(row.allowance?row.period_reset:row.expires,row.allowance?'지출 한도 갱신':row.expiry_is_partial?'일부 잔액 다음 만료':row.kind==='reset'&&!row.expires?'초기화권별 만료':'만료');
  const duplicate=row.duplicate_of?`<p class="resource-note">자동 자원과 연결 · 중복 합산하지 않음${row.conflicts_with_auto?' · 자동값과 기록이 다릅니다':''}${row.effective?' · 자동값 재확인 전 수동 기록 참고':''}</p>`:'';
- return `<article class="resource-card ${esc(row.status)}" data-resource-id="${esc(row.id)}"><div class="resource-card-heading"><span>${esc(shortService[row.route]||row.route)}</span><span class="badge ${esc(row.status)}">${esc(RESOURCE_STATES[row.status]||row.status)}</span></div><h3>${esc(row.label)}</h3><strong class="resource-value">${esc(resourceValue(row))}</strong><p class="resource-scope">${esc(scopeText)}${row.model?' · '+esc(row.model):''}</p><p class="resource-condition">${resourceConditions(row).map(esc).join(' · ')}</p>${duplicate}<small class="resource-checked">${checked?'확인 '+esc(when(checked))+' KST':'확인 기록 없음'}</small><details data-resource-detail="${esc(row.id)}"${opened.has(row.id)?' open':''}><summary>만료·확인 근거</summary><p>${esc(expiry)}</p>${row.reported_total!=null&&row.reported_total!==row.amount?`<p>제공사 전체 잔액 ${esc(resourceValue(row,row.reported_total))} 중 범용 잔액만 위에 표시합니다.</p>`:''}${row.rate_per_hour!=null?`<p>최근 확인한 지출 ${esc(resourceValue(row,row.rate_per_hour))}/시간 · 같은 결제기간 원본 누적 지출 기준</p>`:''}${partial?'<p>일부 초기화권 상세만 제공되었습니다. 보유 개수는 제공사 집계입니다.</p>':''}${row.kind==='reset'&&!row.details_known&&row.origin==='auto'?'<p>초기화권별 적용 범위·만료 상세를 받지 못했습니다.</p>':''}${details?`<ul class="resource-grants">${details}</ul>`:''}<p>${row.origin==='manual'?(row.account_scope==='independent'?'별도 API 자원 수동 기록':'수동 확인 기록 · 현재 계정의 제공사 화면에서 재확인'):(row.identity_verified?'기본 로그인 계정 기준 자동 조회':'계정 식별 미확인 · 제공사에서 계정을 확인하세요.')}</p>${row.check_url?`<a href="${esc(row.check_url)}" target="_blank" rel="noopener noreferrer">제공사에서 확인 ↗</a>`:''}</details>${row.origin==='manual'?`<div class="resource-actions"><button type="button" class="mini-btn" data-resource-edit="${esc(row.id)}">수정</button><button type="button" class="mini-btn" data-resource-delete="${esc(row.id)}">삭제</button></div>`:''}</article>`;
+ return `<article class="resource-card ${esc(row.status)}" data-resource-id="${esc(row.id)}"><div class="resource-card-heading"><span>${esc(shortService[row.route]||row.route)}</span><span class="badge ${esc(row.status)}">${esc(RESOURCE_STATES[row.status]||row.status)}</span></div><h3>${esc(row.label)}</h3><strong class="resource-value">${esc(resourceValue(row))}</strong>${expiry}<p class="resource-scope">${esc(scopeText)}${row.model?' · '+esc(row.model):''}</p><p class="resource-condition">${resourceConditions(row).map(esc).join(' · ')}</p>${duplicate}<small class="resource-checked">${checked?'확인 '+esc(when(checked))+' KST':'확인 기록 없음'}</small><details data-resource-detail="${esc(row.id)}"${opened.has(row.id)?' open':''}><summary>확인 근거·사용 조건</summary>${row.reported_total!=null&&row.reported_total!==row.amount?`<p>제공사 전체 잔액 ${esc(resourceValue(row,row.reported_total))} 중 범용 잔액만 위에 표시합니다.</p>`:''}${row.rate_per_hour!=null?`<p>최근 확인한 지출 ${esc(resourceValue(row,row.rate_per_hour))}/시간 · 같은 결제기간 원본 누적 지출 기준</p>`:''}${row.kind==='reset'&&!row.details_known&&row.origin==='auto'?'<p>초기화권별 적용 범위·만료 상세를 받지 못했습니다.</p>':''}<p>${row.origin==='manual'?(row.account_scope==='independent'?'별도 API 자원 수동 기록':'수동 확인 기록 · 현재 계정의 제공사 화면에서 재확인'):(row.identity_verified?'기본 로그인 계정 기준 자동 조회':'계정 식별 미확인 · 제공사에서 계정을 확인하세요.')}</p>${row.check_url?`<a href="${esc(row.check_url)}" target="_blank" rel="noopener noreferrer">제공사에서 확인 ↗</a>`:''}</details>${row.origin==='manual'?`<div class="resource-actions"><button type="button" class="mini-btn" data-resource-edit="${esc(row.id)}">수정</button><button type="button" class="mini-btn" data-resource-delete="${esc(row.id)}">삭제</button></div>`:''}</article>`;
 }
 function renderResources(data){
  const opened=new Set([...$('resource-panel').querySelectorAll('[data-resource-detail][open]')].map(el=>el.dataset.resourceDetail));

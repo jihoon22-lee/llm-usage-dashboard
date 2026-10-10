@@ -38,7 +38,10 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
                          'secondary':{'usedPercent':88-8*minute/60,'windowDurationMins':10080,'resetsAt':now+259200},
                          'credits':{'balance':'25','hasCredits':True,'unlimited':False}},
                 'special':{'limitName':'별도 모델','primary':{'usedPercent':100,'windowDurationMins':300,'resetsAt':now+3600}}},
-                'rateLimitResetCredits':{'availableCount':2,'credits':[{'id':'fixture-reset','expiresAt':now+3600,'status':'available'}]}}
+                'rateLimitResetCredits':{'availableCount':2,'credits':[
+                    {'id':'fixture-reset','expiresAt':now+3600,'status':'available'},
+                    {'id':'fixture-reset-later','expiresAt':now+172800,'status':'available'},
+                    {'id':'fixture-reset-expired','expiresAt':now-86400,'status':'expired'}]}}
             codex_limits(store,c,data,checked)
             claude_limits(store,c,{'five_hour':{'utilization':30-minute/30,'resets_at':now+14400},
                                   'seven_day':{'utilization':30-minute/60,'resets_at':now+259200},
@@ -47,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
                                                     'resets_at':now+86400,'locked_reason':None},
                                   'spend':{'enabled':True,'used':{'amount_minor':1000,'currency':'USD','exponent':2},
                                            'limit':{'amount_minor':3000,'currency':'USD','exponent':2}}},checked)
-        claude_balance(c,{'amount':5000,'currency':'USD','auto_reload_settings':{'enabled':False}},now)
+        claude_balance(c,{'amount':5000,'currency':'USD','next_expires_at':now+432000,'auto_reload_settings':{'enabled':False}},now)
         claude_resets(c,{'cedar_ember':{'eligible':True,'grants':[{'id':'fixture-claude-reset','resets_left':1,
             'clears':['five_hour'],'ends_at':now+86400,'usable_now':False}]}},now)
         for name in ('codex','claude-oauth','claude-credits','claude-resets'):
@@ -111,8 +114,32 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#resource-list')).to_contain_text('클라우드 세션 전용')
             expect(page.locator('#resource-list')).to_contain_text('1회')
             expect(page.locator('#work-decision')).not_to_contain_text('클라우드 전용 크레딧')
+            # Every provider-supplied expiry is visible without opening details.
+            items=call('/api/limits').get_json()['resources']['items']
+            for item in items:
+                card=page.locator(f'[data-resource-id="{item["id"]}"]')
+                expiries=[g['expires'] for g in item.get('grants',[])] or [item.get('period_reset') if item.get('allowance') else item.get('expires')]
+                dates=card.locator('.resource-expiry time')
+                assert dates.count()==len([e for e in expiries if e])
+                for index,expiry in enumerate(e for e in expiries if e):
+                    expect(dates.nth(index)).to_be_visible()
+                    assert abs(page.evaluate('(value) => Date.parse(value)/1000',dates.nth(index).get_attribute('datetime'))-expiry)<.001
+                    assert 'KST' in dates.nth(index).inner_text()
+                if not any(expiries):expect(card.locator('.resource-expiry')).to_contain_text('정보 미제공')
+                assert card.locator('details[open]').count()==0
+            codex_reset=next(r for r in items if r['route']=='codex' and r['kind']=='reset')
+            reset_card=page.locator(f'[data-resource-id="{codex_reset["id"]}"]')
+            expect(reset_card.locator('.resource-grants li')).to_have_count(3)
+            expect(reset_card).to_contain_text('시각 경과')
+            expect(reset_card).to_contain_text('만료됨')
+            credit=next(r for r in items if r['route']=='claude-code' and r['pool_key']=='prepaid-credits')
+            expect(page.locator(f'[data-resource-id="{credit["id"]}"] .resource-expiry')).to_contain_text('일부 잔액 다음 만료')
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             page.screenshot(path=str(output/f'work-now-{width}.png'),full_page=True)
+            if width==1440:
+                page.evaluate("() => document.querySelector('.sticky-nav').style.visibility='hidden'")
+                page.locator('#resource-panel').screenshot(path=str(output/'resource-expiry.png'))
+                page.evaluate("() => document.querySelector('.sticky-nav').style.visibility=''")
             page.locator('#plan-model').select_option('special')
             expect(page.locator('#work-decision')).to_contain_text('구독 한도 소진')
             page.locator('#plan-route').select_option('claude-code')
@@ -139,11 +166,13 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.locator('#resource-kind').select_option('api_credit')
         page.locator('#resource-label').fill('API 전용 검토 기록')
         page.locator('#resource-amount').fill('20')
+        page.locator('#resource-expires').fill(page.evaluate('(value) => resourceTime(value)',now+172800))
         page.locator('#resource-save').click()
         expect(page.locator('#resource-message')).to_contain_text('저장했습니다')
         expect(page.locator('#resource-list')).to_contain_text('API 전용 · 구독 한도에 미포함')
         expect(page.locator('#work-decision')).not_to_contain_text('API 전용 검토 기록')
         record=next(r for r in call('/api/limits').get_json()['resources']['items'] if r['origin']=='manual')
+        expect(page.locator(f'[data-resource-id="{record["id"]}"] .resource-expiry time')).to_be_visible()
         concurrent={k:record.get(k) for k in ('route','kind','label','amount','unit','scope','model','expires','checked','enabled','spend_remaining','spend_unlimited','auto_reload','linked_id','revision')}
         concurrent['amount']=12
         assert call('/api/resources/manual/'+record['id'],'PATCH',concurrent).status_code==200
@@ -195,4 +224,4 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         expect(page.locator('#offline')).to_be_hidden()
         assert not errors,errors
         context.close();browser.close()
-print('Resource planning browser passed: 3 widths, quota-first overview, reset/cloud credits, visible pace, model constraints, day/week, manual CRUD/conflict/idempotent retry, offline aging/recovery.')
+print('Resource planning browser passed: 3 widths, quota-first overview, visible per-grant/credit expiry, reset/cloud credits, model constraints, manual CRUD/conflict/retry, offline recovery.')
