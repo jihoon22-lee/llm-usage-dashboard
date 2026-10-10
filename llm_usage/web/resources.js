@@ -1,7 +1,7 @@
 'use strict';
 const RESOURCE_STATES={fresh:'자동 조회',manual:'수동 확인',stale:'오래된 기록',error:'조회 실패',unavailable:'미제공',conflict:'출처 간 차이',expired:'만료됨',previous_account:'계정·조건 변경 후 재확인 필요'};
 const RESOURCE_SCOPES={subscription:'구독 경로 추가 사용',cloud:'클라우드 세션 전용 · 로컬·채팅·API에 미적용',api:'API 전용 · 구독 한도에 미포함',five_hour:'5시간 한도',weekly:'주간 한도',model:'특정 모델',unknown:'적용 범위 확인 필요'};
-let editingResource=null,resourceSaving=false,resourceDirty=false,resourceRequestId=null;
+let editingResource=null,resourceSaving=false,resourceDirty=false,resourceRequestId=null,resourceOpener=null;
 function resourceValue(row,value=row.amount){
  if(value==null)return '미제공';
  if(row.unit==='count')return fmt(value)+'회';
@@ -83,9 +83,10 @@ function resourceLinks(selected=''){
 }
 function editResource(row=null){
  if(resourceSaving)return;
+ if(!$('resource-dialog').open)resourceOpener=document.activeElement?.closest?.('[data-resource-edit]')?.dataset.resourceEdit||'';
  editingResource=row?{id:row.id,revision:row.revision}:null;
  resourceRequestId=crypto.randomUUID().replaceAll('-','');
- $('resource-editor').reset();$('resource-editor').hidden=false;
+ $('resource-editor').reset();if(!$('resource-dialog').open)$('resource-dialog').showModal();
  $('resource-editor-title').textContent=row?'수동 기록 수정':'수동 자원 기록';
  const defaults={route:planPrefs.route||'codex',kind:'usage_credit',label:'',amount:'',unit:'credit',scope:'subscription',model:'',checked:observedNow(),expires:null};
  const values={...defaults,...row};
@@ -96,7 +97,6 @@ function editResource(row=null){
  resourceLinks(values.linked_id||'');resourceDirty=false;
  $('resource-message').textContent=lastLimits?._offline?'오프라인에서는 초안만 작성할 수 있습니다. 연결 후 저장하세요.':'';
  $('resource-reload').hidden=true;$('resource-label').focus();
- $('resource-editor').scrollIntoView({behavior:motion(),block:'nearest'});
 }
 function resourceBody(){
  return {route:$('resource-route').value,kind:$('resource-kind').value,label:$('resource-label').value,
@@ -110,11 +110,16 @@ $('resource-add').addEventListener('click',()=>{
  if(resourceDirty&&!confirm('저장하지 않은 입력을 지우고 새 기록을 작성할까요?'))return;
  editResource();
 });
-$('resource-cancel').addEventListener('click',()=>{
- if(resourceSaving)return;
+// Close button, Escape and the dialog's cancel event all share one path: blocked while
+// saving, asks before dropping typed input, and hands focus back to whatever opened it.
+function closeResourceEditor(){
+ if(resourceSaving||!$('resource-dialog').open)return;
  if(resourceDirty&&!confirm('저장하지 않은 입력을 닫을까요?'))return;
- $('resource-editor').hidden=true;resourceDirty=false;$('resource-add').focus();
-});
+ $('resource-dialog').close();resourceDirty=false;
+ ($('resource-panel').querySelector(`[data-resource-edit="${CSS.escape(resourceOpener||'')}"]`)||$('resource-add')).focus({preventScroll:true});
+}
+$('resource-cancel').addEventListener('click',closeResourceEditor);
+$('resource-dialog').addEventListener('cancel',event=>{event.preventDefault();closeResourceEditor();});
 $('resource-editor').addEventListener('input',()=>{resourceDirty=true;});
 $('resource-kind').addEventListener('change',()=>{
  const kind=$('resource-kind').value;

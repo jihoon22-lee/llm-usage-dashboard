@@ -243,7 +243,7 @@ async def main():
             overview=await page.locator('#quota-overview').bounding_box()
             assert overview['height']<350
             order=await page.locator('main h3, #sources-panel h2').all_text_contents()
-            assert order==['다음 초기화','수동 자원 기록','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
+            assert order==['다음 초기화','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
                            '프로젝트별 사용량','세션별 사용량','이전 기간과 비교','캐시 활용률 분석','주간 리포트','일별 활동','구독 가치 분석',
                            '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('usage')

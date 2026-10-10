@@ -608,11 +608,15 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
 .resource-inactive{margin-top:14px;border:1px dashed var(--border);border-radius:9px;padding:12px;color:var(--muted);font-size:var(--fs-small)}
 .resource-inactive[open]>summary{margin-bottom:12px}
 .resource-inactive .resource-list{margin-top:4px}
-.resource-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.resource-actions{display:flex;gap:8px;flex-wrap:wrap;position:sticky;bottom:0;margin:0 -20px;padding:12px 20px;border-top:1px solid var(--line);background:var(--raised)}
 .resource-actions button{min-height:36px}
-.resource-editor{margin-top:18px;padding:20px;border:1px solid var(--border);border-radius:11px;background:var(--raised)}
-.resource-editor[hidden]{display:none}
-.resource-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:800px;margin-top:14px}
+/* The manual-record editor is a modal: a centred panel on desktop, a bottom sheet on phones. */
+.resource-dialog{width:min(640px,calc(100vw - 32px));max-width:none;max-height:min(90vh,860px);padding:0;overflow:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:12px;background:var(--raised);color:var(--ink);box-shadow:0 18px 50px rgba(0,0,0,.28)}
+.resource-dialog::backdrop{background:rgba(10,18,14,.5)}
+body:has(dialog[open]){overflow:hidden}
+.resource-editor{padding:20px 20px 0}
+.resource-editor>h3{margin:0}
+.resource-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 8px}
 .resource-wide{grid-column:1/-1}
 #resource-message{white-space:pre-wrap}
 .work-budget{margin-bottom:18px}
@@ -634,7 +638,9 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
  .decision-heading small{font-size:11px}
  .decision-alternatives>span{flex-basis:100%}
  .work-budget-results{grid-template-columns:1fr}
- .resource-editor{padding:13px}
+ .resource-dialog{width:100%;max-height:90vh;max-height:90dvh;margin:auto 0 0;border-width:1px 0 0;border-radius:14px 14px 0 0}
+ .resource-editor{padding:14px 14px 0}
+ .resource-actions{margin:0 -14px;padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
  .resource-list{gap:0;border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden}
  .resource-list>.hint{margin:0;padding:12px}
  .resource-card{border:0;border-top:1px solid var(--line);border-radius:0;padding:11px 12px}

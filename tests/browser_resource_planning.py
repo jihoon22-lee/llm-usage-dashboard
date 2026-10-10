@@ -155,6 +155,23 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility='hidden'")
                 page.locator('#resource-panel').screenshot(path=str(output/'resource-expiry.png'))
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility=''")
+            # The manual editor is a modal dialog: centred panel on desktop, bottom sheet on phones.
+            page.locator('#resource-add').click()
+            expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+            assert page.evaluate("document.getElementById('resource-dialog').matches(':modal')")
+            expect(page.locator('#resource-label')).to_be_focused()
+            box=page.locator('#resource-dialog').bounding_box()
+            if width>600:
+                assert abs(box['width']-640)<=1 and abs(box['x']+box['width']/2-width/2)<=1,box
+            else:
+                assert abs(box['x'])<=1 and abs(box['width']-width)<=1 and abs(box['y']+box['height']-900)<=1 and box['height']<=900*.9+1,box
+            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+            assert page.evaluate("(() => { const d=document.getElementById('resource-dialog'); return d.scrollWidth<=d.clientWidth; })()")
+            expect(page.locator('#resource-save')).to_be_in_viewport()
+            if width in (1440,390):page.screenshot(path=str(output/f'resource-dialog-{width}.png'))
+            page.keyboard.press('Escape')
+            expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+            expect(page.locator('#resource-add')).to_be_focused()
             page.locator('#tab-plan').click()
             expect(page.locator('#work-now')).to_be_visible()
             if width==1440:page.screenshot(path=str(output/'plan-1440.png'),full_page=True)
@@ -180,6 +197,21 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         errors=[];page.on('pageerror',lambda error:errors.append(str(error)));watch_csp(page,errors)
         page.goto(ORIGIN);expect(page.locator('#work-decision')).to_contain_text('부족 예상')
         page.locator('#resource-add').click()
+        # Escape asks before dropping typed input, keeps the dialog on 'cancel', closes on accept.
+        page.locator('#resource-label').fill('임시 입력')
+        messages=[]
+        page.once('dialog',lambda d:(messages.append(d.message),d.dismiss()))
+        page.keyboard.press('Escape')
+        assert messages==['저장하지 않은 입력을 닫을까요?'],messages
+        expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+        expect(page.locator('#resource-label')).to_have_value('임시 입력')
+        page.once('dialog',lambda d:(messages.append(d.message),d.accept()))
+        page.keyboard.press('Escape')
+        assert len(messages)==2
+        expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+        expect(page.locator('#resource-add')).to_be_focused()
+        page.locator('#resource-add').click()
+        expect(page.locator('#resource-label')).to_have_value('')
         page.locator('#resource-kind').select_option('api_credit')
         page.locator('#resource-label').fill('API 전용 검토 기록')
         page.locator('#resource-amount').fill('20')
@@ -200,6 +232,13 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.locator('#resource-reload').click()
         expect(page.locator('#resource-amount')).to_have_value('12')
         page.locator('#resource-cancel').click()
+        expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+        # An edit button reopens the same dialog and gets focus back on close.
+        page.locator(f'[data-resource-edit="{record["id"]}"]').click()
+        expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+        expect(page.locator('#resource-editor-title')).to_have_text('수동 기록 수정')
+        page.locator('#resource-cancel').click()
+        expect(page.locator(f'[data-resource-edit="{record["id"]}"]')).to_be_focused()
 
         # An ambiguous network failure after committing a new record is retried
         # with the same request identity and does not create a second resource.

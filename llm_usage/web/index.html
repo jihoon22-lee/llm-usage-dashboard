@@ -12,25 +12,6 @@
 <p id="resource-summary" class="hint">조회·기록만 합니다. 초기화권 사용·크레딧 구매는 제공사 화면에서 진행하세요.</p>
 <div id="resource-list" class="resource-list"></div>
 <details id="resource-inactive" class="resource-inactive" hidden><summary id="resource-inactive-summary">잔액 없음·이전 기록</summary><div id="resource-inactive-list" class="resource-list"></div></details>
-<form id="resource-editor" class="resource-editor" hidden>
-<h3 id="resource-editor-title">수동 자원 기록</h3><p class="hint">직접 확인한 값만 기록하세요. 초기화권 사용·크레딧 구매는 제공사 화면에서 진행합니다. 시각은 한국 시간입니다.</p>
-<div class="resource-fields">
-<label>서비스<select id="resource-route"><option value="codex">Codex</option><option value="claude-code">Claude</option><option value="antigravity">Antigravity</option><option value="opencode-go">OpenCode Go</option><option value="devin">Devin</option></select></label>
-<label>종류<select id="resource-kind"><option value="usage_credit">추가 사용 크레딧</option><option value="api_credit">API 전용 크레딧</option><option value="reset">초기화권</option></select></label>
-<label class="resource-wide">이름<input id="resource-label" required maxlength="80" placeholder="예: 이번 달 API 크레딧"></label>
-<label>잔액·개수<input id="resource-amount" type="number" min="0" max="1000000000000" step="any" required></label>
-<label>단위<select id="resource-unit"><option value="credit">크레딧</option><option value="USD">USD</option><option value="KRW">KRW</option><option value="JPY">JPY</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="CAD">CAD</option><option value="AUD">AUD</option><option value="count">회</option><option value="minor">제공사 소액 단위</option></select></label>
-<label>적용 범위<select id="resource-scope"><option value="subscription">구독 경로의 추가 사용</option><option value="cloud">클라우드 세션 전용</option><option value="api">API 전용</option><option value="five_hour">5시간 한도</option><option value="weekly">주간 한도</option><option value="model">특정 모델</option><option value="unknown">확인 필요</option></select></label>
-<label>적용 모델<input id="resource-model" maxlength="100" placeholder="특정 모델일 때 입력"></label>
-<label>마지막 확인<input id="resource-checked" type="datetime-local" required></label>
-<label>만료 시각 · 미제공이면 비움<input id="resource-expires" type="datetime-local"></label>
-<label>사용 활성화<select id="resource-enabled"><option value="">미확인</option><option value="true">활성화 확인</option><option value="false">비활성화 확인</option></select></label>
-<label>자동 충전<select id="resource-auto-reload"><option value="">미확인</option><option value="true">켜짐</option><option value="false">꺼짐</option></select></label>
-<label>남은 지출 한도 · 같은 단위<input id="resource-spend" type="number" min="0" step="any" placeholder="미확인이면 비움"></label>
-<label>지출 제한 없음<select id="resource-unlimited"><option value="">미확인</option><option value="true">제공사에서 확인</option><option value="false">제한 있음</option></select></label>
-<label class="resource-wide">같은 자동 자원과 연결<select id="resource-linked"><option value="">별도 자원</option></select></label>
-</div><div class="resource-actions"><button type="submit" id="resource-save" class="mini-btn">기록 저장</button><button type="button" id="resource-cancel" class="mini-btn">닫기</button><button type="button" id="resource-reload" class="mini-btn" hidden>최신 기록 불러오기 · 입력 초기화</button></div>
-<p id="resource-message" class="hint" role="status"></p></form>
 </section>
 </section>
 <section data-view="plan" id="view-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
@@ -83,4 +64,23 @@
 <div class="cfg-row"><span>월 환산 가치 알림</span><span><input type="number" id="cfg-valert" aria-label="월 환산 가치 알림 (USD)" class="cfg-num" min="0" step="1" placeholder="해제"> USD <button type="button" id="cfg-valert-save" aria-label="월 환산 가치 알림 저장" class="mini-btn">저장</button></span></div>
 </div><p class="hint">알림 권한이 꺼져 있으면 체크해도 발송되지 않습니다.</p></details><details class="panel mobile-fold" open><summary class="section-heading"><h3>프로젝트 예산</h3><span>월 단위(한국 시간) · 토큰과 USD 중 큰 비율로 판단</span></summary><div class="cfg-rows" id="cfg-budgets"></div><div class="table-tools"><input type="text" id="budget-new" placeholder="다른 프로젝트 이름" aria-label="예산을 둘 프로젝트 이름" maxlength="200"><button type="button" class="mini-btn" id="budget-add">추가</button></div><button type="button" class="mini-btn" id="budgets-save" aria-label="프로젝트 예산 저장">저장</button> <span id="budgets-msg" class="cfg-msg" role="status"></span><p class="hint">80%와 100%를 넘으면 상단 알림과 외부 알림(설정 시)으로 알립니다. 둘 다 비우면 예산을 지웁니다.</p></details>
 <details class="panel mobile-fold" open><summary class="section-heading"><h3>외부 알림</h3><span>페이지를 닫아도 수집기가 보냄 · 주소와 토큰은 서버에만 저장</span></summary><div class="cfg-rows" id="cfg-notify"><div class="cfg-row"><span>ntfy 주소<small id="ntfy-state">https://ntfy.sh/토픽</small></span><span><input type="password" id="ntfy-url" aria-label="ntfy 알림 주소" autocomplete="off" placeholder="미설정"> <button type="button" class="mini-btn" data-notify-clear="ntfy_url">지우기</button></span></div><div class="cfg-row"><span>웹훅 주소<small id="webhook-state">Discord·Slack 호환</small></span><span><input type="password" id="webhook-url" aria-label="웹훅 알림 주소" autocomplete="off" placeholder="미설정"> <button type="button" class="mini-btn" data-notify-clear="webhook_url">지우기</button></span></div><div class="cfg-row"><span>Telegram<small id="telegram-state">봇 토큰 · 채팅 ID</small></span><span><input type="password" id="tg-token" aria-label="Telegram 봇 토큰" autocomplete="off" placeholder="봇 토큰"> <input type="text" id="tg-chat" aria-label="Telegram 채팅 ID" autocomplete="off" placeholder="채팅 ID"> <button type="button" class="mini-btn" data-notify-clear="telegram">지우기</button></span></div><div class="cfg-row"><span>보낼 알림</span><span class="notify-events" id="notify-events"></span></div><div class="cfg-row"><span>방해 금지<small>한국 시간 · 비우면 끔</small></span><span><input type="number" id="quiet-start" aria-label="방해 금지 시작 시각 (한국 시간)" class="cfg-num" min="0" max="23" placeholder="—"> 시 ~ <input type="number" id="quiet-end" aria-label="방해 금지 종료 시각 (한국 시간)" class="cfg-num" min="0" max="23" placeholder="—"> 시</span></div></div><button type="button" class="mini-btn" id="notify-save" aria-label="외부 알림 설정 저장">저장</button> <button type="button" class="mini-btn" id="notify-test">테스트 보내기</button> <span id="notify-msg" class="cfg-msg" role="status"></span><p class="hint">빈 입력은 저장된 값을 유지합니다. 상태가 바뀔 때만 보냅니다(잔여 적음·소진·초기화 회복·사용량 급증·수집기 재시작·수집 실패 30분 지속). 전송 이력은 상태 탭의 알림 발송 이력에 표시됩니다.</p><p class="hint" id="cfg-refresh-msg"></p></details>
-</section></main><footer>LLM Usage · 개인 구독 대시보드 <span>대화 본문과 인증정보는 통계에 저장하지 않습니다.</span><p id="shortcuts" class="hint" hidden>단축키 · <kbd>r</kbd> 지금 갱신 · <kbd>1</kbd>~<kbd>5</kbd> 한도·계획·사용량·리포트·상태 · <kbd>,</kbd> 설정 · <kbd>/</kbd> 검색 · <kbd>?</kbd> 이 안내</p></footer></div></body></html>
+</section></main><footer>LLM Usage · 개인 구독 대시보드 <span>대화 본문과 인증정보는 통계에 저장하지 않습니다.</span><p id="shortcuts" class="hint" hidden>단축키 · <kbd>r</kbd> 지금 갱신 · <kbd>1</kbd>~<kbd>5</kbd> 한도·계획·사용량·리포트·상태 · <kbd>,</kbd> 설정 · <kbd>/</kbd> 검색 · <kbd>?</kbd> 이 안내</p></footer><dialog id="resource-dialog" class="resource-dialog" aria-labelledby="resource-editor-title">
+<form id="resource-editor" class="resource-editor">
+<h3 id="resource-editor-title">수동 자원 기록</h3><p class="hint">직접 확인한 값만 기록하세요. 초기화권 사용·크레딧 구매는 제공사 화면에서 진행합니다. 시각은 한국 시간입니다.</p>
+<div class="resource-fields">
+<label>서비스<select id="resource-route"><option value="codex">Codex</option><option value="claude-code">Claude</option><option value="antigravity">Antigravity</option><option value="opencode-go">OpenCode Go</option><option value="devin">Devin</option></select></label>
+<label>종류<select id="resource-kind"><option value="usage_credit">추가 사용 크레딧</option><option value="api_credit">API 전용 크레딧</option><option value="reset">초기화권</option></select></label>
+<label class="resource-wide">이름<input id="resource-label" required maxlength="80" placeholder="예: 이번 달 API 크레딧"></label>
+<label>잔액·개수<input id="resource-amount" type="number" min="0" max="1000000000000" step="any" required></label>
+<label>단위<select id="resource-unit"><option value="credit">크레딧</option><option value="USD">USD</option><option value="KRW">KRW</option><option value="JPY">JPY</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="CAD">CAD</option><option value="AUD">AUD</option><option value="count">회</option><option value="minor">제공사 소액 단위</option></select></label>
+<label>적용 범위<select id="resource-scope"><option value="subscription">구독 경로의 추가 사용</option><option value="cloud">클라우드 세션 전용</option><option value="api">API 전용</option><option value="five_hour">5시간 한도</option><option value="weekly">주간 한도</option><option value="model">특정 모델</option><option value="unknown">확인 필요</option></select></label>
+<label>적용 모델<input id="resource-model" maxlength="100" placeholder="특정 모델일 때 입력"></label>
+<label>마지막 확인<input id="resource-checked" type="datetime-local" required></label>
+<label>만료 시각 · 미제공이면 비움<input id="resource-expires" type="datetime-local"></label>
+<label>사용 활성화<select id="resource-enabled"><option value="">미확인</option><option value="true">활성화 확인</option><option value="false">비활성화 확인</option></select></label>
+<label>자동 충전<select id="resource-auto-reload"><option value="">미확인</option><option value="true">켜짐</option><option value="false">꺼짐</option></select></label>
+<label>남은 지출 한도 · 같은 단위<input id="resource-spend" type="number" min="0" step="any" placeholder="미확인이면 비움"></label>
+<label>지출 제한 없음<select id="resource-unlimited"><option value="">미확인</option><option value="true">제공사에서 확인</option><option value="false">제한 있음</option></select></label>
+<label class="resource-wide">같은 자동 자원과 연결<select id="resource-linked"><option value="">별도 자원</option></select></label>
+</div><p id="resource-message" class="hint" role="status"></p><div class="resource-actions"><button type="submit" id="resource-save" class="mini-btn">기록 저장</button><button type="button" id="resource-cancel" class="mini-btn">닫기</button><button type="button" id="resource-reload" class="mini-btn" hidden>최신 기록 불러오기 · 입력 초기화</button></div>
+</form></dialog></div></body></html>
