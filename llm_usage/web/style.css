@@ -86,8 +86,12 @@ td{padding:14px 12px;border-bottom:1px solid var(--line);text-align:right;font-v
 td small{display:block;color:var(--subtle);font-size:var(--fs-meta);margin-top:4px}
 tfoot td{background:var(--raised);font-weight:650}
 summary{cursor:pointer;font-weight:600;margin-bottom:12px}
-.source-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:18px}
-.source{font-size:var(--fs-meta);line-height:1.7;color:var(--muted);padding:12px;border:1px solid var(--line);border-radius:5px}
+.source-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:16px}
+.source{font-size:var(--fs-meta);line-height:1.6;color:var(--muted);padding:9px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
+.source-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:0;font-size:var(--fs-small);line-height:1.5;color:var(--muted)}
+.source-line small{flex:none;font-variant-numeric:tabular-nums}
+.source-detail{display:block;overflow-wrap:anywhere}
+#coverage{font-size:var(--fs-small);line-height:1.7;max-width:75ch}
 .source.stale{opacity:.55}
 .source strong{color:var(--ink)}
 #error{background:var(--error-bg);color:var(--error-ink);padding:15px;border-radius:7px;margin-bottom:18px}
@@ -354,10 +358,14 @@ tr[data-scope]:hover{background:var(--raised)}
 .table-wrap thead th{position:sticky;top:0;z-index:2;background:var(--raised);box-shadow:0 1px 0 var(--line)}
 [data-panel="models"] .table-wrap{max-height:75vh}
 @media(max-width:700px){.heat-grid{min-width:520px}}
-.mobile-fold>summary{list-style:none}
-.mobile-fold>summary::-webkit-details-marker{display:none}
-.mobile-fold>summary h3{display:inline;font-size:15px}
-.mobile-fold:not([open])>summary{margin-bottom:0}
+:is(.mobile-fold,.fold)>summary{list-style:none}
+:is(.mobile-fold,.fold)>summary::-webkit-details-marker{display:none}
+:is(.mobile-fold,.fold)>summary h3{display:inline;font-size:15px}
+:is(.mobile-fold,.fold):not([open])>summary{margin-bottom:0}
+/* Every folding panel shows whether it is open, on every width. */
+:is(.mobile-fold,.fold)>summary::after{content:'＋';color:var(--muted);margin-left:6px}
+:is(.mobile-fold,.fold)[open]>summary::after{content:'−'}
+:is(.mobile-fold,.fold)>summary>span{margin-left:auto}
 @media(max-width:600px){
 
 
@@ -417,11 +425,8 @@ tr[data-scope]:hover{background:var(--raised)}
  .stat{padding:12px}
  .stat-value{font-size:23px;margin:5px 0}
  .panel{padding:13px;margin-bottom:10px}
- .panel h3,.mobile-fold>summary h3{font-size:13px}
- .mobile-fold>summary{min-height:32px;line-height:1.6;font-size:12px}
- .mobile-fold>summary::after{content:'＋';color:var(--muted);margin-left:6px}
- .mobile-fold[open]>summary::after{content:'−'}
- .mobile-fold>summary>span{margin-left:auto}
+ .panel h3,:is(.mobile-fold,.fold)>summary h3{font-size:13px}
+ :is(.mobile-fold,.fold)>summary{min-height:32px;line-height:1.6;font-size:12px}
  .mobile-fold .quality-stats{gap:13px;margin:15px 0}
  .quality-stats strong{font-size:20px}
  .insight-grid,.chart-grid{grid-template-columns:1fr;gap:0}
@@ -431,7 +436,7 @@ tr[data-scope]:hover{background:var(--raised)}
  .data-gap{padding:9px 11px;margin-bottom:10px;font-size:var(--fs-meta)}
  .data-gap span{font-size:var(--fs-meta)}
  .hint{margin-top:9px}
- .source-list{grid-template-columns:1fr}
+ .source-list{grid-template-columns:1fr;gap:6px}
  .sub-row{display:grid;grid-template-columns:1fr;gap:3px}
  .sub-row>strong{min-width:0}
  .insight-table{max-height:230px}

@@ -135,6 +135,18 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             credit=next(r for r in items if r['route']=='claude-code' and r['pool_key']=='prepaid-credits')
             expect(page.locator(f'[data-resource-id="{credit["id"]}"] .resource-expiry')).to_contain_text('일부 잔액 다음 만료')
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+            # When each quota comes back is readable without opening anything.
+            expect(page.locator('#reset-timeline')).to_be_visible()
+            expect(page.locator('#reset-timeline .reset-item')).to_have_count(4)
+            expect(page.locator('#reset-timeline .reset-item').first).to_contain_text('3시간')
+            if width<600:
+                windows=page.locator('[data-quota="codex"] .ov-win')
+                expect(windows).to_have_count(2)
+                for index in range(2):expect(windows.nth(index).locator('small')).to_contain_text('시간')
+            # Resource rows stay short: one line per fact, plus one line per reset grant.
+            sizes=page.locator('#resource-list .resource-card').evaluate_all(
+                "cs=>cs.map(c=>[c.getBoundingClientRect().height,c.querySelectorAll('.resource-grants li').length])")
+            assert sizes and all(height<=180+50*max(0,grants-1) for height,grants in sizes),sizes
             page.screenshot(path=str(output/f'work-now-{width}.png'),full_page=True)
             if width==1440:
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility='hidden'")
