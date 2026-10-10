@@ -170,8 +170,21 @@ fresh·계정 식별만 확인했으며, 제공사 화면의 실제 보유 자�
   wheel/sdist 파일·메타데이터·웹 자산 해시, 소스 밖 wheel 설치와 신규 태그 checkout 설치 통과.
 - README·설치·운영·사용 안내와 변경 기록을 갱신하고 프로젝트·lock 버전을 0.2.1로 맞췄다.
   외부 의존성은 0.2.0과 완전히 같다. 앞선 구독 한도 우선 배치·Claude 자원 수신 수정도 포함한다.
-- PR/main·태그·릴리스·운영 배포는 검증 완료 후 진행한다. 버전 메타데이터를 포함한 운영
-  환경 동기화 전에 두 서비스를 정지해야 하며, 기존 공개 태그와 릴리스 파일은 변경하지 않는다.
+- [PR #26](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/26)의 필수 CI 통과 후
+  `cd260975632ca541ac0dc005d27c02095e52a467`로 main에 병합했다.
+  [main CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/38016378436) 성공 후
+  같은 커밋에 주석 태그 `v0.2.1`을 만들고 원격에 push했다.
+- [Release CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/38016505207)의
+  artifact ID `11656467516`에서 네 파일을 게시했다.
+  [v0.2.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.2.1)은 정식 immutable
+  릴리스다. 게시 파일을 다시 내려받아 SHA256·manifest·커밋/태그/CI 출처와 웹 자산 18개를
+  검증했고 설명에 변경·업데이트·출처를 반영했다. 기존 공개 태그와 파일은 수정하지 않았다.
+- 운영 DB·기존 가상환경·패키지 목록·현재 릴리스의 비공개 복구 백업을 준비하고
+  DB quick_check·환경 파일·기존 릴리스 경로를 확인했다. 새 코드는 별도 릴리스 디렉터리에 준비했다.
+- **0.2.1 운영 전환은 관리자 정지 인증을 기다리는 중이다.** `sudo -n systemctl stop`은
+  대화형 인증 필요로 실패했으며 운영 환경과 current 링크는 아직 변경하지 않았다.
+  사용자에게 두 서비스 정지를 요청했다. 정지 확인 후 환경 동기화·정확한 태그 전환·재시작,
+  health·새 heartbeat·실제 인증 화면의 자원별 만료일을 검증해야 한다.
 
 ## 참고
 
