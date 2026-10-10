@@ -8,7 +8,7 @@ WSL은 systemd를 활성화한 배포판을 사용합니다. Windows/macOS 네�
 Tailscale에서 HTTPS와 Serve를 준비하고 `tailscale status`로 본인 로그인을 확인합니다. tagged device는 개인 계정으로 초기화할 수 없습니다.
 HTTPS 9444와 로컬 8766을 사용합니다. 설치기는 기존 Funnel·다른 프록시 충돌을 거부합니다.
 
-[README의 v0.2.1 설치 명령](../README.md)을 따릅니다. v0.2.1은 uv.lock을 포함한 릴리스이며 원격 main은 후속 개발 변경을 포함할 수 있습니다. 릴리스 태그 clone은 detached HEAD이므로 `git switch -c main`으로 설치·업데이트용 로컬 main을 생성합니다.
+[README의 v0.3.0 설치 명령](../README.md)을 따릅니다. v0.3.0은 uv.lock을 포함한 릴리스이며 원격 main은 후속 개발 변경을 포함할 수 있습니다. 릴리스 태그 clone은 detached HEAD이므로 `git switch -c main`으로 설치·업데이트용 로컬 main을 생성합니다.
 가상환경은 checkout의 `.venv`에 만듭니다. wheel·소스 ZIP만 있는 환경은 Git 기반 서비스 업데이트를 지원하지 않습니다.
 `init`은 설정을 생성하고 `collect --once`는 로컬 수집·계정 조회를 실행합니다.
 설치기는 root로 시스템 유닛·Serve를 설정하지만 서비스는 지정한 일반 사용자로 실행합니다.
