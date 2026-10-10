@@ -7,7 +7,7 @@ with sync_playwright() as p:
     page=browser.new_page(service_workers='block',viewport={'width':1440,'height':1000})
     fixture_page(page)
     errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
-    page.goto('https://dashboard.test/?view=analysis')
+    page.goto('https://dashboard.test/?view=usage')
     expect(page.locator('#chart > svg')).to_be_visible()
     expect(page.locator('#refresh')).to_be_enabled()
     for width in (1440,390):

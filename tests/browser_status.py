@@ -91,7 +91,7 @@ with sync_playwright() as p:
         expect(note).to_have_count(1)
         expect(note).to_contain_text('5시간 창을 보고')
         expect(note).to_be_visible()
-        page.locator('#tabs [data-view="sources"]').click()
+        page.locator('#tabs [data-view="status"]').click()
         expect(page.locator('#sources')).to_contain_text('claude-code · 미사용')
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         page.screenshot(path=str(output/f'status-{width}.png'), full_page=True)

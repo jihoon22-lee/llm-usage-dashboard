@@ -5,6 +5,7 @@ no provider request, credit purchase, redemption or notification is performed.
 """
 import argparse
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -95,14 +96,31 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#work-decision')).to_contain_text('Claude')
             expect(page.locator('#work-decision')).to_contain_text('Sonnet')
             expect(page.locator('#work-decision')).not_to_contain_text('Opus 기준 보기')
+            # One-line plan summary above the quota heading: same decision as the plan tab, opens it.
+            summary=page.locator('#plan-summary')
+            expect(summary).to_be_visible()
+            expect(summary).to_contain_text('계획 · Codex 공통 한도 2시간')
+            expect(summary).to_contain_text('부족 예상 · 약 1시간 30분')
+            expect(summary).to_contain_text('대안 Claude Sonnet')
+            height=summary.bounding_box()['height']
+            assert height<=(60 if width<=600 else 46),(width,height)
+            assert summary.bounding_box()['y']<page.locator('#view-quota > .section-heading').bounding_box()['y']
+            summary.click()
+            expect(page.locator('#work-now')).to_be_visible()
+            expect(page.locator('#view-quota')).to_be_hidden()
+            page.locator('#tab-quota').click()
+            expect(page.locator('#plan-summary')).to_be_visible()
             # Subscription quota must be the first overview content on every width.
-            expect(page.locator('#view-overview > .section-heading h2').first).to_have_text('구독 한도')
+            expect(page.locator('#view-quota > .section-heading h2').first).to_have_text('구독 한도')
             if width<600:page.locator('[data-quota="codex"]').click()
             page.evaluate('scrollTo(0,0)')
             quota=page.locator('#quota-codex').bounding_box()
             assert quota['y'] < 900
             assert page.locator('#limits').bounding_box()['y'] < page.locator('#resource-panel').bounding_box()['y']
-            assert page.locator('#resource-panel').bounding_box()['y'] < page.locator('#work-now').bounding_box()['y']
+            # 지금 작업 has its own tab after the quota tab; the quota tab never shows it.
+            expect(page.locator('#work-now')).to_be_hidden()
+            tabs=page.locator('#tabs [role=tab]').evaluate_all('ts=>ts.map(t=>t.id)')
+            assert tabs.index('tab-quota')==0 and tabs.index('tab-plan')==1,tabs
             if width==1440:page.screenshot(path=str(output/'dashboard.png'))
             expect(page.locator('#quota-codex .bucket-pace').first).to_be_visible()
             assert page.locator('#quota-codex .bucket-detail[open]').count()==0
@@ -152,6 +170,40 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility='hidden'")
                 page.locator('#resource-panel').screenshot(path=str(output/'resource-expiry.png'))
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility=''")
+            # The manual editor is a modal dialog: centred panel on desktop, bottom sheet on phones.
+            page.locator('#resource-add').click()
+            expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+            assert page.evaluate("document.getElementById('resource-dialog').matches(':modal')")
+            expect(page.locator('#resource-label')).to_be_focused()
+            box=page.locator('#resource-dialog').bounding_box()
+            if width>600:
+                assert abs(box['width']-640)<=1 and abs(box['x']+box['width']/2-width/2)<=1,box
+            else:
+                assert abs(box['x'])<=1 and abs(box['width']-width)<=1 and abs(box['y']+box['height']-900)<=1 and box['height']<=900*.9+1,box
+            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+            assert page.evaluate("(() => { const d=document.getElementById('resource-dialog'); return d.scrollWidth<=d.clientWidth; })()")
+            expect(page.locator('#resource-save')).to_be_in_viewport()
+            if width in (1440,390):page.screenshot(path=str(output/f'resource-dialog-{width}.png'))
+            page.keyboard.press('Escape')
+            expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+            expect(page.locator('#resource-add')).to_be_focused()
+            # Resources ending within a day become alert chips: the Codex reset credit due in an hour
+            # (and the Claude one due in a day), not the one due in 2 days or the one already past.
+            page.locator('#tab-plan').click()
+            expect(page.locator('#view-quota')).to_be_hidden()
+            if width<=600 and page.locator('#alerts-toggle').get_attribute('aria-expanded')!='true':page.locator('#alerts-toggle').click()
+            chips=page.locator('.alert-chip').all_text_contents()
+            codex_chips=[c for c in chips if '초기화권' in c and c.startswith('Codex')]
+            assert len(codex_chips)==1 and re.fullmatch(r'Codex 초기화권 1개 \d+분 후 만료',codex_chips[0]),chips
+            assert any(re.fullmatch(r'Claude 초기화권 1개 2\d시간 \d+분 후 만료',c) for c in chips),chips
+            assert not any('사용 크레딧' in c and '만료' in c for c in chips),chips
+            assert not any('2일' in c for c in chips),chips
+            page.locator('.alert-chip',has_text='Codex 초기화권').click()
+            expect(page.locator('#view-quota')).to_be_visible()
+            expect(page.locator(f'[data-resource-id="{codex_reset["id"]}"]')).to_be_in_viewport()
+            page.locator('#tab-plan').click()
+            expect(page.locator('#work-now')).to_be_visible()
+            if width==1440:page.screenshot(path=str(output/'plan-1440.png'),full_page=True)
             page.locator('#plan-model').select_option('special')
             expect(page.locator('#work-decision')).to_contain_text('구독 한도 소진')
             page.locator('#plan-route').select_option('claude-code')
@@ -160,8 +212,13 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             page.locator('#plan-model').select_option('sonnet')
             expect(page.locator('#work-decision')).to_contain_text('관측상 여유')
             expect(page.locator('#work-decision')).not_to_contain_text('70시간')
-            page.locator('#tab-analysis').click()
-            page.locator('#work-budget > summary').click()
+            expect(page.locator('#work-budget')).to_be_visible()  # no click needed to open the forecast
+            # Plan tab rhythm: no large empty band before the forecast, and on phones the brief drops below the heading.
+            box=lambda sel:page.locator(sel).bounding_box()
+            assert box('#work-budget')['y']-(box('.plan-evidence summary')['y']+box('.plan-evidence summary')['height'])<=(30 if width>600 else 26),width
+            title,brief=box('#work-budget-title'),box('#work-budget-brief')
+            assert (brief['y']>=title['y']+title['height']-1) if width<=600 else abs(brief['y']+brief['height']/2-title['y']-title['height']/2)<=title['height'],(title,brief)
+            assert brief['x']+brief['width']<=width and title['x']+title['width']<=width
             page.locator('#plan-today-hours').fill('3')
             page.locator('#plan-week-hours').fill('10')
             page.locator('#work-budget-controls button').click()
@@ -173,8 +230,29 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         context=browser.new_context(viewport={'width':390,'height':900},service_workers='block')
         page=context.new_page();page_fixture(page)
         errors=[];page.on('pageerror',lambda error:errors.append(str(error)));watch_csp(page,errors)
-        page.goto(ORIGIN);expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+        shortcuts=call('/manifest.json').get_json()['shortcuts']
+        assert [(s['name'],s['url']) for s in shortcuts]==[('한도','/?view=quota'),('계획','/?view=plan')],shortcuts
+        for shortcut,tab in zip(shortcuts,('quota','plan')):
+            page.goto(ORIGIN+shortcut['url'])
+            expect(page.locator('#tab-'+tab)).to_have_attribute('aria-selected','true')
+            expect(page.locator('#view-'+tab)).to_be_visible()
+        page.goto(ORIGIN+'/?view=quota');expect(page.locator('#work-decision')).to_contain_text('부족 예상')
         page.locator('#resource-add').click()
+        # Escape asks before dropping typed input, keeps the dialog on 'cancel', closes on accept.
+        page.locator('#resource-label').fill('임시 입력')
+        messages=[]
+        page.once('dialog',lambda d:(messages.append(d.message),d.dismiss()))
+        page.keyboard.press('Escape')
+        assert messages==['저장하지 않은 입력을 닫을까요?'],messages
+        expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+        expect(page.locator('#resource-label')).to_have_value('임시 입력')
+        page.once('dialog',lambda d:(messages.append(d.message),d.accept()))
+        page.keyboard.press('Escape')
+        assert len(messages)==2
+        expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+        expect(page.locator('#resource-add')).to_be_focused()
+        page.locator('#resource-add').click()
+        expect(page.locator('#resource-label')).to_have_value('')
         page.locator('#resource-kind').select_option('api_credit')
         page.locator('#resource-label').fill('API 전용 검토 기록')
         page.locator('#resource-amount').fill('20')
@@ -195,6 +273,13 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.locator('#resource-reload').click()
         expect(page.locator('#resource-amount')).to_have_value('12')
         page.locator('#resource-cancel').click()
+        expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
+        # An edit button reopens the same dialog and gets focus back on close.
+        page.locator(f'[data-resource-edit="{record["id"]}"]').click()
+        expect(page.locator('#resource-dialog')).to_have_attribute('open','')
+        expect(page.locator('#resource-editor-title')).to_have_text('수동 기록 수정')
+        page.locator('#resource-cancel').click()
+        expect(page.locator(f'[data-resource-edit="{record["id"]}"]')).to_be_focused()
 
         # An ambiguous network failure after committing a new record is retried
         # with the same request identity and does not create a second resource.
@@ -225,6 +310,8 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.evaluate('refresh()')
         expect(page.locator('#offline')).to_be_visible()
         expect(page.locator('#work-decision')).to_contain_text('판단 보류')
+        expect(page.locator('#plan-summary')).to_contain_text('계획 · 판단 보류 — 오프라인 사본')
+        for text in ('부족 예상','1시간 30분','대안','Sonnet','Codex 공통 한도'):expect(page.locator('#plan-summary')).not_to_contain_text(text)
         expect(page.locator('#work-decision')).not_to_contain_text('Sonnet 기준 보기')
         expect(page.locator('#quota-overview')).not_to_contain_text('최근 확인')
         assert page.locator('.decision-alternatives button').count()==0
@@ -233,6 +320,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         page.unroute('**/api/limits*')
         page.evaluate('refresh()')
         expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+        expect(page.locator('#plan-summary')).to_contain_text('부족 예상 · 약 1시간 30분')
         expect(page.locator('#offline')).to_be_hidden()
         assert not errors,errors
         context.close();browser.close()

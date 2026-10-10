@@ -101,7 +101,8 @@ with sync_playwright() as p:
     expect(alerts).to_contain_text('단가 미등록 모델 1개 · brand-new-model')
     expect(alerts).to_contain_text('fixture-project 월 예산 90%')
     # Sources: summary, problem-first groups, internal work folded, a hint per status.
-    page.locator('#tabs [data-view="sources"]').click()
+    page.locator('#tabs [data-view="status"]').click()
+    expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
     expect(page.locator('.source-summary')).to_contain_text('정상 3')
     expect(page.locator('.source-summary')).to_contain_text('확인 필요 1')
     expect(page.locator('.source-summary')).to_contain_text('실패·미수집 1')
@@ -112,8 +113,8 @@ with sync_playwright() as p:
     assert internal.get_attribute('open') is None
     expect(page.locator('#sources')).to_contain_text('다음 주기에 다시 시도')
     expect(page.locator('#sources')).to_contain_text('claude-code · 미사용')
-    # Analysis: the bucket containing now is marked, and numbers can be shortened.
-    page.locator('#tabs [data-view="analysis"]').click()
+    # Usage: the bucket containing now is marked, and numbers can be shortened.
+    page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#chart .chart-current-label')).to_have_text('진행 중')
     first_total = page.locator('#rows tr').first.locator('.total-cell')
     exact = first_total.inner_text()
@@ -122,8 +123,7 @@ with sync_playwright() as p:
     assert first_total.inner_text() != exact and first_total.locator('[data-tip]').count() == 1
     page.locator('#num-compact').click()
     expect(first_total).to_have_text(exact)
-    # Insights: a session opens its detail and closes again; value bars mark break-even.
-    page.locator('#tabs [data-view="insights"]').click()
+    # A session opens its detail and closes again; project budgets show in the projects table.
     page.locator('.sess-open').first.click()
     detail = page.locator('.sess-detail-row')
     expect(detail).to_contain_text('fixture-project')
@@ -131,14 +131,14 @@ with sync_playwright() as p:
     expect(detail.locator('.sess-hours rect')).to_have_count(2)
     page.locator('.sess-open').first.click()
     expect(detail).to_have_count(0)
-    expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
     expect(page.locator('#projects')).to_contain_text('이번 달 예산 90% · 900/1K 토큰')
+    page.locator('#tabs [data-view="reports"]').click()
     reports = page.locator('#reports')
     expect(reports).to_contain_text('2026-09-21 ~ 2026-09-27')
     expect(reports).to_contain_text('전주 대비 +13%')
     expect(reports).to_contain_text('한도 소진: Claude 5시간 2회')
     # Settings: secrets are write-only; save, clear and test go through the API only.
-    page.locator('#tabs [data-view="settings"]').click()
+    page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')
     expect(page.locator('#notify-events input')).to_have_count(8)
     budget = page.locator('#cfg-budgets [data-budget="fixture-project"]')
@@ -164,7 +164,7 @@ with sync_playwright() as p:
     page.locator('#notify-test').click()
     expect(page.locator('#notify-msg')).to_contain_text('테스트를 보냈습니다: ntfy, webhook')
     # The unpriced-model chip lands on the pricing table filtered to unset rates.
-    page.locator('#tabs [data-view="overview"]').click()
+    page.locator('#tabs [data-view="quota"]').click()
     page.locator('.alert-chip', has_text='단가 미등록').click()
     expect(page.locator('#price-unset')).to_have_attribute('aria-pressed', 'true')
     page.screenshot(path=str(output/'features-desktop.png'), full_page=True)
@@ -178,8 +178,8 @@ with sync_playwright() as p:
     expect(mobile.locator('#refresh')).to_be_enabled()
     box = mobile.locator('#tabs').bounding_box()
     assert abs(box['y']+box['height']-844) <= 1, box
-    mobile.locator('#tabs [data-view="insights"]').click()
-    expect(mobile.locator('#view-insights')).to_be_visible()
+    mobile.locator('#tabs [data-view="reports"]').click()
+    expect(mobile.locator('#view-reports')).to_be_visible()
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
     mobile.screenshot(path=str(output/'features-mobile.png'), full_page=True)
     assert not [p for p in posts if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')], posts

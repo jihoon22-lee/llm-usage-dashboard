@@ -30,7 +30,7 @@ with sync_playwright() as p:
             q={k:v for k,v in q.items() if k in ('period','start','end','granularity','group','cumulative','compare','scope','sections')}
             route.fulfill(json=store.usage(**q))
         page.route(origin+'/api/usage?*',api);page.route(origin+'/api/limits',api)
-    assert page.goto(origin+'/?view=analysis').status==200
+    assert page.goto(origin+'/?view=usage').status==200
     expect(page.locator('#refresh')).to_be_enabled()
     page.evaluate("$('auto').checked=false;$('auto').dispatchEvent(new Event('change'))")
     def select(selector,value):
@@ -41,10 +41,8 @@ with sync_playwright() as p:
     assert page.evaluate("!lastUsage.unavailable_routes.some(r=>r.route==='antigravity')")
     expect(page.locator('#usage-gaps')).to_be_hidden()
     expect(page.locator('#rows')).to_contain_text('gemini-3.8-flash')
-    page.locator('#tabs [data-view="insights"]').click()
     page.wait_for_function("()=>'insights' in (lastUsage||{})")
     expect(page.locator('#cache-rows')).to_contain_text('gemini-3.8-flash')
-    page.locator('#tabs [data-view="analysis"]').click()
     total=page.evaluate("lastUsage.rows.filter(r=>r.route==='antigravity').reduce((n,r)=>n+total(r),0)")
     assert total>0
     select('#group','route')
@@ -63,7 +61,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(output/'antigravity-history-desktop.png'),full_page=True)
     select('#group','provider');select('#cumulative','0')
     page.set_viewport_size({'width':390,'height':844})
-    page.locator('#tabs [data-view="overview"]').click()
+    page.locator('#tabs [data-view="quota"]').click()
     expect(page.locator('#quota-overview')).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     page.screenshot(path=str(output/'antigravity-history-mobile.png'),full_page=True)

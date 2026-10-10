@@ -22,7 +22,7 @@ with sync_playwright() as p:
     with store.connect() as c:
         store.event(c,'unpriced-output',time.time()-60,'Example','codex','unpriced-example',dict(uncached_input=1000000,output=20))
     page=browser.new_page(service_workers='block');fixture_page(page)
-    page.goto(ORIGIN+'/?view=analysis');expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+    page.goto(ORIGIN+'/?view=usage');expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     page.locator('#group').select_option('model');expect(page.locator('#refresh')).to_be_enabled()
     page.locator('#metric').select_option('cost');expect(page.locator('#refresh')).to_be_enabled()
     for mode in ('0','1'):
@@ -57,8 +57,8 @@ with sync_playwright() as p:
         if args.artifacts and width in (320,390,1440):
             page.screenshot(path=str(args.artifacts/f'settings-{width}.png'),full_page=True)
             page.locator('#cfg-refresh').locator('xpath=ancestor::details').screenshot(path=str(args.artifacts/f'notifications-{width}.png'))
-        page.locator('#tab-analysis').focus();page.keyboard.press('ArrowRight')
-        expect(page.locator('#tab-insights')).to_have_attribute('aria-selected','true')
+        page.locator('#tab-usage').focus();page.keyboard.press('ArrowRight')
+        expect(page.locator('#tab-reports')).to_have_attribute('aria-selected','true')
         assert not errors,errors
         page.close()
     with tempfile.TemporaryDirectory() as folder:
@@ -68,8 +68,8 @@ with sync_playwright() as p:
         page=browser.new_page(service_workers='block');fixture_page(page);page.goto(ORIGIN+'/')
         expect(page.locator('#first-use')).to_be_visible()
         expect(page.locator('#first-use')).to_contain_text('아직 수집된 사용 기록이 없습니다')
-        page.locator('#first-use-sources').click();expect(page.locator('#tab-sources')).to_have_attribute('aria-selected','true')
-        page.locator('#tab-insights').click();expect(page.locator('#quality')).to_contain_text('기록된 해석 실패가 없습니다')
+        page.locator('#first-use-sources').click();expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+        expect(page.locator('#quality')).to_contain_text('기록된 해석 실패가 없습니다')
         assert '모든 기록 줄을 해석했습니다' not in page.locator('#quality').inner_text()
         page.close()
     browser.close()

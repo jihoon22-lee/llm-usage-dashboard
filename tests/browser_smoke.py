@@ -32,8 +32,8 @@ if args.origin:
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
         assert page.goto(live+'/').status==200
         expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+        page.locator('#tab-usage').click()
         expect(page.locator('#cards .stat').first).to_be_visible()
-        page.locator('#tab-analysis').click()
         expect(page.locator('#chart > svg')).to_be_visible()
         page.set_viewport_size({'width':390,'height':844})
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
@@ -59,22 +59,45 @@ with sync_playwright() as p:
                 route.fulfill(path=web/Path(path).name,content_type='text/css' if path.endswith('.css') else 'text/javascript')
             else:
                 route.fallback()
-        # Match query strings too: view URLs like /?view=analysis must serve preview HTML.
+        # Match query strings too: view URLs like /?view=usage must serve preview HTML.
         page.route(url+'**',serve)
     assert page.goto(url).status==200
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
-    # Overview is the default view: summary cards and quota cards.
-    expect(page.locator('section[data-view="overview"]')).to_be_visible()
-    expect(page.locator('#cards .stat').first).to_be_visible()
+    # Quota is the default view: quota cards; period cards live on the usage tab.
+    expect(page.locator('section[data-view="quota"]')).to_be_visible()
+    expect(page.locator('#limits .limit-card').first).to_be_visible()
+    expect(page.locator('#cards')).to_be_hidden()
+    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()][:5]==['한도','계획','사용량','리포트','상태']
+    # Old view names in bookmarked URLs still land on the renamed tabs.
+    for old,new in (('overview','quota'),('analysis','usage'),('insights','reports'),('sources','status')):
+        page.goto(url+'?view='+old)
+        expect(page.locator(f'#tab-{new}')).to_have_attribute('aria-selected','true')
+        expect(page.locator(f'#view-{new}')).to_be_visible()
+        if new!='quota':assert 'view='+new in page.url,page.url
+    page.goto(url);expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+    # The forecast sits on the plan tab next to 지금 작업, visible without any click.
+    page.locator('#tab-plan').click()
+    expect(page.locator('#work-now')).to_be_visible()
+    expect(page.locator('#work-budget')).to_be_visible()
+    expect(page.locator('#plan-today-hours')).to_be_visible()
+    page.locator('#tab-quota').click()
+    # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
+    page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
+    assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
+    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue']
+    assert page.evaluate("[...document.querySelectorAll('#view-usage>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
+    page.evaluate("storage.set('llmOrder','{}')");page.reload()
+    expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     # Dormant routes (ended or past quota_hide_days) fold into .quota-dormant;
     # every route still renders a card somewhere inside #limits.
     assert page.locator('#limits .limit-card').count()==5
     assert page.locator('#limits > .limit-card').count()>=3
     expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단')
     # Tab bar switches views and syncs ?view= to the URL.
-    page.locator('#tabs [data-view="analysis"]').click()
-    expect(page.locator('section[data-view="analysis"]')).to_be_visible()
-    assert 'view=analysis' in page.url
+    page.locator('#tabs [data-view="usage"]').click()
+    expect(page.locator('section[data-view="usage"]')).to_be_visible()
+    assert 'view=usage' in page.url
+    expect(page.locator('#cards .stat').first).to_be_visible()
     expect(page.locator('#chart > svg')).to_be_visible()
     expect(page.locator('#composition .donut')).to_be_visible()
     expect(page.locator('#ranking svg').first).to_be_visible()
@@ -105,36 +128,58 @@ with sync_playwright() as p:
     expect(page.locator('#chart-tooltip')).to_contain_text('7일 전')
     page.keyboard.press('Escape')
     with page.expect_response(lambda r:'/api/usage?' in r.url and r.status==200):page.locator('#compare').select_option('')
-    # Instant shared tooltip on the heatmap.
+    # Usage view also hosts the filter-dependent insight panels.
+    expect(page.locator('#sessions tr').first).to_be_visible()
+    expect(page.locator('#projects tr').first).to_be_visible()
+    # Instant shared tooltip on the heatmap. Park the real pointer in the page corner first:
+    # left over the filter, a re-render shifting a heading under it fires a real pointerover
+    # that (correctly) closes the tooltip before the assertion runs.
+    page.mouse.move(0,0)
     page.locator('.heat-cell').first.dispatch_event('pointerover')
     expect(page.locator('#tip')).to_be_visible()
     page.screenshot(path=str(artifacts/'dashboard-desktop.png'),full_page=True)
-    # Insights view: subscription value rows and the activity calendar.
-    page.locator('#tabs [data-view="insights"]').click()
-    assert 'view=insights' in page.url
+    # Reports view: subscription value rows and the activity calendar.
+    page.locator('#tabs [data-view="reports"]').click()
+    assert 'view=reports' in page.url
     expect(page.locator('#subvalue .sub-row').first).to_be_visible()
     # Insights load lazily after the tab switch; wait for the calendar before
     # counting its cells.
     expect(page.locator('#calendar .cal-cell[data-tip]').first).to_be_visible()
     assert page.locator('#calendar .cal-cell[data-tip]').count()>90
-    expect(page.locator('#sessions tr').first).to_be_visible()
-    expect(page.locator('#projects tr').first).to_be_visible()
     page.locator('#calendar .cal-cell[data-tip]').last.dispatch_event('pointerover')
     expect(page.locator('#tip')).to_be_visible()
-    # Sources view lists collectors.
-    page.locator('#tabs [data-view="sources"]').click()
+    # Status view lists collectors.
+    page.locator('#tabs [data-view="status"]').click()
     assert page.locator('#sources .source').count()>0
-    # Settings view renders config editors (read-only checks; no mutation on live).
-    page.locator('#tabs [data-view="settings"]').click()
+    # Settings is not a tab: the header gear opens it, no tab stays selected, and Back returns.
+    expect(page.locator('#settings-open')).to_have_attribute('aria-label','설정')
+    assert page.locator('#tabs [role=tab]').count()==5 and page.locator('#tab-settings').count()==0
+    page.locator('#settings-open').click()
     assert 'view=settings' in page.url
+    expect(page.locator('#view-settings')).to_be_visible()
+    expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
+    expect(page.locator('#view-settings #theme')).to_be_visible()  # the theme picker is the first settings block
+    page.locator('#settings-back').click()
+    expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+    assert 'view=status' in page.url
+    # The ',' shortcut opens settings too (outside text fields); keys 1-5 leave it again.
+    page.locator('#settings-open').focus();page.keyboard.press(',')
+    expect(page.locator('#view-settings')).to_be_visible()
+    page.keyboard.press('3')
+    expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
+    page.keyboard.press(',')
+    # Settings view renders config editors (read-only checks; no mutation on live).
+    expect(page.locator('#view-settings')).to_be_visible()
+    # A saved last view never points at settings; reopening the app lands on the tab left behind.
+    assert page.evaluate("JSON.parse(localStorage.getItem('llmDefaults')).view")=='usage'
     expect(page.locator('#cfg-subs .cfg-row').first).to_be_visible()
     assert page.locator('#cfg-pricing tbody tr').count()>0
     assert page.locator('#cfg-thresholds input').count()==4
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
-    assert page.locator('.cfg-toggles input').count()==6
-    # Back to analysis for chart interactions.
-    page.locator('#tabs [data-view="analysis"]').click()
+    assert page.locator('.cfg-toggles input').count()==7
+    # Back to usage for chart interactions.
+    page.locator('#tabs [data-view="usage"]').click()
     page.locator('#cumulative').select_option('1')
     expect(page.locator('#chart path').first).to_be_visible()
     page.locator('#cumulative').select_option('0')
@@ -156,9 +201,18 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(artifacts/'dashboard-mobile.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
+    # Five two-character tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
+    page.set_viewport_size({'width':320,'height':740})
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'320px overflow'
+    assert page.evaluate("(()=>{const t=document.querySelector('#tabs');return t.scrollWidth<=t.clientWidth})()"),'tab bar scrolls sideways'
+    lines=page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].map(b=>{const r=document.createRange();r.selectNodeContents(b);return r.getClientRects().length})")
+    assert lines==[1]*5,lines
+    boxes=page.locator('#tabs [role=tab]').evaluate_all('bs=>bs.map(b=>{const r=b.getBoundingClientRect();return[r.left,r.right,r.height]})')
+    assert all(0<=l and r<=320 and h<=64 for l,r,h in boxes),boxes
+    page.set_viewport_size({'width':390,'height':844})
     page.clock.install()
     calls=[];page.on('request',lambda r:calls.append(r.url) if '/api/usage?' in r.url else None)
-    page.locator('#tabs [data-view="settings"]').click()  # the toggle lives in settings
+    page.locator('#settings-open').click()  # the toggle lives in settings
     page.locator('#auto').uncheck();page.locator('#auto').check()
     expect(page.get_by_role('checkbox',name='5분 자동 갱신',exact=True)).to_be_checked()
     page.clock.fast_forward(299000);assert len(calls)==0
