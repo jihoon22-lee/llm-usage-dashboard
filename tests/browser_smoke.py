@@ -128,13 +128,16 @@ with sync_playwright() as p:
     expect(page.locator('#chart-tooltip')).to_contain_text('7일 전')
     page.keyboard.press('Escape')
     with page.expect_response(lambda r:'/api/usage?' in r.url and r.status==200):page.locator('#compare').select_option('')
-    # Instant shared tooltip on the heatmap.
-    page.locator('.heat-cell').first.dispatch_event('pointerover')
-    expect(page.locator('#tip')).to_be_visible()
-    page.screenshot(path=str(artifacts/'dashboard-desktop.png'),full_page=True)
     # Usage view also hosts the filter-dependent insight panels.
     expect(page.locator('#sessions tr').first).to_be_visible()
     expect(page.locator('#projects tr').first).to_be_visible()
+    # Instant shared tooltip on the heatmap. Park the real pointer in the page corner first:
+    # left over the filter, a re-render shifting a heading under it fires a real pointerover
+    # that (correctly) closes the tooltip before the assertion runs.
+    page.mouse.move(0,0)
+    page.locator('.heat-cell').first.dispatch_event('pointerover')
+    expect(page.locator('#tip')).to_be_visible()
+    page.screenshot(path=str(artifacts/'dashboard-desktop.png'),full_page=True)
     # Reports view: subscription value rows and the activity calendar.
     page.locator('#tabs [data-view="reports"]').click()
     assert 'view=reports' in page.url
