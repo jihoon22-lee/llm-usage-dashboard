@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -168,4 +168,16 @@ test('cost CSV distinguishes unpriced, partial, free and unused values and total
  assert.deepEqual(fields([{uncached_input:10,unpriced:10,cost:0},{output:5,cost:2}]),['',2,2,10,0,10]);
  // Known free usage alongside unpriced usage remains a partial known zero.
  assert.deepEqual(fields([{uncached_input:20,unpriced:10,cost:0}]),[0,0,10,10]);
+});
+
+test('short countdown and KST stamps for dense rows',()=>{
+  assert.equal(f.soon(null),'미제공');
+  assert.equal(f.soon(0),'재확인 대기');
+  assert.equal(f.soon(20),'1분');
+  assert.equal(f.soon(42*60+30),'42분');
+  assert.equal(f.soon(3*3600+59*60+59),'3시간 59분');
+  assert.equal(f.soon(2*86400+23*3600+59*60),'2일 23시간');
+  const now=Date.UTC(2026,9,10,4,0)/1000;
+  assert.equal(f.stamp(Date.UTC(2026,9,11,4,14)/1000,now),'10. 11. 13:14');
+  assert.equal(f.stamp(Date.UTC(2026,11,31,15,30)/1000,now),'2027. 01. 01. 00:30');
 });

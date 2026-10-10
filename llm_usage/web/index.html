@@ -5,12 +5,11 @@
 <div id="error" role="alert" hidden></div><div id="collector-banner" class="collector-banner" role="alert" hidden></div><div id="offline" class="collector-banner offline-banner" role="status" hidden></div><div id="alerts" class="alerts" hidden></div><div class="sticky-nav"><nav class="tabs" id="tabs" role="tablist" aria-label="대시보드 보기"><button type="button" role="tab" id="tab-overview" data-view="overview" class="active" aria-selected="true" aria-controls="view-overview">개요</button><button type="button" role="tab" id="tab-analysis" data-view="analysis" aria-selected="false" aria-controls="view-analysis" tabindex="-1">소비 분석</button><button type="button" role="tab" id="tab-insights" data-view="insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">인사이트</button><button type="button" role="tab" id="tab-sources" data-view="sources" aria-selected="false" aria-controls="sources-panel" tabindex="-1">수집 상태</button><button type="button" role="tab" id="tab-settings" data-view="settings" aria-selected="false" aria-controls="view-settings" tabindex="-1">설정</button></nav><div id="context-bar" class="context-bar" hidden><span id="context-summary"></span><button type="button" id="context-edit" class="mini-btn">필터 변경</button></div></div>
 <section data-view="overview" id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
 <div class="section-heading"><h2>구독 한도</h2><span>초기화 시각 · 한국 시간 <button type="button" class="order-toggle" data-order-scope="quota">순서</button></span></div>
-<div id="quota-strip" class="quota-strip" hidden></div><div id="quota-overview" aria-label="서비스별 한도 요약"></div><div id="limits" class="limits"></div>
-<details class="reset-fold"><summary>다음 초기화 시간표</summary><div id="reset-timeline"></div></details>
+<div id="quota-strip" class="quota-strip" hidden></div><div id="quota-overview" aria-label="서비스별 한도 요약"></div><section id="reset-timeline" class="reset-schedule" aria-label="다음 초기화 일정"></section><div id="limits" class="limits"></div>
 <p class="hint">공유 한도는 제공사의 묶음별로 표시합니다. 오래된 값은 재확인 전까지 잔여량이 복원되지 않습니다.</p>
 <section id="resource-panel" class="resource-panel" aria-labelledby="resource-title">
 <div class="section-heading"><h2 id="resource-title">추가 사용 자원</h2><button type="button" id="resource-add" class="mini-btn">수동 기록 추가</button></div>
-<p id="resource-summary" class="hint">크레딧·초기화권의 적용 범위와 확인 시각을 구분합니다.</p>
+<p id="resource-summary" class="hint">조회·기록만 합니다. 초기화권 사용·크레딧 구매는 제공사 화면에서 진행하세요.</p>
 <div id="resource-list" class="resource-list"></div>
 <details id="resource-inactive" class="resource-inactive" hidden><summary id="resource-inactive-summary">잔액 없음·이전 기록</summary><div id="resource-inactive-list" class="resource-list"></div></details>
 <form id="resource-editor" class="resource-editor" hidden>

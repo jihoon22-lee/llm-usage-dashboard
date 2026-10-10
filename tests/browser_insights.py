@@ -185,7 +185,8 @@ async def main():
             # overview lists the next resets. Single-observation rows get no line.
             await expect(page.locator('.quota-history .quota-forecast').first).to_be_visible()
             assert await page.locator('.quota-forecast').count()>=1
-            await page.locator('.reset-fold > summary').click()
+            # The reset schedule is part of the overview, visible without opening anything.
+            await expect(page.locator('#reset-timeline')).to_be_visible()
             await expect(page.locator('#reset-timeline')).to_contain_text('Codex')
             await expect(page.locator('#reset-timeline')).to_contain_text('Antigravity')
             timeline=await page.locator('#reset-timeline').inner_text()
@@ -237,7 +238,7 @@ async def main():
             overview=await page.locator('#quota-overview').bounding_box()
             assert overview['height']<350
             order=await page.locator('main h3, #cache-panel > summary, #sources-panel h2').all_text_contents()
-            assert order==['수동 자원 기록','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
+            assert order==['다음 초기화','수동 자원 기록','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
                            '캐시 활용률 분석','구독 가치 분석','일별 활동','프로젝트별 사용량','세션별 사용량','주간 리포트',
                            '이전 기간과 비교','데이터 신뢰도','수집 범위와 상태','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('analysis')
