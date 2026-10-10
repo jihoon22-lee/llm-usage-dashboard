@@ -190,6 +190,7 @@ with sync_playwright() as playwright:
     # Themes affect chart palettes and all surfaces, not only the page background.
     themes=['forest','paper','charcoal','midnight','blue','violet','rose','amber','ocean']
     backgrounds=set();palettes=set()
+    page.locator('#settings-open').click()  # the theme picker is the first block of the settings view
     for theme in themes:
         page.locator('#theme').select_option(theme)
         expect(page.locator('html')).to_have_attribute('data-theme',theme)
@@ -209,6 +210,7 @@ with sync_playwright() as playwright:
     hover_date(page,1)
     expect(page.locator('#chart-tooltip')).to_be_visible()
     page.screenshot(path=str(artifacts/'dashboard-midnight-tooltip.png'))
+    page.locator('#settings-open').click()
     page.locator('#theme').select_option('system')
     page.emulate_media(color_scheme='dark');expect(page.locator('html')).to_have_attribute('data-theme','charcoal')
     page.emulate_media(color_scheme='light');expect(page.locator('html')).to_have_attribute('data-theme','paper')
@@ -222,8 +224,9 @@ with sync_playwright() as playwright:
     mobile=browser.new_page(service_workers='block',viewport={'width':390,'height':844},has_touch=True,is_mobile=True)
     fixture_page(mobile)
     preview(mobile);mobile.route(origin+'/api/usage?*',lambda route:route.fulfill(json=data))
-    mobile.goto(origin+'/');loaded(mobile);mobile.locator('#tabs [data-view="usage"]').click()
-    mobile.locator('#theme').select_option('ocean')
+    mobile.goto(origin+'/');loaded(mobile);mobile.locator('#settings-open').click()
+    mobile.locator('#theme').select_option('ocean');mobile.locator('#settings-back').click()
+    mobile.locator('#tabs [data-view="usage"]').click()
     point=hover_date(mobile,1);mobile.touchscreen.tap(point['x'],point['y'])
     expect(mobile.locator('#chart-tooltip')).to_be_visible()
     expect(mobile.locator('#chart-tooltip .tooltip-row:not(.tooltip-missing)')).to_have_count(5)
@@ -250,7 +253,7 @@ with sync_playwright() as playwright:
     fixture_page(restricted);preview(restricted)
     restricted.add_init_script("Storage.prototype.getItem=function(){throw Error('blocked')};Storage.prototype.setItem=function(){throw Error('blocked')};")
     restricted.route(origin+'/api/usage?*',lambda route:route.fulfill(json=data))
-    restricted.goto(origin+'/');loaded(restricted);restricted.locator('#theme').select_option('violet')
+    restricted.goto(origin+'/');loaded(restricted);restricted.locator('#settings-open').click();restricted.locator('#theme').select_option('violet')
     expect(restricted.locator('html')).to_have_attribute('data-theme','violet')
     assert not errors,errors
     browser.close()

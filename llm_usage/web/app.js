@@ -173,13 +173,14 @@ $('filter-reset').addEventListener('click',()=>{
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
-// Keyboard shortcuts outside text fields: r refreshes, 1–6 switch tabs, / focuses the
-// current view's search, ? lists them.
-const SHORTCUT_VIEWS=['quota','plan','usage','reports','status','settings'];
+// Keyboard shortcuts outside text fields: r refreshes, 1–5 switch tabs, , opens settings,
+// / focuses the current view's search, ? lists them.
+const SHORTCUT_VIEWS=['quota','plan','usage','reports','status'];
 document.addEventListener('keydown',event=>{
  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,select,textarea,[contenteditable]'))return;
  const view=SHORTCUT_VIEWS[Number(event.key)-1];
  if(view){event.preventDefault();setView(view);$('tab-'+view).focus();return;}
+ if(event.key===','){event.preventDefault();setView('settings');$('settings-back').focus({preventScroll:true});return;}
  if(event.key==='r'){event.preventDefault();refresh(true);}
  else if(event.key==='/'){
   const field=currentView==='settings'?$('price-search'):currentView==='usage'?$('model-search'):null;

@@ -67,13 +67,17 @@ function renderScope(data){
 const VIEW_ALIASES={overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
 // Panels fed by the lazily fetched insights section.
 const INSIGHT_VIEWS=['usage','reports','status'];
-let currentView='quota';
+let currentView='quota',previousView='quota';
 const viewEls=[...document.querySelectorAll('main>[data-view]')];
 function setView(name,sync=true){
  name=VIEW_ALIASES[name]||name;
- currentView=viewEls.some(e=>e.dataset.view===name)?name:'quota';
+ const next=viewEls.some(e=>e.dataset.view===name)?name:'quota';
+ // Settings is not a tab: remember where to return, and keep the last tab reachable by Tab.
+ if(next==='settings'&&currentView!=='settings')previousView=currentView;
+ currentView=next;
+ const focusable=currentView==='settings'?previousView:currentView;
  viewEls.forEach(e=>{e.hidden=e.dataset.view!==currentView;});
- document.querySelectorAll('#tabs [data-view]').forEach(b=>{const on=b.dataset.view===currentView;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
+ document.querySelectorAll('#tabs [data-view]').forEach(b=>{const on=b.dataset.view===currentView;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=b.dataset.view===focusable?0:-1;});
  document.body.dataset.view=currentView;
  if(currentView==='settings')loadConfig();
  if(currentView==='status')loadNotifyLog();
@@ -89,6 +93,8 @@ function setView(name,sync=true){
 $('tabs').addEventListener('click',event=>{
  const button=event.target.closest('button[data-view]');if(button)setView(button.dataset.view);
 });
+$('settings-open').addEventListener('click',()=>{setView('settings');$('settings-back').focus({preventScroll:true});});
+$('settings-back').addEventListener('click',()=>{setView(previousView);$('settings-open').focus({preventScroll:true});});
 $('first-use-sources').addEventListener('click',()=>{setView('status');$('tab-status').focus();});
 $('tabs').addEventListener('keydown',event=>{
  const tabs=[...$('tabs').querySelectorAll('button[data-view]')],i=tabs.indexOf(document.activeElement);

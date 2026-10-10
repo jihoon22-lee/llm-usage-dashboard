@@ -127,8 +127,12 @@ footer{border-top:1px solid var(--border);padding:24px 0 30px;color:var(--subtle
 /* Theme selection, aggregate date tooltip and keyboard access. */
 header{height:auto;min-height:85px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 0;flex-wrap:wrap;border-bottom:1px solid var(--border)}
 .header-tools {display:flex; align-items:center; gap:18px}
-.theme-picker {display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px}
-.theme-picker select {max-width:150px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--ink); padding:8px 10px}
+.icon-btn{width:40px;height:40px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:19px;line-height:1;background:var(--raised);color:var(--muted);border:1px solid var(--border);border-radius:9px}
+.icon-btn:hover{color:var(--ink)}
+.theme-picker {display:flex; align-items:center; gap:10px; color:var(--muted); font-size:var(--fs-small)}
+.theme-picker select {max-width:200px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--ink); padding:8px 10px}
+.back-btn{margin-bottom:14px;white-space:nowrap}
+#view-settings>.section-heading{flex-wrap:wrap}
 :focus-visible {outline:2px solid var(--accent); outline-offset:4px}
 #chart {position:relative}
 .chart-gridline {stroke:var(--line)}
@@ -372,9 +376,7 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
  header{min-height:56px;padding:10px 0;flex-wrap:nowrap}
  .brand{font-size:18px;white-space:nowrap}
  .brand strong{margin-left:3px}
- .header-tools .private{display:none}
- .theme-picker{font-size:var(--fs-meta);gap:4px}
- .theme-picker select{max-width:100px;padding:6px 3px}
+ .icon-btn{width:36px;height:36px}
  .heading{margin:18px 0;gap:8px}
  .eyebrow,.heading>div>p{display:none}
  h1{font-size:25px;margin:3px 0}

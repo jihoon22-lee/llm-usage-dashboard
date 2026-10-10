@@ -81,6 +81,13 @@ with sync_playwright() as p:
     expect(page.locator('#work-budget')).to_be_visible()
     expect(page.locator('#plan-today-hours')).to_be_visible()
     page.locator('#tab-quota').click()
+    # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
+    page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
+    assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
+    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue']
+    assert page.evaluate("[...document.querySelectorAll('#view-usage>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
+    page.evaluate("storage.set('llmOrder','{}')");page.reload()
+    expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     # Dormant routes (ended or past quota_hide_days) fold into .quota-dormant;
     # every route still renders a card somewhere inside #limits.
     assert page.locator('#limits .limit-card').count()==5
@@ -141,9 +148,27 @@ with sync_playwright() as p:
     # Status view lists collectors.
     page.locator('#tabs [data-view="status"]').click()
     assert page.locator('#sources .source').count()>0
-    # Settings view renders config editors (read-only checks; no mutation on live).
-    page.locator('#tabs [data-view="settings"]').click()
+    # Settings is not a tab: the header gear opens it, no tab stays selected, and Back returns.
+    expect(page.locator('#settings-open')).to_have_attribute('aria-label','설정')
+    assert page.locator('#tabs [role=tab]').count()==5 and page.locator('#tab-settings').count()==0
+    page.locator('#settings-open').click()
     assert 'view=settings' in page.url
+    expect(page.locator('#view-settings')).to_be_visible()
+    expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
+    expect(page.locator('#view-settings #theme')).to_be_visible()  # the theme picker is the first settings block
+    page.locator('#settings-back').click()
+    expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+    assert 'view=status' in page.url
+    # The ',' shortcut opens settings too (outside text fields); keys 1-5 leave it again.
+    page.locator('#settings-open').focus();page.keyboard.press(',')
+    expect(page.locator('#view-settings')).to_be_visible()
+    page.keyboard.press('3')
+    expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
+    page.keyboard.press(',')
+    # Settings view renders config editors (read-only checks; no mutation on live).
+    expect(page.locator('#view-settings')).to_be_visible()
+    # A saved last view never points at settings; reopening the app lands on the tab left behind.
+    assert page.evaluate("JSON.parse(localStorage.getItem('llmDefaults')).view")=='usage'
     expect(page.locator('#cfg-subs .cfg-row').first).to_be_visible()
     assert page.locator('#cfg-pricing tbody tr').count()>0
     assert page.locator('#cfg-thresholds input').count()==4
@@ -173,9 +198,18 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(artifacts/'dashboard-mobile.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
+    # Five two-character tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
+    page.set_viewport_size({'width':320,'height':740})
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'320px overflow'
+    assert page.evaluate("(()=>{const t=document.querySelector('#tabs');return t.scrollWidth<=t.clientWidth})()"),'tab bar scrolls sideways'
+    lines=page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].map(b=>{const r=document.createRange();r.selectNodeContents(b);return r.getClientRects().length})")
+    assert lines==[1]*5,lines
+    boxes=page.locator('#tabs [role=tab]').evaluate_all('bs=>bs.map(b=>{const r=b.getBoundingClientRect();return[r.left,r.right,r.height]})')
+    assert all(0<=l and r<=320 and h<=64 for l,r,h in boxes),boxes
+    page.set_viewport_size({'width':390,'height':844})
     page.clock.install()
     calls=[];page.on('request',lambda r:calls.append(r.url) if '/api/usage?' in r.url else None)
-    page.locator('#tabs [data-view="settings"]').click()  # the toggle lives in settings
+    page.locator('#settings-open').click()  # the toggle lives in settings
     page.locator('#auto').uncheck();page.locator('#auto').check()
     expect(page.get_by_role('checkbox',name='5분 자동 갱신',exact=True)).to_be_checked()
     page.clock.fast_forward(299000);assert len(calls)==0

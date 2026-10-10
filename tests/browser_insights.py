@@ -232,7 +232,9 @@ async def main():
             output=args.artifacts or Path(directory)
             output.mkdir(parents=True,exist_ok=True)
             await page.locator('#cache-panel').screenshot(path=str(output/'insights-desktop.png'))
+            await page.locator('#settings-open').click()
             await page.locator('#theme').select_option('midnight')
+            await page.locator('#settings-back').click()
             await page.set_viewport_size({'width':390,'height':844})
             await view('quota')
             await expect(page.locator('#quota-overview')).to_be_visible()
@@ -459,7 +461,7 @@ async def main():
             assert await page.evaluate('scrollY')>0
             assert await page.evaluate("document.querySelector('#tabs').getBoundingClientRect().top")<=1
             await page.evaluate('scrollTo(0,0)')
-            await view('settings')
+            await page.locator('#settings-open').click()
             await view('quota')
             await view('reports')
             # Month-to-date value projection and the budget alert chip.
@@ -558,7 +560,9 @@ async def main():
             previous_save=await page.locator('#cfg-subs-save').element_handle()
             assert previous_save is not None
             await page.keyboard.press('End')
-            await expect(page.locator('#tab-settings')).to_have_attribute('aria-selected','true')
+            await expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+            await page.locator('#settings-open').click()
+            await expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
             await page.wait_for_function('previous=>!previous.isConnected',arg=previous_save)
             await previous_save.dispose()
             # Settings inputs follow the theme and the pricing table filters
@@ -613,7 +617,7 @@ async def main():
             assert not restricted_errors,restricted_errors
             # Settings' first panel (월 구독료) opens by default on mobile; the
             # other folds stay closed until touched (M4).
-            await restricted.locator('#tabs [data-view="settings"]').click()
+            await restricted.locator('#settings-open').click()
             await expect(restricted.locator('#cfg-subs input').first).to_be_visible()
             await expect(restricted.locator('#cfg-pricing')).to_be_hidden()
             await restricted.close()

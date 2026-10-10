@@ -1,6 +1,6 @@
 'use strict';
 // Heatmap, shared tooltip, quota cards, panel order, alert chips and browser notifications.
-function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView,...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
+function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView==='settings'?previousView:currentView,...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
 function renderHeatmap(cells){
  const grid=Array.from({length:7},()=>Array(24).fill(0));let max=0;
  (cells||[]).forEach(c=>{const v=cellMetric(c);grid[c.dow][c.hour]=v;if(v!=null)max=Math.max(max,v);});

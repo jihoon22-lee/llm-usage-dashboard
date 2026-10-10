@@ -36,7 +36,7 @@ function settingsAvailable(available,message=''){
  settingsOnline=available;
  $('settings-status').textContent=message;
  for(const control of $('view-settings').querySelectorAll('input,button,select')){
-  if(['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops'].includes(control.id))continue;
+  if(control.closest('.settings-theme')||control.id==='settings-back'||['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops'].includes(control.id))continue;
   control.disabled=!available;
   if(!available&&control.matches('input')){control.value='';control.checked=false;}
  }

@@ -138,7 +138,7 @@ with sync_playwright() as p:
     expect(reports).to_contain_text('전주 대비 +13%')
     expect(reports).to_contain_text('한도 소진: Claude 5시간 2회')
     # Settings: secrets are write-only; save, clear and test go through the API only.
-    page.locator('#tabs [data-view="settings"]').click()
+    page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')
     expect(page.locator('#notify-events input')).to_have_count(8)
     budget = page.locator('#cfg-budgets [data-budget="fixture-project"]')
