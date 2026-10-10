@@ -43,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             claude_limits(store,c,{'five_hour':{'utilization':30-minute/30,'resets_at':now+14400},
                                   'seven_day':{'utilization':30-minute/60,'resets_at':now+259200},
                                   'seven_day_opus':{'utilization':100,'resets_at':now+259200},
+                                  'iguana_necktie':{'limit_dollars':100,'used_dollars':58,'remaining_dollars':42,
+                                                    'resets_at':now+86400,'locked_reason':None},
                                   'spend':{'enabled':True,'used':{'amount_minor':1000,'currency':'USD','exponent':2},
                                            'limit':{'amount_minor':3000,'currency':'USD','exponent':2}}},checked)
         claude_balance(c,{'amount':5000,'currency':'USD','auto_reload_settings':{'enabled':False}},now)
@@ -90,14 +92,25 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#work-decision')).to_contain_text('Claude')
             expect(page.locator('#work-decision')).to_contain_text('Sonnet')
             expect(page.locator('#work-decision')).not_to_contain_text('Opus 기준 보기')
-            decision=page.locator('#work-decision .decision-time').bounding_box()
-            assert decision['y']+decision['height']<900
-            if width==1440:page.screenshot(path=str(output/'dashboard.png'))
+            # Subscription quota must be the first overview content on every width.
+            expect(page.locator('#view-overview > .section-heading h2').first).to_have_text('구독 한도')
             if width<600:page.locator('[data-quota="codex"]').click()
+            page.evaluate('scrollTo(0,0)')
+            quota=page.locator('#quota-codex').bounding_box()
+            assert quota['y'] < 900
+            assert page.locator('#limits').bounding_box()['y'] < page.locator('#resource-panel').bounding_box()['y']
+            assert page.locator('#resource-panel').bounding_box()['y'] < page.locator('#work-now').bounding_box()['y']
+            if width==1440:page.screenshot(path=str(output/'dashboard.png'))
             expect(page.locator('#quota-codex .bucket-pace').first).to_be_visible()
             assert page.locator('#quota-codex .bucket-detail[open]').count()==0
             expect(page.locator('#resource-list')).to_contain_text('2회')
             expect(page.locator('#resource-list')).to_contain_text('25 크레딧')
+            expect(page.locator('#resource-list')).to_contain_text('Claude 클라우드 전용 크레딧')
+            expect(page.locator('#resource-list')).to_contain_text('42 USD')
+            expect(page.locator('#resource-list')).to_contain_text('지급액 100 USD')
+            expect(page.locator('#resource-list')).to_contain_text('클라우드 세션 전용')
+            expect(page.locator('#resource-list')).to_contain_text('1회')
+            expect(page.locator('#work-decision')).not_to_contain_text('클라우드 전용 크레딧')
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             page.screenshot(path=str(output/f'work-now-{width}.png'),full_page=True)
             page.locator('#plan-model').select_option('special')
@@ -182,4 +195,4 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         expect(page.locator('#offline')).to_be_hidden()
         assert not errors,errors
         context.close();browser.close()
-print('Resource planning browser passed: 3 widths, first-screen decision, visible pace, model constraints, day/week, manual CRUD/conflict/idempotent retry, offline aging/recovery.')
+print('Resource planning browser passed: 3 widths, quota-first overview, reset/cloud credits, visible pace, model constraints, day/week, manual CRUD/conflict/idempotent retry, offline aging/recovery.')

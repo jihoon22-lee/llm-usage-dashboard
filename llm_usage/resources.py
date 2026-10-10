@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 
 ROUTES = ('codex', 'claude-code', 'antigravity', 'opencode-go', 'devin')
 KINDS = ('usage_credit', 'api_credit', 'reset')
-SCOPES = ('subscription', 'api', 'five_hour', 'weekly', 'model', 'unknown')
+SCOPES = ('subscription', 'cloud', 'api', 'five_hour', 'weekly', 'model', 'unknown')
 SOURCE_LINKS = {
     'codex': 'https://chatgpt.com/codex/settings/usage',
     'claude-code': 'https://claude.ai/settings/usage',
@@ -243,6 +243,30 @@ def claude_spend(c, data, checked):
     return 1
 
 
+def claude_cloud_credits(c, data, checked):
+    """Cloud-session promotion from the account usage response, in explicit USD.
+
+    This pool does not fund local Code, chat, Cowork, or API requests. A missing
+    promotion is not a zero balance, and its expiry is not a quota reset.
+    """
+    pool = 'cloud-session-credits'
+    row = data.get('iguana_necktie')
+    if not isinstance(row, dict):
+        if c.execute('SELECT 1 FROM resource_items WHERE route=? AND pool_key=? AND account_key IS ?',
+                     ('claude-code', pool, (account(c, 'claude-code') or {}).get('account_key'))).fetchone():
+            resource_error(c, 'claude-code', pool, 'usage_credit', checked, 'claude-oauth')
+        return 0
+    remaining, limit, used = (amount(row.get(k)) for k in ('remaining_dollars', 'limit_dollars', 'used_dollars'))
+    conflict = remaining is not None and limit is not None and (remaining > limit or
+               (used is not None and not math.isclose(remaining, max(0, limit-used), abs_tol=0.000001)))
+    save_auto(c, 'claude-code', pool, 'usage_credit', checked,
+              dict(label='Claude 클라우드 전용 크레딧', amount=remaining, unit='USD', scope='cloud',
+                   limit=limit, spent=used, enabled=not bool(row['locked_reason']) if 'locked_reason' in row else None,
+                   expires=timestamp(row.get('resets_at')), expiry_known=timestamp(row.get('resets_at')) is not None,
+                   observation='conflict' if conflict else 'observed' if remaining is not None else 'unavailable'), 'claude-oauth')
+    return int(remaining is not None and not conflict)
+
+
 def claude_balance(c, data, checked):
     raw = amount(data.get('amount'))
     currency = data.get('currency')
@@ -267,6 +291,10 @@ def claude_balance(c, data, checked):
 def claude_resets(c, data, checked):
     reset = data.get('cedar_ember')
     if not isinstance(reset, dict) or not isinstance(reset.get('eligible'), bool):
+        resource_error(c, 'claude-code', 'reset-grants', 'reset', checked, 'claude-resets')
+        return 0
+    if reset.get('ineligible_reason') == 'surface':
+        # An unsupported view cannot establish whether the account owns grants.
         resource_error(c, 'claude-code', 'reset-grants', 'reset', checked, 'claude-resets')
         return 0
     grants = []; complete = isinstance(reset.get('grants'), list)
