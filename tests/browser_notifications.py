@@ -64,6 +64,26 @@ with sync_playwright() as p:
     page.evaluate('refresh()')
     page.wait_for_function('sent.length===3')
     assert page.evaluate('sent')==['한도 회복 확인','한도 소진 예상','한도 잔여 적음']
+    # A resource ending within a day notifies once (not again on refresh or reload, not when
+    # already past, not when the kind is switched off).
+    soon_item={'id':'r1','route':'codex','kind':'reset','label':'Codex 초기화권','unit':'count','status':'fresh','amount':1,
+               'checked':now,'grants':[{'id':'g1','amount':1,'expires':now+1800,'status':'available'},{'id':'g2','amount':1,'expires':now-60,'status':'expired'}]}
+    row['forecast']=None
+    limits['resources']={'items':[soon_item]}
+    page.evaluate("localStorage.setItem('llmNotify:exp','0')")
+    page.evaluate('refresh()')
+    expect(page.locator('#alerts')).to_contain_text('Codex 초기화권 1개')
+    assert page.evaluate('sent.length')==3
+    page.evaluate("localStorage.removeItem('llmNotify:exp')")
+    page.evaluate('refresh()')
+    page.wait_for_function('() => sent.length===4')
+    assert page.evaluate('sent[3]')=='자원 만료 임박'
+    page.evaluate('refresh()')
+    page.evaluate('refresh()')
+    assert page.evaluate('sent.length')==4
+    page.evaluate('notifySent.clear()')
+    page.evaluate('refresh()')
+    assert page.evaluate('sent.length')==4
     # Failed worker registration also stays isolated.
     page.evaluate("() => {notificationWorker=null;navigator.serviceWorker.register=async()=>{throw Error('offline');};}")
     page.evaluate("sendNotification('failure',{})")
@@ -72,4 +92,4 @@ with sync_playwright() as p:
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     assert not errors, errors
     browser.close()
-print('Notifications passed: real worker activation/delivery, mobile constructor rejection, 3 transitions, failure isolation, no repeat, mobile layout.')
+print('Notifications passed: real worker activation/delivery, mobile constructor rejection, 3 transitions, once-only expiry notice, failure isolation, no repeat, mobile layout.')

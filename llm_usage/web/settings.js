@@ -36,7 +36,7 @@ function settingsAvailable(available,message=''){
  settingsOnline=available;
  $('settings-status').textContent=message;
  for(const control of $('view-settings').querySelectorAll('input,button,select')){
-  if(control.closest('.settings-theme')||control.id==='settings-back'||['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops'].includes(control.id))continue;
+  if(control.closest('.settings-theme')||control.id==='settings-back'||['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops','ntf-exp'].includes(control.id))continue;
   control.disabled=!available;
   if(!available&&control.matches('input')){control.value='';control.checked=false;}
  }
@@ -111,7 +111,7 @@ async function loadConfig(){
  $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save" aria-label="임계값 저장">저장</button>';
  $('cfg-refresh').value=cfg.refresh_seconds;
  $('cfg-valert').value=cfg.value_alert_usd??'';
- for(const k of['low','dep','reset','ops'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
+ for(const k of['low','dep','reset','ops','exp'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
  restoreDrafts(drafts);
 }
 $('cfg-subs').addEventListener('click',async e=>{
@@ -307,7 +307,7 @@ $('price-unset').addEventListener('click',event=>{
  event.currentTarget.classList.toggle('on',priceFilter.unset);
  applyPriceFilter();
 });
-for(const k of['low','dep','reset','ops'])$('ntf-'+k).addEventListener('change',e=>{storage.set('llmNotify:'+k,e.target.checked?'1':'0');});
+for(const k of['low','dep','reset','ops','exp'])$('ntf-'+k).addEventListener('change',e=>{storage.set('llmNotify:'+k,e.target.checked?'1':'0');});
 $('cfg-refresh-save').addEventListener('click',async()=>{
  const drafts=draftsIn('#cfg-refresh');
  const v=parseInt($('cfg-refresh').value,10);

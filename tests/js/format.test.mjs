@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -180,4 +180,31 @@ test('short countdown and KST stamps for dense rows',()=>{
   const now=Date.UTC(2026,9,10,4,0)/1000;
   assert.equal(f.stamp(Date.UTC(2026,9,11,4,14)/1000,now),'10. 11. 13:14');
   assert.equal(f.stamp(Date.UTC(2026,11,31,15,30)/1000,now),'2027. 01. 01. 00:30');
+});
+
+test('expiring resources: within a day, grouped per hour, never past, used or folded',()=>{
+ const now=1_800_000_000,H=3600;
+ const grant=(id,after,extra={})=>({id,amount:1,expires:now+after,status:'available',...extra});
+ const items=[
+  {id:'codex-reset',route:'codex',kind:'reset',label:'Codex 초기화권',unit:'count',status:'fresh',amount:5,grants:[
+   grant('a',59*60),grant('b',59*60+30),grant('c',2*86400),grant('d',-86400,{status:'expired'}),grant('e',-60),grant('f',2*H,{status:'used'}),grant('g',3*H,{amount:0})]},
+  {id:'credit',route:'claude-code',kind:'usage_credit',label:'Claude 사용 크레딧',unit:'USD',status:'manual',amount:50,expires:now+4*H,expiry_is_partial:true},
+  {id:'later',route:'claude-code',kind:'usage_credit',unit:'USD',status:'fresh',amount:9,expires:now+86400+1},
+  {id:'empty',route:'codex',kind:'usage_credit',unit:'credit',status:'fresh',amount:0,expires:now+H},
+  {id:'old-account',route:'codex',kind:'usage_credit',unit:'credit',status:'previous_account',amount:3,expires:now+H},
+  {id:'dup',route:'codex',kind:'usage_credit',unit:'credit',status:'fresh',amount:3,expires:now+H,duplicate_of:'credit',effective:false},
+  {id:'allowance',route:'claude-code',kind:'usage_credit',unit:'USD',status:'fresh',amount:20,allowance:true,expires:now+H},
+  {id:'ended',route:'codex',kind:'usage_credit',unit:'credit',status:'fresh',amount:4,expires:now-1},
+  {id:'stale',route:'codex',kind:'api_credit',unit:'USD',status:'stale',amount:2,expires:now+30*60},
+ ];
+ const out=f.expiringResources(items,now);
+ const plain=v=>JSON.parse(JSON.stringify(v));
+ assert.deepEqual(plain(out.map(e=>[e.id,e.amount,e.stale])),[['stale',2,true],['codex-reset',2,false],['credit',50,false]]);
+ assert.equal(out[1].expires,now+59*60);assert.deepEqual(plain(out[1].ids),['a','b']);
+ assert.equal(out[2].partial,true);assert.match(out[2].ids[0],/^credit:/);
+ // Grants a few hours apart stay separate entries.
+ const split=f.expiringResources([{id:'r',route:'codex',kind:'reset',unit:'count',status:'fresh',amount:2,grants:[grant('x',H/2),grant('y',5*H)]}],now);
+ assert.deepEqual(plain(split.map(e=>[e.ids[0],e.amount])),[['x',1],['y',1]]);
+ assert.equal(f.expiringResources(null,now).length,0);
+ assert.equal(f.expiringResources(items,now,10).length,0);
 });

@@ -252,6 +252,12 @@ document.querySelectorAll('.order-toggle').forEach(button=>button.addEventListen
 }));
 // Collapse state survives re-renders on each refresh.
 let alertsExpanded=false;
+function expiryText(e,now){
+ const service=shortService[e.route]||e.route,left=soon(e.expires-now)+' 후 만료'+(e.stale?' · 확인 오래됨':'');
+ if(e.kind==='reset')return `${service} 초기화권 ${e.amount}개 ${left}`;
+ const name=e.label.startsWith(service+' ')?e.label.slice(service.length+1):e.label;
+ return `${service} ${name} ${e.partial?'일부 잔액':resourceValue(e,e.amount)} ${left}`;
+}
 function renderAlerts(limits,usage){
  const items=[];
  (limits.limits||[]).forEach(r=>{
@@ -260,6 +266,8 @@ function renderAlerts(limits,usage){
   if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15))items.push({text:`${label} 잔여 ${percent(r.remaining)}`,route:r.route});
   else if(r.forecast&&r.forecast.within_window&&!r.blocked_by)items.push({text:`${label} 초기화 전 소진 예상`,route:r.route});
  });
+ // Balances and reset grants ending within a day; the chip jumps to the resource card.
+ expiringResources(limits.resources?.items,limits.now).forEach(e=>items.push({text:expiryText(e,limits.now),resource:e.id}));
  for(const [project,budget] of Object.entries(usage.project_budgets||{})){
   if(!usage.project_month)break;
   const st=budgetState(usage.project_month.projects[project],budget);
@@ -293,7 +301,10 @@ function renderAlerts(limits,usage){
  if(toggle)toggle.onclick=()=>{alertsExpanded=!alertsExpanded;el.classList.toggle('expanded',alertsExpanded);toggle.setAttribute('aria-expanded',String(alertsExpanded));};
  el.querySelectorAll('[data-alert]').forEach(button=>button.onclick=()=>{
   const it=items[Number(button.dataset.alert)];
-  if(it.route){
+  if(it.resource){
+   setView('quota');
+   document.querySelector(`[data-resource-id="${CSS.escape(it.resource)}"]`)?.scrollIntoView({behavior:motion(),block:'center'});
+  }else if(it.route){
    setView('quota');selectedQuota=it.route;syncQuotaSelection();
    document.getElementById('quota-'+it.route)?.scrollIntoView({behavior:motion(),block:'nearest'});
   }else if(it.view){setView(it.view);if(it.view==='settings'){priceFilter.unset=true;$('price-unset').setAttribute('aria-pressed','true');$('price-unset').classList.add('on');}}
@@ -338,7 +349,22 @@ function checkOpsNotify(usage){
  opsBad=bad;
 }
 const notifySent=new Set();
+// Expiry notices are remembered on this device too, so a reload does not repeat them.
+// Only current (fresh or manual) records on a live connection notify; the entry is pruned once past.
+function checkExpiryNotify(limits){
+ if(limits._offline||!ntfEnabled('exp'))return;
+ const now=limits.now;let seen;
+ try{seen=JSON.parse(storage.get('llmExpiryNotified')||'{}');}catch{seen={};}
+ for(const k of Object.keys(seen))if(!(seen[k]>now))delete seen[k];
+ for(const e of expiringResources(limits.resources?.items,now).filter(e=>!e.stale)){
+  const fresh=e.ids.filter(id=>!notifySent.has('exp-'+id)&&!(id in seen));
+  e.ids.forEach(id=>{notifySent.add('exp-'+id);seen[id]=e.expires;});
+  if(fresh.length)void sendNotification('자원 만료 임박',{body:expiryText(e,now),tag:'exp-'+e.ids[0]});
+ }
+ storage.set('llmExpiryNotified',JSON.stringify(seen));
+}
 function checkNotify(limits){
+ checkExpiryNotify(limits);
  const first=lastLimits===null;
  const prev=new Map(((lastLimits&&lastLimits.limits)||[]).map(r=>[r.route+':'+r.bucket,r]));
  const lowPct=limits.low_percent??15;

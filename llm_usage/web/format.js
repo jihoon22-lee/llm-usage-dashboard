@@ -181,3 +181,26 @@ function currentLimits(data,now,offline=false){
  return {...data,now,limits:rows,resources:{...data.resources,items},planning,_offline:offline};
 }
 const duration=s=>{if(s==null)return '추정 보류';if(s<=0)return '현재 소진';if(s<60)return '1분 미만';const minutes=Math.round(s/60);return `${Math.floor(minutes/60)?Math.floor(minutes/60)+'시간 ':''}${minutes%60}분`;};
+// Resources and reset grants that run out within `within` seconds (default a day). Past expiry,
+// folded rows (previous account, expired, unlinked duplicates), spending allowances (their date
+// is a renewal), used grants and empty balances are skipped. Grants of one resource ending in the
+// same hour become one entry with the summed count. `ids` are stable per grant (or resource +
+// expiry) so a notification can fire once; `stale` marks records that are no longer current.
+function expiringResources(items,now,within=86400){
+ const soonEnough=t=>Number.isFinite(t)&&t>now&&t-now<=within;
+ const out=[];
+ for(const r of items||[]){
+  if(r.status==='previous_account'||r.status==='expired'||r.allowance||(r.duplicate_of&&!r.effective))continue;
+  const base={id:r.id,route:r.route,kind:r.kind,label:r.label,unit:r.unit,stale:r.status!=='fresh'&&r.status!=='manual'};
+  if(r.grants?.length){
+   const groups=new Map();
+   for(const g of r.grants){
+    if(g.status==='used'||g.status==='expired'||!(g.amount>0)||!soonEnough(g.expires))continue;
+    const hour=Math.floor(g.expires/3600),group=groups.get(hour)||groups.set(hour,{...base,amount:0,expires:g.expires,ids:[]}).get(hour);
+    group.amount+=g.amount;group.expires=Math.min(group.expires,g.expires);group.ids.push(g.id||`${r.id}:${Math.round(g.expires/60)}`);
+   }
+   out.push(...groups.values());
+  }else if(r.amount>0&&soonEnough(r.expires))out.push({...base,amount:r.amount,expires:r.expires,partial:!!r.expiry_is_partial,ids:[`${r.id}:${Math.round(r.expires/60)}`]});
+ }
+ return out.sort((a,b)=>a.expires-b.expires);
+}

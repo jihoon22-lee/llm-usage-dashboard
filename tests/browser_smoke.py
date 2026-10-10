@@ -174,7 +174,7 @@ with sync_playwright() as p:
     assert page.locator('#cfg-thresholds input').count()==4
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
-    assert page.locator('.cfg-toggles input').count()==6
+    assert page.locator('.cfg-toggles input').count()==7
     # Back to usage for chart interactions.
     page.locator('#tabs [data-view="usage"]').click()
     page.locator('#cumulative').select_option('1')

@@ -5,6 +5,7 @@ no provider request, credit purchase, redemption or notification is performed.
 """
 import argparse
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -172,6 +173,20 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             page.keyboard.press('Escape')
             expect(page.locator('#resource-dialog')).not_to_have_attribute('open','')
             expect(page.locator('#resource-add')).to_be_focused()
+            # Resources ending within a day become alert chips: the Codex reset credit due in an hour
+            # (and the Claude one due in a day), not the one due in 2 days or the one already past.
+            page.locator('#tab-plan').click()
+            expect(page.locator('#view-quota')).to_be_hidden()
+            if width<=600 and page.locator('#alerts-toggle').get_attribute('aria-expanded')!='true':page.locator('#alerts-toggle').click()
+            chips=page.locator('.alert-chip').all_text_contents()
+            codex_chips=[c for c in chips if '초기화권' in c and c.startswith('Codex')]
+            assert len(codex_chips)==1 and re.fullmatch(r'Codex 초기화권 1개 \d+분 후 만료',codex_chips[0]),chips
+            assert any(re.fullmatch(r'Claude 초기화권 1개 2\d시간 \d+분 후 만료',c) for c in chips),chips
+            assert not any('사용 크레딧' in c and '만료' in c for c in chips),chips
+            assert not any('2일' in c for c in chips),chips
+            page.locator('.alert-chip',has_text='Codex 초기화권').click()
+            expect(page.locator('#view-quota')).to_be_visible()
+            expect(page.locator(f'[data-resource-id="{codex_reset["id"]}"]')).to_be_in_viewport()
             page.locator('#tab-plan').click()
             expect(page.locator('#work-now')).to_be_visible()
             if width==1440:page.screenshot(path=str(output/'plan-1440.png'),full_page=True)
