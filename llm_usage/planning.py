@@ -85,7 +85,7 @@ def fallback_resources(data, route, model, blocked, now):
                       and r['status'] == 'fresh'), None)
     result = []
     for r in items:
-        if r.get('allowance') or r['kind'] == 'api_credit' or r.get('scope') == 'api':
+        if r.get('allowance') or r['kind'] == 'api_credit' or r.get('scope') in ('api', 'cloud'):
             continue
         if r.get('scope') == 'model' and r.get('model', '').lower() != model.lower():
             continue

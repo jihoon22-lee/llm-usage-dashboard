@@ -120,9 +120,34 @@
   실제 계정의 구매·초기화권 소비는 실행하지 않았다. 신규 계정 관측의 속도 확보 조건과
   제공사 미제공 필드 등 문서의 제약은 유지한다.
 
+## 후속 수정: 구독 한도 우선·Claude 자원 실수신
+
+사용자가 첫 화면의 우선순위와 실제 보유 자원 누락을 지적했다. 기존 검증은 HTTP 성공과
+fresh·계정 식별만 확인했으며, 제공사 화면의 실제 보유 자원과 대조하지 않아 잘못된 0과
+수집 대상 누락을 발견하지 못했다. 이 검증 한계를 인정하고 다음을 수정했다.
+
+- 개요 순서를 구독 한도 → 추가 사용 자원 → 지금 작업 → 기간 요약으로 바꿨다.
+  320/390/1440px 첫 화면에서 한도 카드가 보이는지 검사하고 합성 문서 화면을 교체했다.
+- 초기화권 조회에는 CLI 플랫폼 헤더와 설치된 버전의 CLI User-Agent가 함께 필요했다.
+  `eligible=false, ineligible_reason=surface, grants=[]`는 보유 0회가 아니라 조회 경로 제한이다.
+  이 응답은 미확인으로 처리하고 이전 관측이 있으면 미확인 상태로 보존한다.
+- 일반 OAuth 사용량의 `iguana_necktie` 항목에서 클라우드 세션 프로모션의 원본 달러
+  지급액·사용액·잔액·만료를 읽는다. 일반 선불 잔액·추가 사용 활성화·로컬 한도와 분리하고
+  로컬 작업 대안에 합산하지 않는다. 누락·금액 불일치·만료도 별도 처리한다.
+- 수정한 모듈이 독립 checkout에서 로드됐음을 확인하고 임시 DB에서 실제 조회했다.
+  초기화권 수신, 클라우드 자원의 원본 지급액−사용액=잔액과 만료·계정 식별을 대조했다.
+  구매·초기화권 소비는 실행하지 않았으며 실제 금액·식별자·원본 응답은 기록하지 않는다.
+- Python 329개, 전체 JavaScript 구문·단위 검사, 브라우저 16개 묶음이 통과했다.
+  구독 한도의 첫 화면 위치, 초기화권·클라우드 전용 잔액 표시, 로컬 작업 추천 제외,
+  기존 편집·충돌·오프라인 회귀를 포함한다. 문서 링크·개인정보 패턴·diff 검사도 통과했다.
+- 의존성·프로젝트 버전·DB 토큰 집계 구조는 바꾸지 않는다. 공개 v0.2.0 태그와 파일은
+  유지하고 수정 main을 코드 전환으로 운영에 반영한다. 운영 가상환경 재동기화는 필요 없다.
+- 후속 수정의 PR 병합·운영 반영 결과는 검증 후 이 기록에 갱신한다.
+
 ## 참고
 
 - [Codex account 응답](https://learn.chatgpt.com/docs/app-server#auth-endpoints)
 - [Claude 초기화권](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset)
 - [Claude 사용 크레딧](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans)
+- [Claude 클라우드 세션 프로모션](https://support.claude.com/en/articles/17152539-cloud-sessions-bonus-credit-promotion)
 - [Claude 월간 API 크레딧](https://support.claude.com/en/articles/17154008-monthly-api-credits-for-max-and-team-plans)

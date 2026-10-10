@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from llm_usage.limits import codex_limits, claude_limits, poll_claude_resources
+from llm_usage.limits import codex_limits, claude_limits, claude_cli_version, claude_headers, poll_claude_resources
 from llm_usage.planning import decide, plan
-from llm_usage.resources import (Conflict, account, amount, claude_balance, claude_resets,
+from llm_usage.resources import (Conflict, account, amount, claude_balance, claude_cloud_credits, claude_resets,
                                  observe_account, save_auto, write_manual)
 from llm_usage.store import Store
 from llm_usage.webapp import create_app
@@ -234,6 +234,69 @@ class ResourcesPlanningTests(unittest.TestCase):
         item = self.item('prepaid-credits')
         self.assertEqual((item['amount'], item['reported_total']), (10, 50))
 
+    def test_cloud_credits_are_collected_from_usage_separately_from_prepaid_balance(self):
+        with self.store.connect() as c:
+            observe_account(c, 'claude-code', ('user', 'org'), self.now)
+            claude_limits(self.store, c, {'iguana_necktie': dict(limit_dollars=100, used_dollars=12.345678,
+                remaining_dollars=87.654322, resets_at=self.now+86400, locked_reason=None),
+                'extra_usage': {'is_enabled': False}}, self.now)
+            claude_balance(c, {'amount': 0, 'currency': None}, self.now)
+        cloud = self.item('cloud-session-credits')
+        self.assertEqual((cloud['amount'], cloud['unit'], cloud['scope']), (87.654322, 'USD', 'cloud'))
+        self.assertTrue(cloud['enabled'])
+        self.assertNotIn('usage_conditions', cloud)
+        self.assertEqual(cloud['expires'], self.now+86400)
+        self.assertEqual(self.item('prepaid-credits')['amount'], 0)
+        from llm_usage.planning import fallback_resources
+        self.assertEqual(fallback_resources(self.store.limits(self.now), 'claude-code', 'opus', ['seven_day'], self.now), [])
+
+    def test_cloud_missing_is_not_zero_and_does_not_create_an_unowned_promotion(self):
+        with self.store.connect() as c:
+            self.assertEqual(claude_cloud_credits(c, {'iguana_necktie': None}, self.now), 0)
+            self.assertEqual(c.execute('SELECT count(*) FROM resource_items').fetchone()[0], 0)
+            claude_cloud_credits(c, {'iguana_necktie': {'remaining_dollars': 42}}, self.now-1)
+            claude_cloud_credits(c, {}, self.now)
+        item = self.item('cloud-session-credits')
+        self.assertEqual((item['amount'], item['status']), (42, 'unavailable'))
+
+    def test_cloud_conflict_and_expiry_do_not_create_usable_balance(self):
+        with self.store.connect() as c:
+            claude_cloud_credits(c, {'iguana_necktie': dict(limit_dollars=100, used_dollars=30,
+                remaining_dollars=90)}, self.now-1)
+        self.assertEqual(self.item('cloud-session-credits')['status'], 'conflict')
+        with self.store.connect() as c:
+            claude_cloud_credits(c, {'iguana_necktie': dict(limit_dollars=100, used_dollars=30,
+                remaining_dollars=70, resets_at=self.now-60, locked_reason=None)}, self.now)
+        self.assertEqual(self.item('cloud-session-credits')['status'], 'expired')
+
+    def test_reset_surface_rejection_is_unknown_not_zero(self):
+        with self.store.connect() as c:
+            count = claude_resets(c, {'cedar_ember': {'eligible': False, 'ineligible_reason': 'surface', 'grants': []}}, self.now)
+        self.assertEqual(count, 0)
+        item = self.item('reset-grants')
+        self.assertIsNone(item['amount'])
+        self.assertEqual(item['status'], 'unavailable')
+
+    def test_reset_surface_rejection_preserves_previous_grants_as_unavailable(self):
+        with self.store.connect() as c:
+            claude_resets(c, {'cedar_ember': {'eligible': True, 'grants': [dict(id='synthetic', resets_left=1)]}}, self.now-60)
+            claude_resets(c, {'cedar_ember': {'eligible': False, 'ineligible_reason': 'surface', 'grants': []}}, self.now)
+        item = self.item('reset-grants')
+        self.assertEqual((item['amount'], item['status']), (1, 'unavailable'))
+
+    def test_reset_request_uses_installed_cli_version_without_opening_a_session(self):
+        binary=self.root/'8.7.6';binary.touch()
+        with patch('llm_usage.limits.shutil.which',return_value=str(binary)),patch('llm_usage.limits.subprocess.run') as run:
+            self.assertEqual(claude_headers('fixture')['User-Agent'],'claude-cli/8.7.6 (external, cli)')
+            run.assert_not_called()
+
+    def test_unknown_cli_version_does_not_invent_a_native_version(self):
+        binary=self.root/'missing'
+        with patch('llm_usage.limits.shutil.which',return_value=str(binary)):
+            self.assertEqual(claude_headers('fixture')['User-Agent'],'llm-usage/0.2')
+        with patch('llm_usage.limits.subprocess.run',side_effect=OSError):
+            self.assertIsNone(claude_cli_version(str(binary),0))
+
     def test_resource_poll_is_get_only_and_has_independent_cooldowns(self):
         folder = self.root/'.claude'; folder.mkdir()
         credentials = folder/'.credentials.json'
@@ -250,6 +313,8 @@ class ResourcesPlanningTests(unittest.TestCase):
                 request = call.args[0]
                 self.assertEqual(request.get_method(), 'GET')
                 self.assertIsNone(request.data)
+                self.assertEqual(request.get_header('Anthropic-client-platform'), 'claude_code_cli')
+                self.assertEqual(request.get_header('X-app'), 'cli')
         with self.store.connect() as c:
             dump = '\n'.join(c.iterdump())
             self.assertNotIn('PRIVATE', dump)

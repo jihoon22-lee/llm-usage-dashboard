@@ -1,6 +1,6 @@
 'use strict';
 const RESOURCE_STATES={fresh:'자동 조회',manual:'수동 확인',stale:'오래된 기록',error:'조회 실패',unavailable:'미제공',conflict:'출처 간 차이',expired:'만료됨',previous_account:'계정·조건 변경 후 재확인 필요'};
-const RESOURCE_SCOPES={subscription:'구독 경로 추가 사용',api:'API 전용 · 구독 한도에 미포함',five_hour:'5시간 한도',weekly:'주간 한도',model:'특정 모델',unknown:'적용 범위 확인 필요'};
+const RESOURCE_SCOPES={subscription:'구독 경로 추가 사용',cloud:'클라우드 세션 전용 · 로컬·채팅·API에 미적용',api:'API 전용 · 구독 한도에 미포함',five_hour:'5시간 한도',weekly:'주간 한도',model:'특정 모델',unknown:'적용 범위 확인 필요'};
 let editingResource=null,resourceSaving=false,resourceDirty=false,resourceRequestId=null;
 function resourceValue(row,value=row.amount){
  if(value==null)return '미제공';
@@ -13,7 +13,13 @@ function resourceConditions(row){
  const parts=[];
  const conditions=row.usage_conditions||row;
  if(row.allowance)parts.push('선불 잔액과 별도의 지출 제한');
- if(conditions.enabled===false)parts.push(row.kind==='reset'?'현재 제공 대상 아님·사용 조건 확인':'추가 사용 비활성화');
+ if(row.scope==='cloud'){
+  if(row.limit!=null)parts.push('지급액 '+resourceValue(row,row.limit));
+  if(row.spent!=null)parts.push('사용액 '+resourceValue(row,row.spent));
+  if(row.expires)parts.push('만료 '+when(row.expires)+' KST');
+  parts.push('추가 사용 활성화와 별개 · 모델별 사용 조건 확인');
+ }
+ if(conditions.enabled===false)parts.push(row.kind==='reset'?'현재 제공 대상 아님·사용 조건 확인':row.scope==='cloud'?'클라우드 크레딧 사용 제한':'추가 사용 비활성화');
  else if(conditions.enabled===true)parts.push(row.kind==='reset'?'초기화권 제공 대상':'사용 활성화 확인');
  else parts.push('사용 조건 확인 필요');
  if(conditions.spend_remaining!=null&&!row.allowance)parts.push('남은 지출 한도 '+resourceValue(row,conditions.spend_remaining));
@@ -42,7 +48,7 @@ function renderResources(data){
  const focus=document.activeElement?.closest('[data-resource-edit],[data-resource-delete]');
  const focused=focus?{kind:focus.hasAttribute('data-resource-edit')?'edit':'delete',id:focus.dataset.resourceEdit||focus.dataset.resourceDelete}:null;
  const items=data.resources?.items||[];
- const folded=r=>r.status==='previous_account'||r.status==='expired'||r.amount===0||(r.duplicate_of&&!r.effective);
+ const folded=r=>r.status==='previous_account'||r.status==='expired'||(r.amount===0&&['fresh','manual'].includes(r.status))||(r.duplicate_of&&!r.effective);
  const current=items.filter(r=>!folded(r)),older=items.filter(folded);
  $('resource-list').innerHTML=current.map(r=>resourceCard(r,opened)).join('')||'<p class="hint">현재 표시할 추가 잔액·초기화권이 없습니다. 확인된 0과 미수신 상태는 구분됩니다.</p>';
  $('resource-inactive').hidden=!older.length;

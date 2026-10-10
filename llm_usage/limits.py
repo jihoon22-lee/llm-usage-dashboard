@@ -4,6 +4,7 @@ import math
 import os
 import re
 import selectors
+import shutil
 import socket
 import subprocess
 import time
@@ -12,6 +13,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from pathlib import Path
 
 from .store import stamp,KST
@@ -131,10 +133,10 @@ def claude_limits(store,c,data,checked):
         if role=='unknown':store.save_state(c,'label:claude-code:'+bucket,label)
         count+=1
         observed.append(bucket)
-    from .resources import claude_spend
+    from .resources import claude_spend, claude_cloud_credits
     store.save_state(c,'quota_snapshot:claude-code',dict(checked=checked,source='claude-oauth',buckets=observed,
                                                        absent=[b for b in optional if b in data and data[b] is None]))
-    return count+claude_spend(c,data,checked)
+    return count+claude_spend(c,data,checked)+claude_cloud_credits(c,data,checked)
 
 
 DEVIN_CLI_VERSION = '3000.10.27'
@@ -255,6 +257,32 @@ def retry_delay(value,now):
         except (TypeError,ValueError,OverflowError):return 0
 
 
+@lru_cache(maxsize=4)
+def claude_cli_version(binary, revision):
+    """Use the installed native version, never run a session or refresh login."""
+    path=Path(binary)
+    if re.fullmatch(r'\d+\.\d+\.\d+',path.name):return path.name
+    try:
+        result=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3,check=True)
+        match=re.match(r'(\d+\.\d+\.\d+)\b',result.stdout.strip())
+        return match.group(1) if match else None
+    except (OSError,ValueError,subprocess.SubprocessError):return None
+
+
+def claude_headers(token):
+    # The usage endpoint gates reset visibility by the native client surface.
+    # Without this header it returns eligible=false, reason=surface and no grants.
+    version=None
+    try:
+        binary=Path(shutil.which('claude') or Path.home()/'.local/bin/claude').resolve()
+        version=claude_cli_version(str(binary),binary.stat().st_mtime_ns)
+    except OSError:pass
+    agent=f'claude-cli/{version} (external, cli)' if version else 'llm-usage/0.2'
+    return {'Authorization':'Bearer '+token,'anthropic-beta':'oauth-2025-04-20',
+            'Accept':'application/json','User-Agent':agent,
+            'anthropic-client-platform':'claude_code_cli','x-app':'cli'}
+
+
 def poll_claude(store,settings):
     """One account read, with persistent cooldown shared by automatic/manual runs."""
     path=Path(settings.get('claude_auth',Path.home()/'.claude/.credentials.json'))
@@ -265,9 +293,7 @@ def poll_claude(store,settings):
         metadata['plan_revision']=[auth.get('subscriptionType'),auth.get('rateLimitTier')] if auth.get('subscriptionType') or auth.get('rateLimitTier') else None
         if not auth.get('accessToken') or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
             raise PermissionError('native authentication required')
-        request=urllib.request.Request('https://api.anthropic.com/api/oauth/usage',headers={
-            'Authorization':'Bearer '+auth['accessToken'],'anthropic-beta':'oauth-2025-04-20',
-            'Accept':'application/json','User-Agent':'llm-usage/0.1'})
+        request=urllib.request.Request('https://api.anthropic.com/api/oauth/usage',headers=claude_headers(auth['accessToken']))
         with urllib.request.build_opener(NoRedirect).open(request,timeout=20) as response:return json.load(response)
     def record(c,data,checked):
         from .resources import observe_account
@@ -306,8 +332,7 @@ def poll_claude_resources(store,settings):
             if not metadata.get('identity'):raise AccountMetadataMissing('native account identity required')
             endpoint=('https://api.anthropic.com/api/oauth/organizations/'+metadata['organization']+'/prepaid/credits' if kind=='credits'
                       else 'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1')
-            request=urllib.request.Request(endpoint,headers={'Authorization':'Bearer '+auth['accessToken'],
-                'anthropic-beta':'oauth-2025-04-20','Accept':'application/json','User-Agent':'llm-usage/0.2'})
+            request=urllib.request.Request(endpoint,headers=claude_headers(auth['accessToken']))
             with urllib.request.build_opener(NoRedirect).open(request,timeout=10) as response:return json.load(response)
         def record(c,data,checked):
             observe_account(c,'claude-code',metadata.get('identity'),checked,path.stat().st_mtime_ns)
