@@ -105,3 +105,24 @@
   ⚙·`,`로 열리고 돌아가기가 직전 탭으로 복귀·선택된 탭 없음·저장 화면이 설정이 아님, 계획 탭의 작업 전망 즉시
   표시, 예전 패널 순서가 다른 탭의 패널을 옮기지 못함, 320px에서 다섯 탭이 한 줄·가로 넘침 없음.
 - 320/390/1440px 화면을 탭별로 합성 데이터로 확인했다. 실제 계정 화면·운영 배포는 확인하지 않았다.
+
+## 편의 기능
+
+한도·계획 탭 위에 얹은 다섯 가지 변경이다. 서버·API는 바뀌지 않았다.
+
+- **수동 자원 기록 대화상자**: `#resource-editor` 폼을 `<dialog id="resource-dialog">`(`main` 밖, `.shell` 끝)로 옮겼다. 폼과 모든 id·저장·409 재조회·요청 id 재시도·오프라인 동작은 그대로이다. `editResource()`가 `showModal()`을 호출하고, 닫기 단추·Esc(`cancel` 이벤트에서 `preventDefault`)·`closeResourceEditor()`가 같은 경로를 쓴다(저장 중 차단, 입력이 있으면 `confirm`). 닫으면 연 단추(수정 단추, 다시 그려졌으면 `#resource-add`)로 포커스를 돌려준다. 데스크톱은 640px 가운데 패널, 600px 이하는 아래 시트(전폭·`max-height:90vh`, 본문 스크롤, 작업 줄 `position:sticky`). 메시지 줄은 스티키 작업 줄 위로 옮겼다. 모달이 열려 있으면 `1`~`5`·`,`·`r` 단축키는 무시한다.
+- **만료 임박 알림**: `format.js`의 순수 함수 `expiringResources(items,now,within=86400)`가 24시간 안에 끝나는 잔액·초기화권을 고른다(이미 지난 것·`used/expired` 초기화권·잔액 0·이전 계정·연결된 중복·지출 한도(갱신일)는 제외, 같은 시각(1시간)에 끝나는 초기화권은 개수 합산). `renderAlerts`가 `Codex 초기화권 1개 59분 후 만료`·`Claude 사용 크레딧 50 USD …`·`일부 잔액` 칩을 만들고, 누르면 한도 탭으로 가서 `[data-resource-id]` 카드로 스크롤한다. 확인이 오래된 기록의 칩에는 `확인 오래됨`을 붙인다. 설정의 알림 항목에 `자원 만료 임박`(`ntf-exp`, 기본 켜짐)을 더했고 `checkExpiryNotify`가 오프라인 사본·오래된 기록은 건너뛰며 초기화권 id(또는 자원 id+만료 분)별로 한 번만 보낸다. 이 브라우저의 `localStorage`(`llmExpiryNotified`)에도 남겨 새로고침 후 반복하지 않는다.
+- **계획 한 줄 요약**: 한도 탭 맨 위 `#plan-summary` 단추(`renderPlanSummary`, `renderWorkPlan`에서 호출). 상태는 계획 탭이 쓰는 `lastLimits.planning`과 같고 `unknown`·오프라인·관측 오래됨·불러오기 실패는 `판단 보류 — …`로 표시하며 시간·대안을 내지 않는다. 계획 데이터가 없으면 숨기고, 누르면 `setView('plan')`. 데스크톱 한 줄(말줄임), 600px 이하 최대 두 줄.
+- **앱 바로가기**: `manifest.json`에 `shortcuts`(`/?view=quota`·`/?view=plan`, 192px 아이콘). 매니페스트 해시는 `scripts/check_package.py`가 파일 내용으로 계산하므로 코드 수정은 필요 없었고 `sw.js`는 매니페스트를 가로채지 않는다.
+- **계획 탭 간격**: `.work-now` 아래 여백(26→16px, 모바일 6px)과 `.plan-evidence`·`.work-followup` 여백을 줄여 판단 근거 줄과 작업 전망 패널 사이의 빈 띠(약 47px→24~28px, 접힌 줄 높이 포함)를 줄였다. 600px 이하에서 작업 전망 제목 오른쪽 요약은 `flex-wrap`으로 제목 아래 전폭으로 내려간다.
+
+### 검증
+
+- `node --check llm_usage/web/*.js` 12개, `node --test 'tests/js/*.test.mjs'` 27개(새 `expiringResources` 1개 포함) 통과.
+- `.venv/bin/python -m unittest discover -s tests -q` 329개 통과(`test_manifest_is_installable`에 바로가기 확인 추가), `scripts/check_public.py` 통과.
+- `tests/browser_ci.py` 16개 묶음 통과(합성 fixture, 마지막 실행 기준). 새·바뀐 확인:
+  - `browser_resource_planning`: 3개 폭에서 대화상자 `:modal`·라벨 입력 포커스·데스크톱 640px 가운데/모바일 아래 시트·가로 넘침 없음·저장 단추 가시, Esc 취소 시 `confirm` 거절하면 유지·수락하면 닫힘, 닫은 뒤 `#resource-add`(수정 단추로 열었을 때는 그 단추)로 포커스; 한 시간 뒤 만료되는 Codex 초기화권 칩(2일 뒤·이미 지난 것은 칩 없음)과 칩 클릭 시 한도 탭의 해당 카드가 화면에 들어옴; `#plan-summary`의 부족 예상 문구·대안·높이(한 줄/두 줄 이하)·클릭 시 계획 탭, 오프라인 재현에서 `판단 보류`로 바뀌고 시간·대안이 사라졌다가 복구 후 되돌아옴; 매니페스트 바로가기 두 개와 각 URL이 해당 탭을 염; 계획 탭 간격과 작업 전망 요약 위치.
+  - `browser_notifications`: 만료 임박 알림이 한 번만 가고(새로고침·메모리 집합 초기화 후에도) 설정을 끄면 안 가며 계획 데이터가 없으면 `#plan-summary`가 숨겨짐. 기존 테스트의 forecast 잔여 값이 렌더를 깨뜨리던 것을 만료 단계 전에 비웠다.
+  - 기대값 갱신: `browser_insights`의 제목 목록에서 `수동 자원 기록`(이제 `main` 밖), `browser_smoke`의 알림 토글 6→7개.
+- `docs/assets/dashboard.png`·`resource-expiry.png`를 `tests/browser_resource_planning.py --artifacts`로 다시 만들어 확인했다. 320/390/1440px 화면은 합성 데이터로만 확인했고 실제 계정 화면·운영 배포·실제 OS 알림은 확인하지 않았다.
+- 알려진 점: `browser_ci.py` 연속 실행 중 한 번 실패 기록(원인 묶음은 확인하지 못함)이 있었으나 이후 4회 전체 실행과 두 묶음 10회 반복은 모두 통과했다. 만료 칩은 24시간 경계를 포함하므로 합성 데이터의 `+24h` Claude 초기화권·클라우드 크레딧도 칩이 된다. 설치된 앱의 바로가기는 실제 OS에서 확인하지 못했다.
