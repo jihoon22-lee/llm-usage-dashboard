@@ -132,3 +132,14 @@
 - 사용자가 PR #29(`b931e75`)·#30(`9dee1e4`)을 직접 병합했다. 에이전트의 `gh pr merge`는 Claude Code auto mode 분류기가 사용자 승인 뒤에도 거부해 실행하지 않았다. `9dee1e4`의 main CI는 성공했다.
 - `chore/release-0.3.0`에서 프로젝트·lock 버전을 0.3.0으로 올리고 README·설치·운영 안내와 변경 기록을 갱신했다. 화면 개편 릴리스라 0.2.1과 외부 의존성·DB 구조·API가 같다.
 - uv 0.12.23 `lock --check`·`sync --locked`, Python 329개, `check_public.py`, CI와 같은 방식의 wheel/sdist 빌드 후 `check_package.py`(설치 wheel·메타데이터·웹 자산·manifest·SHA256SUMS), `check_checkout.py`(태그 clone·fresh venv·합성 init)가 통과했다. 코드 변경이 없어 브라우저 묶음은 다시 돌리지 않았다(직전 main CI에서 통과).
+
+## v0.3.0 공개 릴리스와 운영 배포
+
+- 사용자가 [PR #31](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/31)을 `37aaa39c2c0d1b2a6851b4e9fa3e6c0db2a86f43`로 병합했다. main CI 성공 후 같은 커밋에 주석 태그 `v0.3.0`을 만들고 push했다.
+- [Release CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/38050058335)의 artifact ID `11669685575`에서 네 파일을 게시했다. [v0.3.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.3.0)은 정식 immutable 릴리스다. 게시 파일을 다시 내려받아 SHA256SUMS·manifest(커밋·태그·버전)와 wheel 웹 자산 18개의 태그 소스 일치를 확인했고, 릴리스 설명에 변경·업데이트·출처를 넣었다.
+- 배포 전 비공개 복구 백업(운영 DB 일관 사본 quick_check ok, 운영 가상환경 패키지 목록, 실행 릴리스 경로, 이전 `pyproject.toml`·`uv.lock`)을 만들었다. 기본 checkout은 `v0.3.0`으로 fast-forward했다.
+- 사용자가 두 서비스를 정지했고 inactive/dead·잔여 프로세스 없음을 확인했다. 정지 시점 DB 사본을 추가 보존(quick_check ok)한 뒤 uv 0.12.23 `sync --locked --no-dev`로 운영 환경을 갱신했다. 프로젝트 패키지만 0.2.1→0.3.0이고 외부 패키지 목록은 같다.
+- 기존 배포기(`packaging/deploy.py`)가 Python 329개·JavaScript 검사 후 `37aaa39`로 전환하고 재시작했다. 두 서비스 active, 두 프로세스의 작업 경로가 새 릴리스, loopback health 200, 재시작 이후 새 수집 heartbeat를 확인했다.
+- 실제 Tailscale 주소에서 읽기 전용 `browser_smoke.py --origin`이 통과했다. 추가로 320/390/1440px에서 GET만 허용해 다섯 탭·다음 초기화 일정·추가 자원·계획 요약·만료 알림·설정 진입/복귀를 열고 JavaScript/CSP 오류와 가로 넘침이 없음을 확인했다. 실제 금액·날짜·식별자·화면은 기록하지 않았고 확인용 스크린샷은 삭제했다.
+- **v0.3.0 운영 배포 완료.** 수동 기록 쓰기·대화상자 저장·브라우저 알림은 합성 검증 결과이며 실제 계정에서는 실행하지 않았다.
+- 후속 후보: 실제 화면에서 Claude 초기화권 대상 중 `seven_day_overage_included`가 사람이 읽는 이름 없이 원본 키로 표시된다. 0.2.1부터 있던 라벨 누락이며 이번 변경과 무관하다.
