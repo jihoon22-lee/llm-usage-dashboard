@@ -11,5 +11,11 @@
   {"src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
   {"src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png"},
   {"src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png"}
+ ],
+ "shortcuts": [
+  {"name": "한도", "short_name": "한도", "description": "구독 한도와 다음 초기화", "url": "/?view=quota",
+   "icons": [{"src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png"}]},
+  {"name": "계획", "short_name": "계획", "description": "지금 작업해도 되는지 확인", "url": "/?view=plan",
+   "icons": [{"src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png"}]}
  ]
 }

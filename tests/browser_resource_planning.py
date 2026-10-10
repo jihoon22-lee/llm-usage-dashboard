@@ -213,6 +213,12 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#work-decision')).to_contain_text('관측상 여유')
             expect(page.locator('#work-decision')).not_to_contain_text('70시간')
             expect(page.locator('#work-budget')).to_be_visible()  # no click needed to open the forecast
+            # Plan tab rhythm: no large empty band before the forecast, and on phones the brief drops below the heading.
+            box=lambda sel:page.locator(sel).bounding_box()
+            assert box('#work-budget')['y']-(box('.plan-evidence summary')['y']+box('.plan-evidence summary')['height'])<=(30 if width>600 else 26),width
+            title,brief=box('#work-budget-title'),box('#work-budget-brief')
+            assert (brief['y']>=title['y']+title['height']-1) if width<=600 else abs(brief['y']+brief['height']/2-title['y']-title['height']/2)<=title['height'],(title,brief)
+            assert brief['x']+brief['width']<=width and title['x']+title['width']<=width
             page.locator('#plan-today-hours').fill('3')
             page.locator('#plan-week-hours').fill('10')
             page.locator('#work-budget-controls button').click()
@@ -224,7 +230,13 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         context=browser.new_context(viewport={'width':390,'height':900},service_workers='block')
         page=context.new_page();page_fixture(page)
         errors=[];page.on('pageerror',lambda error:errors.append(str(error)));watch_csp(page,errors)
-        page.goto(ORIGIN);expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+        shortcuts=call('/manifest.json').get_json()['shortcuts']
+        assert [(s['name'],s['url']) for s in shortcuts]==[('한도','/?view=quota'),('계획','/?view=plan')],shortcuts
+        for shortcut,tab in zip(shortcuts,('quota','plan')):
+            page.goto(ORIGIN+shortcut['url'])
+            expect(page.locator('#tab-'+tab)).to_have_attribute('aria-selected','true')
+            expect(page.locator('#view-'+tab)).to_be_visible()
+        page.goto(ORIGIN+'/?view=quota');expect(page.locator('#work-decision')).to_contain_text('부족 예상')
         page.locator('#resource-add').click()
         # Escape asks before dropping typed input, keeps the dialog on 'cancel', closes on accept.
         page.locator('#resource-label').fill('임시 입력')

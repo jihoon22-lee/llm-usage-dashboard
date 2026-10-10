@@ -631,6 +631,12 @@ class WebTests(unittest.TestCase):
         self.assertTrue(data['start_url'].startswith('/'))
         self.assertTrue(any(i['sizes']=='192x192' for i in data['icons']))
         self.assertTrue(any(i['sizes']=='512x512' for i in data['icons']))
+        shortcuts={i['url']:i for i in data['shortcuts']}
+        self.assertEqual(sorted(shortcuts),['/?view=plan','/?view=quota'])
+        for item in shortcuts.values():
+            self.assertTrue(item['name'] and item['icons'])
+            for icon in item['icons']:
+                with self.get(icon['src']) as r:self.assertEqual(r.status_code,200)
         for asset in ('/assets/icon-192.png','/assets/icon-512.png'):
             with self.get(asset) as r:self.assertEqual(r.status_code,200)
         with self.get('/') as r:self.assertIn(b'rel="manifest"',r.data)
