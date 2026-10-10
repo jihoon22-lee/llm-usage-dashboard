@@ -126,3 +126,9 @@
   - 기대값 갱신: `browser_insights`의 제목 목록에서 `수동 자원 기록`(이제 `main` 밖), `browser_smoke`의 알림 토글 6→7개.
 - `docs/assets/dashboard.png`·`resource-expiry.png`를 `tests/browser_resource_planning.py --artifacts`로 다시 만들어 확인했다. 320/390/1440px 화면은 합성 데이터로만 확인했고 실제 계정 화면·운영 배포·실제 OS 알림은 확인하지 않았다.
 - 간헐 실패 원인: 독립 재검증의 전체 실행 3회 중 1회 `browser_smoke`가 히트맵 툴팁 확인에서 실패했다. 이벤트 기록으로 재현하니 툴팁 표시 12ms 뒤 실제 `pointerover`가 `.section-heading`에서 발생했다. 필터 선택 위치에 남은 테스트 포인터 아래로 비교 해제 후 재렌더링된 제목이 밀려 온 것이며, 다른 요소 위로 포인터가 가면 툴팁을 닫는 앱 동작은 정상이다. 합성 이벤트 전에 포인터를 페이지 모서리로 옮기도록 테스트를 고친 뒤 계측 실행 25회·`browser_smoke` 8회·전체 `browser_ci.py` 3회가 모두 통과했다. 만료 칩은 24시간 경계를 포함하므로 합성 데이터의 `+24h` Claude 초기화권·클라우드 크레딧도 칩이 된다. 설치된 앱의 바로가기는 실제 OS에서 확인하지 못했다.
+
+## v0.3.0 릴리스 준비
+
+- 사용자가 PR #29(`b931e75`)·#30(`9dee1e4`)을 직접 병합했다. 에이전트의 `gh pr merge`는 Claude Code auto mode 분류기가 사용자 승인 뒤에도 거부해 실행하지 않았다. `9dee1e4`의 main CI는 성공했다.
+- `chore/release-0.3.0`에서 프로젝트·lock 버전을 0.3.0으로 올리고 README·설치·운영 안내와 변경 기록을 갱신했다. 화면 개편 릴리스라 0.2.1과 외부 의존성·DB 구조·API가 같다.
+- uv 0.12.23 `lock --check`·`sync --locked`, Python 329개, `check_public.py`, CI와 같은 방식의 wheel/sdist 빌드 후 `check_package.py`(설치 wheel·메타데이터·웹 자산·manifest·SHA256SUMS), `check_checkout.py`(태그 clone·fresh venv·합성 init)가 통과했다. 코드 변경이 없어 브라우저 묶음은 다시 돌리지 않았다(직전 main CI에서 통과).

@@ -3,7 +3,7 @@ requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "llm-usage-dashboard"
-version = "0.2.1"
+version = "0.3.0"
 description = "Private self-hosted LLM quota and usage dashboard"
 readme = "README.md"
 license = "MIT"
