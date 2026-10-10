@@ -106,20 +106,24 @@ async def main():
             assert not await page.evaluate("document.body.classList.contains('busy')")
             # Auto refresh moved to the settings tab; switch it off without leaving the overview.
             await page.evaluate("$('auto').checked=false;$('auto').dispatchEvent(new Event('change'))")
-            # Filters, insights and quotas live on separate tabs since the 09-15 UX split.
+            # Quotas, usage (filters and filter-dependent panels), reports and status are separate tabs.
             async def view(name):await page.locator(f'#tabs [data-view="{name}"]').first.click()
-            await view('analysis')
+            await view('usage')
             await page.locator('#period').select_option('today')
-            await view('insights')
             await expect(page.locator('#comparison')).to_contain_text('+100.0%')
+            await view('status')
             await expect(page.locator('#quality')).to_contain_text('기록된 해석 실패')
+            await view('usage')
             await page.locator('#cache-panel > summary').click()
             await expect(page.locator('#cache-overview')).to_contain_text('50.0%')
             await expect(page.locator('#cache-trend svg')).to_be_visible()
             await expect(page.locator('#cache-rows')).to_contain_text('gpt-test')
+            await view('reports')
             # Calendar cells grow to the 30px cap at 1440px; stats sit to the
             # right of the grid and the 합계 matches the fixture rows (L2).
             await expect(page.locator('#calendar .cal-stats')).to_be_visible()
+            # The calendar was rendered while its tab was hidden; the resize observer refits it on show.
+            await page.wait_for_function("()=>{const c=document.querySelector('#calendar .cal-cell[data-day]');return !!c&&Math.abs(c.getBoundingClientRect().width-30)<0.6}")
             cell=await page.locator('#calendar .cal-cell[data-day]').first.bounding_box()
             assert abs(cell['width']-30)<0.6,cell
             stats_box=await page.locator('#calendar .cal-stats').bounding_box()
@@ -132,6 +136,7 @@ async def main():
                 const w=+m.className.match(/cal-m(\\d+)/)[1]-1,c=cells[w*7];
                 return c?Math.abs(m.getBoundingClientRect().x-c.getBoundingClientRect().x):0;});}""")
             assert all(d<=1 for d in offsets),offsets
+            await view('usage')
             await expect(page.locator('#sessions')).to_contain_text('fixture-')
             async with page.expect_download() as pending_download:
                 await page.locator('#csv-sessions').click()
@@ -165,7 +170,7 @@ async def main():
             await page.evaluate("""lastUsage.sessions=Array.from({length:100},(_,i)=>({session:'bulk-'+i,route:'codex',project:'p',kind:'main',first_ts:1700000000+i,last_ts:1700000100+i,requests:1,uncached_input:1,cached_input:0,output:0,cache_creation:0,cost:null}));
                 lastUsage.sessions_total=150;renderSessions(lastUsage)""")
             await expect(page.locator('#sess-page')).to_contain_text('전체 150개 중 상위 100개')
-            await view('overview')
+            await view('quota')
             # Quota cards show a summary; trends, forecast and history sit in the card details.
             await page.locator('.bucket-detail').first.locator(':scope > summary').click()
             await page.locator('.quota-history').first.locator(':scope > summary').click()
@@ -209,7 +214,7 @@ async def main():
             await asyncio.sleep(0.5)
             assert await page.evaluate("document.body.classList.contains('busy')")
             assert await page.evaluate("document.querySelector('#refresh').getAttribute('aria-busy')")=='true'
-            await view('analysis')
+            await view('usage')
             await page.locator('#period').select_option('30d')
             await page.locator('#group').select_option('model')
             await page.locator('#cumulative').select_option('1')
@@ -219,19 +224,17 @@ async def main():
             assert not await page.evaluate("document.body.classList.contains('busy')")
             assert await page.evaluate("lastUsage.start.startsWith('2026-08-11')")
             assert await page.evaluate("lastUsage.labels.includes('gpt-test')")
-            # Insights data loads lazily once its tab opens.
-            await view('insights')
+            # Insight panels on the usage tab follow the new filter once the lazy section arrives.
             await expect(page.locator('#comparison')).to_contain_text('최초 기록')
             assert await page.locator('.quota-history').first.get_attribute('open') is not None
-            await view('insights')
             await page.locator('#cache-series').select_option('gpt-test')
             await expect(page.locator('#cache-trend svg')).to_have_attribute('aria-label','gpt-test 캐시 활용률 추이')
             output=args.artifacts or Path(directory)
             output.mkdir(parents=True,exist_ok=True)
-            await page.locator('.insight-grid').screenshot(path=str(output/'insights-desktop.png'))
+            await page.locator('#cache-panel').screenshot(path=str(output/'insights-desktop.png'))
             await page.locator('#theme').select_option('midnight')
             await page.set_viewport_size({'width':390,'height':844})
-            await view('overview')
+            await view('quota')
             await expect(page.locator('#quota-overview')).to_be_visible()
             await expect(page.locator('#quota-overview button')).to_have_count(4)
             await expect(page.locator('.limit-card:visible')).to_have_count(0)
@@ -239,9 +242,9 @@ async def main():
             assert overview['height']<350
             order=await page.locator('main h3, #sources-panel h2').all_text_contents()
             assert order==['다음 초기화','수동 자원 기록','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
-                           '캐시 활용률 분석','구독 가치 분석','일별 활동','프로젝트별 사용량','세션별 사용량','주간 리포트',
-                           '이전 기간과 비교','데이터 신뢰도','수집 범위와 상태','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
-            await view('analysis')
+                           '프로젝트별 사용량','세션별 사용량','이전 기간과 비교','캐시 활용률 분석','주간 리포트','일별 활동','구독 가치 분석',
+                           '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
+            await view('usage')
             # Filters fold behind a one-line summary on mobile; opening reveals them.
             fold=page.locator('#filter-fold')
             assert not await fold.evaluate('el=>el.open')
@@ -302,7 +305,7 @@ async def main():
             assert await page.evaluate('lastUsage.scope')==None
             # Drill-down: a calendar day narrows to a custom hourly view, a rank
             # row applies a model scope, and Back restores the pushed filters.
-            await view('insights')
+            await view('reports')
             await page.evaluate("document.querySelectorAll('details.mobile-fold').forEach(d=>d.open=true)")
             await page.locator('#calendar .cal-cell[data-day]:not(.a0)').first.click()
             await expect(page.locator('#refresh')).to_be_enabled()
@@ -310,7 +313,7 @@ async def main():
             assert await page.evaluate("$('granularity').value")=='hour'
             day0=await page.evaluate("$('start').value")
             assert await page.evaluate("$('end').value")==day0
-            assert await page.evaluate("currentView")=='analysis'
+            assert await page.evaluate("currentView")=='usage'
             await page.locator('.rank[data-scope]').first.click()
             await expect(page.locator('#refresh')).to_be_enabled()
             assert (await page.evaluate("$('scope').value") or '').startswith('model:')
@@ -325,7 +328,7 @@ async def main():
             await page.go_back()
             assert await page.evaluate("$('period').value")=='30d'
             assert await page.evaluate("$('granularity').value")=='day'
-            await view('analysis')
+            await view('usage')
             # Keyboard drill-down: Enter on a focused table row applies its scope.
             await page.locator('#rows tr[data-scope]').first.focus()
             await page.keyboard.press('Enter')
@@ -335,7 +338,7 @@ async def main():
             await page.locator('#scope-chip').click()
             await expect(page.locator('#refresh')).to_be_enabled()
             # Calendar days roam with arrow keys and drill with Enter.
-            await view('insights')
+            await view('reports')
             # Lazy insights replace the calendar DOM; focus only after that render.
             await page.wait_for_function('()=>!pending && !insightsPending')
             await page.evaluate("document.querySelectorAll('details.mobile-fold').forEach(d=>d.open=true)")
@@ -355,7 +358,7 @@ async def main():
             await expect(page.locator('#refresh')).to_be_enabled()
             # No interactive elements remain nested inside <summary>.
             assert await page.evaluate("document.querySelectorAll('summary button').length")==0
-            await view('analysis')
+            await view('usage')
             # The 전체 토큰 card delta always compares token totals, whatever the metric.
             delta_tokens=await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")
             assert '7일 전 동일 구간 같은 경과 시간 대비' in delta_tokens,delta_tokens
@@ -364,15 +367,15 @@ async def main():
             await expect(page.locator('#refresh')).to_be_enabled()
             await expect(page.locator('#heatmap .heat-legend')).to_contain_text('요청 수')
             assert await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")==delta_tokens
-            await view('insights')
+            await view('reports')
             await expect(page.locator('#calendar .cal-grid')).to_have_attribute('aria-label',re.compile('요청 수'))
             await expect(page.locator('#calendar-caption')).to_contain_text('일별 요청 수')
             req_sum=await page.evaluate("fmt(lastUsage.calendar.reduce((s,r)=>s+r.requests,0))+'회'")
             await expect(page.locator('#calendar .cal-stats')).to_contain_text(req_sum)
-            await view('analysis')
+            await view('usage')
             await page.locator('#metric').select_option('cost')
             await expect(page.locator('#refresh')).to_be_enabled()
-            await view('insights')
+            await view('reports')
             # The unrated-model day/hour renders as a hatched 미산정 cell, not $0.
             # (insights reloads lazily once its tab opens, so poll for the cell)
             na=page.locator('#calendar .cal-cell.na')
@@ -388,16 +391,17 @@ async def main():
             stats_box=await page.locator('#calendar .cal-stats').bounding_box()
             grid_box=await page.locator('#calendar .cal-grid').bounding_box()
             assert stats_box['y']>=grid_box['y']+grid_box['height']-1,(stats_box,grid_box)
-            await view('analysis')
+            await view('usage')
             await page.locator('#metric').select_option('tokens')
             await expect(page.locator('#refresh')).to_be_enabled()
-            await view('overview')
-
-            await view('overview')
-            # Overview leads with quotas; the summary cards carry the active period.
-            assert await page.evaluate("document.querySelector('#quota-overview').compareDocumentPosition(document.querySelector('#cards')) & Node.DOCUMENT_POSITION_FOLLOWING")
+            # The summary cards sit on the usage tab, right after the filter, and carry the active period.
+            assert await page.evaluate("document.querySelector('#filter-fold').compareDocumentPosition(document.querySelector('#cards')) & Node.DOCUMENT_POSITION_FOLLOWING")
             await expect(page.locator('#cards-period')).to_contain_text('최근 30일')
             await expect(page.locator('#cards')).to_contain_text('7일 전 동일 구간 같은 경과 시간 대비')
+            assert await page.locator('#cards-edit').count()==0
+            await view('quota')
+            # The quota tab leads with quotas and carries no period cards.
+            await expect(page.locator('#cards')).to_be_hidden()
             await expect(page.locator('[data-quota="codex"]')).to_contain_text('주간 70.0%')
             assert '5h' not in await page.locator('[data-quota="codex"]').inner_text()
             await page.screenshot(path=str(output/'mobile-overview.png'),full_page=True)
@@ -447,40 +451,28 @@ async def main():
             await expect(page.locator('#alerts-toggle')).to_be_hidden()
             assert await page.locator('.alert-chip:visible').count()>=3
             await page.evaluate('data=>renderAlerts(data,lastUsage)',limits)
-            # The pinned nav keeps the tabs on screen and shows the shared
-            # filter summary on data tabs only (M2).
-            # The overview's period applies only to its summary cards, so the pinned
-            # filter summary is shown on the insights tab, not the overview.
-            await expect(page.locator('#context-bar')).to_be_hidden()
-            summary_text=await page.locator('#filter-summary').inner_text()
-            await view('insights')
-            await expect(page.locator('#context-bar')).to_be_visible()
-            assert await page.locator('#context-summary').inner_text()==summary_text
+            # The pinned nav keeps the tabs on screen. The filter lives on the usage tab,
+            # so there is no separate pinned filter summary any more.
+            assert await page.locator('#context-bar').count()==0
+            await view('usage')
             await page.evaluate('scrollTo(0,2000)')
             assert await page.evaluate('scrollY')>0
             assert await page.evaluate("document.querySelector('#tabs').getBoundingClientRect().top")<=1
             await page.evaluate('scrollTo(0,0)')
             await view('settings')
-            await expect(page.locator('#context-bar')).to_be_hidden()
-            await view('overview')
-            await page.locator('#cards-edit').click()
-            assert await page.evaluate('currentView')=='analysis'
-            assert 'view=analysis' in page.url,page.url
-            assert await page.evaluate("document.querySelector('#filter-fold').open")
-            assert await page.evaluate('document.activeElement.id')=='period'
-            await expect(page.locator('#context-bar')).to_be_hidden()
-            await view('overview')
-            await view('insights')
+            await view('quota')
+            await view('reports')
             # Month-to-date value projection and the budget alert chip.
             await expect(page.locator('#subvalue')).to_contain_text('이번 달 환산')
             await expect(page.locator('#subvalue')).to_contain_text('월말 예상')
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.insights.month.alert_usd=0.0001;renderInsights(d);}""")
             await expect(page.locator('#subvalue')).to_contain_text('알림 기준')
             await page.evaluate('()=>renderInsights(lastUsage)')
+            await view('status')
             await expect(page.locator('#quality')).to_be_visible()
             await page.set_viewport_size({'width':320,'height':720})
             assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-            await view('overview')
+            await view('quota')
             await page.set_viewport_size({'width':390,'height':844})
             await page.locator('[data-quota="codex"]').click()
             assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
@@ -496,16 +488,16 @@ async def main():
             await expect(page.locator('#alerts-toggle')).to_contain_text('알림')
             assert await page.locator('.alert-chip:visible').count()==0
             # Phone tabs are fixed at the bottom, so the overview content is what moves down.
-            collapsed_top=await page.evaluate("document.querySelector('#view-overview').getBoundingClientRect().top")
+            collapsed_top=await page.evaluate("document.querySelector('#view-quota').getBoundingClientRect().top")
             await page.locator('#alerts-toggle').click()
             await expect(page.locator('#alerts-toggle')).to_have_attribute('aria-expanded','true')
             assert await page.locator('.alert-chip:visible').count()>=3
-            expanded_top=await page.evaluate("document.querySelector('#view-overview').getBoundingClientRect().top")
+            expanded_top=await page.evaluate("document.querySelector('#view-quota').getBoundingClientRect().top")
             assert expanded_top>collapsed_top,(collapsed_top,expanded_top)
             await page.evaluate('data=>renderAlerts(data,lastUsage)',limits)
             # Insight tables drop secondary columns at 390px; a 상세 열 toggle in
             # each panel brings them back, and wraps never scroll sideways (M3).
-            await view('insights')
+            await view('usage')
             await page.evaluate("document.querySelectorAll('details.mobile-fold').forEach(d=>d.open=true)")
             proj_head=await page.locator('[data-panel="projects"] th:visible').all_text_contents()
             assert proj_head==['프로젝트','요청','토큰','비용 추정','상세'],proj_head  # 상세 opens the project detail
@@ -520,42 +512,45 @@ async def main():
             assert await page.locator('[data-panel="sessions"] th:visible').count()==8
             await page.locator('#proj-cols').click()
             await page.locator('#sess-cols').click()
+            await view('reports')
             # 구독 가치 rows stack name / description / value in one column.
             row_boxes=await page.evaluate("""()=>[...document.querySelector('[data-panel="subvalue"] .sub-row').children]
               .map(c=>{const r=c.getBoundingClientRect();return{x:r.x,y:r.y};})""")
             assert len({round(b['x']) for b in row_boxes})==1 and all(b['y']>row_boxes[0]['y'] for b in row_boxes[1:]),row_boxes
-            # The type scale floors every visible HTML text at 11px (T1);
-            # SVG text is sized in user units by fitSvgText, so it is skipped.
-            tiny=await page.evaluate("""()=>[...document.querySelectorAll('body *')]
-              .filter(el=>{if(el.closest('svg')||!el.getClientRects().length)return false;
-                let t='';for(const n of el.childNodes)if(n.nodeType===3)t+=n.textContent;
-                return t.trim()&&parseFloat(getComputedStyle(el).fontSize)<11;})
-              .map(el=>el.tagName+'.'+el.className+':'+el.textContent.trim().slice(0,25))""")
-            assert tiny==[],tiny
-            # Interactive targets are >=32px tall at 390px (T2). A control inside
-            # a sized label or th inherits its ancestor's target size; calendar
-            # cells keep their fixed grid size by design (Q2).
-            small_targets=await page.evaluate("""()=>[...document.querySelectorAll('button,a,select,input,summary,[role=tab],[tabindex="0"]')]
-              .filter(el=>{
-                if(el.classList.contains('cal-cell'))return false;
-                if(!el.getClientRects().length||getComputedStyle(el).display==='none')return false;
-                if(el.getBoundingClientRect().height>=32)return false;
-                const label=el.closest('label');if(label&&label.getBoundingClientRect().height>=32)return false;
-                const th=el.closest('th');if(th&&th.getBoundingClientRect().height>=32)return false;
-                if(el.type==='checkbox'||el.type==='radio')return false;
-                return true;})
-              .map(el=>el.tagName+'#'+(el.id||'')+'.'+el.className+':'+(el.textContent||'').trim().slice(0,25))""")
-            assert small_targets==[],small_targets
+            for name in ("usage","reports","status"):
+                await view(name)
+                # The type scale floors every visible HTML text at 11px (T1);
+                # SVG text is sized in user units by fitSvgText, so it is skipped.
+                tiny=await page.evaluate("""()=>[...document.querySelectorAll('body *')]
+                  .filter(el=>{if(el.closest('svg')||!el.getClientRects().length)return false;
+                    let t='';for(const n of el.childNodes)if(n.nodeType===3)t+=n.textContent;
+                    return t.trim()&&parseFloat(getComputedStyle(el).fontSize)<11;})
+                  .map(el=>el.tagName+'.'+el.className+':'+el.textContent.trim().slice(0,25))""")
+                assert tiny==[],(name,tiny)
+                # Interactive targets are >=32px tall at 390px (T2). A control inside
+                # a sized label or th inherits its ancestor's target size; calendar and
+                # heatmap cells keep their fixed grid size by design (Q2).
+                small_targets=await page.evaluate("""()=>[...document.querySelectorAll('button,a,select,input,summary,[role=tab],[tabindex="0"]')]
+                  .filter(el=>{
+                    if(el.classList.contains('cal-cell')||el.classList.contains('heat-cell'))return false;
+                    if(!el.getClientRects().length||getComputedStyle(el).display==='none')return false;
+                    if(el.getBoundingClientRect().height>=32)return false;
+                    const label=el.closest('label');if(label&&label.getBoundingClientRect().height>=32)return false;
+                    const th=el.closest('th');if(th&&th.getBoundingClientRect().height>=32)return false;
+                    if(el.type==='checkbox'||el.type==='radio')return false;
+                    return true;})
+                  .map(el=>el.tagName+'#'+(el.id||'')+'.'+el.className+':'+(el.textContent||'').trim().slice(0,25))""")
+                assert small_targets==[],(name,small_targets)
             # Tabs expose tablist semantics and arrow-key navigation.
             assert await page.locator('#tabs').get_attribute('role')=='tablist'
-            assert await page.locator('#tab-insights').get_attribute('aria-controls')=='view-insights'
-            assert await page.locator('section[data-view="insights"]').get_attribute('role')=='tabpanel'
-            await page.locator('#tab-overview').focus()
+            assert await page.locator('#tab-reports').get_attribute('aria-controls')=='view-reports'
+            assert await page.locator('section[data-view="reports"]').get_attribute('role')=='tabpanel'
+            await page.locator('#tab-quota').focus()
             await page.keyboard.press('ArrowRight')
-            await expect(page.locator('#tab-analysis')).to_have_attribute('aria-selected','true')
-            await expect(page.locator('#tab-analysis')).to_have_attribute('tabindex','0')
-            await expect(page.locator('#tab-overview')).to_have_attribute('tabindex','-1')
-            assert 'view=analysis' in page.url
+            await expect(page.locator('#tab-plan')).to_have_attribute('aria-selected','true')
+            await expect(page.locator('#tab-plan')).to_have_attribute('tabindex','0')
+            await expect(page.locator('#tab-quota')).to_have_attribute('tabindex','-1')
+            assert 'view=plan' in page.url
             # This page visited settings earlier. Its old controls can satisfy
             # visibility/count assertions before the next loadConfig replaces
             # them, detaching a handle during bounding_box(). Wait for that
@@ -588,12 +583,12 @@ async def main():
             await expect(page.locator('#cfg-pricing tbody tr:not([hidden]) td').first).to_contain_text('미설정')
             await page.locator('#price-unset').click()
             await expect(page.locator('#cfg-pricing tbody tr:not([hidden])')).to_have_count(3)
-            await page.locator('#tabs [data-view="analysis"]').click()
+            await page.locator('#tabs [data-view="usage"]').click()
             # The grid is a labelled group of labelled cells reachable by keyboard.
             assert await page.locator('#heatmap .heat-grid').get_attribute('role')=='group'
             assert await page.locator('#heatmap .heat-cell[tabindex="0"]').count()==1
             assert (await page.locator('#heatmap .heat-cell').first.get_attribute('aria-label')).startswith('월요일 0시')
-            await view('insights')
+            await view('reports')
             assert await page.locator('#calendar .cal-grid').get_attribute('role')=='group'
             # An expired CSRF token re-bootstraps once and the POST succeeds.
             assert await page.evaluate("api('/api/config/thresholds',{stale_seconds:900}).then(r=>r.thresholds!==undefined).catch(e=>'fail:'+e.message)")is True
@@ -629,7 +624,7 @@ async def main():
             await touch.route('**/*',route)
             await touch.goto(ORIGIN+'/')
             await expect(touch.locator('#refresh')).to_be_enabled()
-            await touch.locator('#tabs [data-view="analysis"]').click()
+            await touch.locator('#tabs [data-view="usage"]').click()
             svg=touch.locator('#chart > svg')
             await svg.scroll_into_view_if_needed()
             point=await svg.evaluate('''svg=>{
@@ -644,10 +639,8 @@ async def main():
             await expect(touch.locator('#refresh')).to_be_enabled()
             assert 'period=custom' in touch.url,touch.url
             # A folded mobile panel opens normally and its CSV button works.
-            await touch.locator('#tabs [data-view="insights"]').click()
             await touch.wait_for_function("()=>'insights' in (lastUsage||{})")
             # Only data-mobile-open panels start expanded on mobile (M4).
-            assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
             assert not await touch.evaluate("document.querySelector('[data-panel=projects]').open")
             panel=touch.locator('[data-panel="sessions"]')
             assert not await panel.evaluate('el=>el.open')
@@ -655,18 +648,21 @@ async def main():
             async with touch.expect_download() as pending:
                 await touch.locator('#csv-sessions').click()
             assert (await pending.value).suggested_filename.startswith('llm-usage-sessions-')
-            # The sources tab is a plain section now — its list is visible
+            await touch.locator('#tabs [data-view="reports"]').click()
+            assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
+            # The status tab's source list is a plain section — visible
             # without unfolding anything (M4).
-            await touch.locator('#tabs [data-view="sources"]').click()
+            await touch.locator('#tabs [data-view="status"]').click()
             await expect(touch.locator('#sources .source').first).to_be_visible()
             assert not touch_errors,touch_errors
             await touch.close()
             # Empty data: no fabricated percentages or account coverage.
             empty=Store(Path(directory)/'empty.db').usage(period='today',now=NOW)
             await page.evaluate('data=>renderUsage(data)',empty)
-            await view('insights')
+            await view('usage')
             await expect(page.locator('#cache-overview')).to_contain_text('—')
             await expect(page.locator('#cache-trend')).to_contain_text('표시할 관측값이 없습니다.')
+            await view('status')
             await expect(page.locator('#quality')).to_contain_text('모델 미확인 토큰 비중')
             assert not errors,errors
             await browser.close()

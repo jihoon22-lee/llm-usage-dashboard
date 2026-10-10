@@ -63,16 +63,22 @@ function renderScope(data){
  chip.hidden=!scope;
  if(scope)chip.textContent=scopeText(scope)+' ×';
 }
-let currentView='overview';
+// Earlier releases used other tab names; saved views and bookmarked URLs still resolve.
+const VIEW_ALIASES={overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
+// Panels fed by the lazily fetched insights section.
+const INSIGHT_VIEWS=['usage','reports','status'];
+let currentView='quota';
 const viewEls=[...document.querySelectorAll('main>[data-view]')];
 function setView(name,sync=true){
- currentView=viewEls.some(e=>e.dataset.view===name)?name:'overview';
+ name=VIEW_ALIASES[name]||name;
+ currentView=viewEls.some(e=>e.dataset.view===name)?name:'quota';
  viewEls.forEach(e=>{e.hidden=e.dataset.view!==currentView;});
  document.querySelectorAll('#tabs [data-view]').forEach(b=>{const on=b.dataset.view===currentView;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
- // The pinned context bar only makes sense where the shared filter applies.
- $('context-bar').hidden=currentView!=='insights';
+ document.body.dataset.view=currentView;
  if(currentView==='settings')loadConfig();
- if(currentView==='insights'){loadInsights();loadReports();}
+ if(currentView==='status')loadNotifyLog();
+ if(INSIGHT_VIEWS.includes(currentView))loadInsights();
+ if(currentView==='reports')loadReports();
  // A hidden chart skipped its draw; render synchronously on tab switch so the
  // ResizeObserver sees the same width and does not queue a duplicate redraw.
  if(chartData&&$('chart').clientWidth)chart(chartData);
@@ -83,10 +89,7 @@ function setView(name,sync=true){
 $('tabs').addEventListener('click',event=>{
  const button=event.target.closest('button[data-view]');if(button)setView(button.dataset.view);
 });
-const editFilters=()=>{setView('analysis');$('filter-fold').open=true;$('period').focus();};
-$('context-edit').addEventListener('click',editFilters);
-$('cards-edit').addEventListener('click',editFilters);
-$('first-use-sources').addEventListener('click',()=>{setView('sources');$('tab-sources').focus();});
+$('first-use-sources').addEventListener('click',()=>{setView('status');$('tab-status').focus();});
 $('tabs').addEventListener('keydown',event=>{
  const tabs=[...$('tabs').querySelectorAll('button[data-view]')],i=tabs.indexOf(document.activeElement);
  if(i<0)return;
@@ -101,13 +104,13 @@ function syncUrl(push){
   const v=$(id).value;
   if(FILTER_DEFAULTS[id]===undefined||v!==FILTER_DEFAULTS[id])q.set(id,v);
  }
- if(currentView!=='overview')q.set('view',currentView);
+ if(currentView!=='quota')q.set('view',currentView);
  const s=q.toString();
  history[push?'pushState':'replaceState'](null,'',location.pathname+(s?'?'+s:''));
 }
-// Drill-down applies a filter change, moves to the analysis view, and pushes a
+// Drill-down applies a filter change, moves to the usage view, and pushes a
 // history entry so the browser back button restores the previous filters.
-function applyDrill(changes,view='analysis'){
+function applyDrill(changes,view='usage'){
  for(const [id,v] of Object.entries(changes)){
   if(id==='scope'&&v&&![...$('scope').options].some(o=>o.value===v))$('scope').add(new Option(v,v));
   $(id).value=v;
@@ -130,7 +133,7 @@ window.addEventListener('popstate',()=>{
   }else el.value=/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:(id==='start'||id==='end'?today:FILTER_DEFAULTS[id]||'');
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
- setView(params.get('view')||'overview');saveDefaults();filterSummary();refresh();
+ setView(params.get('view')||'quota');saveDefaults();filterSummary();refresh();
 });
 document.addEventListener('click',event=>{
  const scope=event.target.closest('[data-scope]');
@@ -179,7 +182,6 @@ function filterSummary(){
  if($('compare').value)parts.push(short('compare')+' 비교');
  if($('cumulative').value!=='0')parts.push(short('cumulative'));
  el.textContent=parts.join(' · ');
- const ctx=$('context-summary');if(ctx)ctx.textContent=el.textContent;
 }
 function compactPanels(){
  foldedPanels.forEach(panel=>{panel.open=compactMedia.matches?mobileOpen.get(panel):true;});
@@ -219,8 +221,8 @@ function renderUsage(data){
  $('chart-by-model').hidden=$('group').value==='model';
  chart(data);composition(data);ranking(data);renderInsights(data);renderWhatif();
  // A refresh may land after a lazy insights fetch; if the new core payload
- // dropped the merged section while its tab is open, fetch it again.
- if(currentView==='insights'&&!('insights' in data))loadInsights();
+ // dropped the merged section while a tab that shows it is open, fetch it again.
+ if(INSIGHT_VIEWS.includes(currentView)&&!('insights' in data))loadInsights();
 }
 // Collection status: a summary, problems first, grouped by provider, each with what it means.
 function renderSources(list){

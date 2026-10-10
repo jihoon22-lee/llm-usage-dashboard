@@ -32,6 +32,7 @@ button:disabled{opacity:.55;cursor:wait}
 input,select{font:inherit;accent-color:var(--accent)}
 .section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:17px}
 .section-heading>span{color:var(--subtle);font-size:var(--fs-small)}
+.summary-heading{margin-top:26px}
 .limits{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px;align-items:start}
 .limit-card{border:1px solid var(--border);background:var(--surface);border-radius:11px;padding:21px}
 .limit-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:16px}
@@ -58,10 +59,6 @@ progress::-webkit-progress-value{background:var(--chart-0)}
 .tabs{display:flex;gap:4px;margin-top:20px;overflow-x:auto;border-bottom:1px solid var(--border)}
 .tabs button{background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);padding:9px 14px;font-size:13px;font-weight:600;white-space:nowrap}
 .tabs button.active{color:var(--ink);border-bottom-color:var(--accent)}
-.context-bar{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;color:var(--muted)}
-.context-bar[hidden]{display:none}
-#context-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#context-edit{flex:none}
 section[data-view]{margin-top:24px}
 [data-view][hidden]{display:none}
 .filters{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:20px 0}
@@ -181,8 +178,6 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .legend .unavailable-series::before {content:'○'; color:var(--muted)}
 .tooltip-missing {color:var(--muted)}
 
-.insight-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}
-.insight-grid .panel{min-width:0}
 .quality-stats{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:22px 0}
 .quality-stats span{display:block;font-size:11px;color:var(--muted)}
 .quality-stats strong{display:block;font-size:23px;margin-top:7px;font-variant-numeric:tabular-nums}
@@ -204,8 +199,7 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .insight-table{max-height:300px;margin:15px 0}
 .insight-table td:last-child,.insight-table th:last-child{text-align:right}
 #quality details{margin-top:18px;font-size:11px}
-@media(max-width:850px){.chart-grid{grid-template-columns:1fr}
-.insight-grid{grid-template-columns:1fr;gap:0}}
+@media(max-width:850px){.chart-grid{grid-template-columns:1fr}}
 
 /* Compact quota overview is mobile-only; desktop keeps its four columns. */
 #quota-overview,.quota-close{display:none}
@@ -339,6 +333,8 @@ tr[data-scope]:hover{background:var(--raised)}
 @media(max-width:600px){.alerts.collapsible:not(.expanded) .alert-chip{display:none}}
 .collector-banner{background:var(--error-bg);color:var(--error-ink);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:var(--fs-small);font-weight:600}
 .collector-banner[hidden]{display:none}
+/* The insights banner belongs to the tabs that show insight panels. */
+body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #insights-status{display:none}
 .quota-note{font-size:11px;color:var(--muted);margin-top:4px}
 .mini-btn{background:var(--raised);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;min-height:32px}
 .mini-btn.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
@@ -351,7 +347,7 @@ tr[data-scope]:hover{background:var(--raised)}
 .order-toggle.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .ord{display:inline-flex;gap:4px;align-items:center}
 .ord button{min-width:32px;min-height:30px;padding:2px 7px;font-size:12px;background:var(--raised);color:var(--ink);border:1px solid var(--border);border-radius:6px}
-.chart-grid>.ord,.insight-grid>.ord{grid-column:1/-1;justify-content:flex-end;margin-bottom:4px}
+.chart-grid>.ord{grid-column:1/-1;justify-content:flex-end;margin-bottom:4px}
 #quota-overview.editing{display:block;border:1px solid var(--border);border-radius:9px;background:var(--surface);overflow:hidden;margin-bottom:14px}
 .quota-edit-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto 36px;align-items:center;gap:8px;padding:9px 12px;border-top:1px solid var(--line);text-align:left}
 .quota-edit-row strong{display:block;font-size:12px}
@@ -386,6 +382,7 @@ tr[data-scope]:hover{background:var(--raised)}
  .refresh-box button{min-height:36px;padding:8px 12px;font-size:11px}
  .refresh-box label,.refresh-box small{font-size:var(--fs-meta)}
  .section-heading{margin-bottom:12px}
+ .summary-heading{margin-top:18px}
  h2{font-size:17px}
  #quota-overview{display:block;border:1px solid var(--border);border-radius:9px;background:var(--surface);overflow:hidden}
  .overview-caption{display:flex;justify-content:space-between;padding:9px 12px;font-size:var(--fs-meta);color:var(--muted);background:var(--raised)}
@@ -429,7 +426,7 @@ tr[data-scope]:hover{background:var(--raised)}
  :is(.mobile-fold,.fold)>summary{min-height:32px;line-height:1.6;font-size:12px}
  .mobile-fold .quality-stats{gap:13px;margin:15px 0}
  .quality-stats strong{font-size:20px}
- .insight-grid,.chart-grid{grid-template-columns:1fr;gap:0}
+ .chart-grid{grid-template-columns:1fr;gap:0}
  .chart{min-height:165px}
  .legend{gap:7px;margin-bottom:10px}
  .legend button{font-size:var(--fs-meta);min-height:32px}
@@ -617,9 +614,7 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
 .resource-wide{grid-column:1/-1}
 #resource-message{white-space:pre-wrap}
 .work-budget{margin-bottom:18px}
-.work-budget>summary{cursor:pointer}
-.work-budget>summary h3{margin:0}
-.work-budget:not([open])>summary{margin-bottom:0}
+.work-budget>.section-heading h3{margin:0}
 .work-budget-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}
 .work-budget-result{border:1px solid var(--border);border-radius:9px;padding:14px;background:var(--raised)}
 .work-budget-result>span,.work-budget-result>small{display:block;font-size:var(--fs-small);color:var(--muted);line-height:1.6}

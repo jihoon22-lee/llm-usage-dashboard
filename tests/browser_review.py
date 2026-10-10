@@ -95,9 +95,9 @@ async def main():
             mark=await page.locator('#quota-codex .pace-mark').first.evaluate('m=>parseFloat(getComputedStyle(m).left)/m.parentElement.clientWidth')
             assert 0.3<mark<0.95,mark
 
-            # Analysis: presets, the unified total and what-if pricing.
-            await page.keyboard.press('2')
-            await expect(page.locator('#tab-analysis')).to_have_attribute('aria-selected','true')
+            # Usage: presets, the unified total and what-if pricing.
+            await page.keyboard.press('3')
+            await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
             await page.locator('[data-preset="models"]').click()
             await expect(page.locator('#group')).to_have_value('model')
             await expect(page.locator('#period')).to_have_value('30d')
@@ -109,22 +109,22 @@ async def main():
             await page.locator('#whatif-model').select_option('claude-test')
             await expect(page.locator('#whatif-result')).to_contain_text('claude-test 단가로')
 
-            # Insights: value bars have width, the project detail opens without drilling.
-            # Shortcuts ignore keys typed into fields; leave the select first.
-            await page.evaluate('document.activeElement.blur()')
-            await page.keyboard.press('3')
-            # The lazy insights answer redraws the panel; wait for the bar to carry its width.
-            await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
+            # The project detail opens without drilling.
             url=page.url
             await page.locator('.proj-open[data-project="alpha"]').click()
             await expect(page.locator('#projects .sess-detail')).to_contain_text('월말 예상')
             await expect(page.locator('#projects .sess-detail')).to_contain_text('예산')
             assert page.url==url,page.url
 
-            # Settings: the notification history lists the failed send waiting for retry.
+            # Reports: value bars have width. Shortcuts ignore keys typed into fields; leave the select first.
+            await page.evaluate('document.activeElement.blur()')
+            await page.keyboard.press('4')
+            # The lazy insights answer redraws the panel; wait for the bar to carry its width.
+            await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
+
+            # Status: the notification history lists the failed send waiting for retry.
             await page.evaluate('document.activeElement.blur()')
             await page.keyboard.press('5')
-            await page.locator('.notify-log summary').click()
             await expect(page.locator('#notify-log')).to_contain_text('전송 실패 · 재시도')
             if args.artifacts:
                 args.artifacts.mkdir(parents=True,exist_ok=True)
@@ -133,10 +133,10 @@ async def main():
 
             # Offline: the root worker serves the last page copy and the page the last data.
             await page.evaluate('navigator.serviceWorker.ready')
-            await page.goto(ORIGIN+'/?view=overview');await expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+            await page.goto(ORIGIN+'/?view=quota');await expect(page.locator('#updated')).to_contain_text('마지막 갱신')
             assert await page.evaluate('!!navigator.serviceWorker.controller')
             offline[0]=True;await context.set_offline(True)
-            await page.goto(ORIGIN+'/?view=overview')
+            await page.goto(ORIGIN+'/?view=quota')
             await expect(page.locator('#offline')).to_be_visible()
             await expect(page.locator('#offline')).to_contain_text('오프라인')
             await expect(page.locator('#limits .limit-card').first).to_be_visible()

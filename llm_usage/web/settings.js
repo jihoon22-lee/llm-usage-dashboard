@@ -36,7 +36,7 @@ function settingsAvailable(available,message=''){
  settingsOnline=available;
  $('settings-status').textContent=message;
  for(const control of $('view-settings').querySelectorAll('input,button,select')){
-  if(control.closest('#local-statistics')||['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops'].includes(control.id))continue;
+  if(['auto','notify','ntf-low','ntf-dep','ntf-reset','ntf-ops'].includes(control.id))continue;
   control.disabled=!available;
   if(!available&&control.matches('input')){control.value='';control.checked=false;}
  }
@@ -107,7 +107,7 @@ async function loadConfig(){
   +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="월 구독료 저장">저장</button>';
  $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
- renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});loadNotifyLog();
+ renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});
  $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save" aria-label="임계값 저장">저장</button>';
  $('cfg-refresh').value=cfg.refresh_seconds;
  $('cfg-valert').value=cfg.value_alert_usd??'';
@@ -250,9 +250,9 @@ const LOG_STATUS={sent:'보냄',resent:'보류 후 보냄',held:'방해 금지 �
 async function loadNotifyLog(){
  const epoch=settingsEpoch;
  try{const d=await api('/api/notify/log');
-  if(epoch!==settingsEpoch||!settingsOnline)return;
+  if(epoch!==settingsEpoch)return;
   $('notify-log').innerHTML=d.log.length?'<ul>'+d.log.map(e=>`<li><span>${esc(when(e.ts))}</span> <strong>${esc(e.title)}</strong> <small class="${e.status==='failed'||e.status==='expired'?'warn-text':''}">${esc(LOG_STATUS[e.status]||e.status)}${e.error?' · '+esc(e.error):''}</small></li>`).join('')+'</ul>':'<p class="hint">아직 전송 이력이 없습니다.</p>';}
- catch(e){if(epoch!==settingsEpoch||!settingsOnline)return;$('notify-log').innerHTML=`<p class="hint">이력을 불러오지 못했습니다 (${esc(e.message)})</p>`;}
+ catch(e){if(epoch!==settingsEpoch)return;$('notify-log').innerHTML=`<p class="hint">이력을 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
 async function saveNotify(body,message){
  const drafts=draftsIn('#cfg-notify');

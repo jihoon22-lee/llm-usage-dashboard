@@ -44,7 +44,7 @@ def preview(page):
             route.fulfill(path=web/name, content_type=content_type)
         else:
             route.fallback()
-    # Match query strings too: view URLs like /?view=analysis must serve preview HTML.
+    # Match query strings too: view URLs like /?view=usage must serve preview HTML.
     page.route(origin+'/**', serve)
 
 def loaded(page):
@@ -72,7 +72,7 @@ with sync_playwright() as playwright:
     page.route(origin+'/api/usage?*',lambda route:route.fulfill(json=data))
     assert page.goto(origin+'/').status == 200
     loaded(page)
-    page.locator('#tabs [data-view="analysis"]').click()
+    page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#group')).to_have_value('route')
     # The scope picker is width-capped so it stays on the filter row (L5).
     scope_box=page.locator('#scope').bounding_box();metric_box=page.locator('#metric').bounding_box()
@@ -205,7 +205,7 @@ with sync_playwright() as playwright:
     assert page.evaluate("document.querySelector('meta[name=theme-color]').content")=='#10182d'
     expect(page.locator('#theme')).to_have_value('midnight')
     expect(page.locator('html')).to_have_attribute('data-theme','midnight')
-    page.locator('#tabs [data-view="analysis"]').click()
+    page.locator('#tabs [data-view="usage"]').click()
     hover_date(page,1)
     expect(page.locator('#chart-tooltip')).to_be_visible()
     page.screenshot(path=str(artifacts/'dashboard-midnight-tooltip.png'))
@@ -222,7 +222,7 @@ with sync_playwright() as playwright:
     mobile=browser.new_page(service_workers='block',viewport={'width':390,'height':844},has_touch=True,is_mobile=True)
     fixture_page(mobile)
     preview(mobile);mobile.route(origin+'/api/usage?*',lambda route:route.fulfill(json=data))
-    mobile.goto(origin+'/');loaded(mobile);mobile.locator('#tabs [data-view="analysis"]').click()
+    mobile.goto(origin+'/');loaded(mobile);mobile.locator('#tabs [data-view="usage"]').click()
     mobile.locator('#theme').select_option('ocean')
     point=hover_date(mobile,1);mobile.touchscreen.tap(point['x'],point['y'])
     expect(mobile.locator('#chart-tooltip')).to_be_visible()

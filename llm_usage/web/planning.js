@@ -85,7 +85,7 @@ function renderWorkPlan(data){
  $('plan-checked').textContent=data._offline?'오프라인 사본':p.checked?`한도 확인 ${when(p.checked)} KST`:'한도 수신 대기';
  const budget=[['오늘',p.today],['이번 주',p.week]];
  $('work-budget-brief').textContent=(shortService[p.route]||p.route)+' · '+budget.map(([label,result])=>label+' '+planStatus(result?.state)).join(' · ');
- $('work-budget-scope').textContent=`${shortService[p.route]||p.route} · ${selected?.label||p.model} · ${p.pace==='baseline'?'비교 3시간':'최근 30분'} 속도 기준 · 아래 소비량 필터와 별도입니다.`;
+ $('work-budget-scope').textContent=`${shortService[p.route]||p.route} · ${selected?.label||p.model} · ${p.pace==='baseline'?'비교 3시간':'최근 30분'} 속도 기준 · 사용량 탭의 필터와 별도입니다.`;
  $('work-budget-results').innerHTML=budget.map(([label,result])=>`<article class="work-budget-result ${esc(result?.state||'unknown')}"><span>${label} 남은 작업 · ${result?.hours??'—'}시간</span><strong>${esc(planStatus(result?.state))}</strong><p>${esc(resultLine(result))}</p><small>${esc(result?.reason||'관측 대기')}</small></article>`).join('');
  const rows=data.limits.filter(r=>r.route===p.route&&p.applies?.includes(r.bucket));
  const projection=(r,h)=>{
@@ -122,7 +122,6 @@ function readPlanControls(budget=false){
 }
 $('plan-controls').addEventListener('submit',event=>{event.preventDefault();if(readPlanControls())void loadWorkPlan();});
 $('work-budget-controls').addEventListener('submit',event=>{event.preventDefault();if(readPlanControls(true))void loadWorkPlan();});
-$('work-budget-open').addEventListener('click',()=>{setView('analysis');$('work-budget').open=true;$('work-budget').scrollIntoView({behavior:motion(),block:'start'});$('plan-today-hours').focus({preventScroll:true});});
 $('plan-route').addEventListener('change',()=>{
  fillModelOptions($('plan-route').value,lastLimits?.planning?.choices||[],'common');
  if(readPlanControls())void loadWorkPlan();

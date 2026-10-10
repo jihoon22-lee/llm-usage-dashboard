@@ -41,7 +41,7 @@ with sync_playwright() as p:
         q=parse_qs(urlsplit(route.request.url).query)
         route.fulfill(json={**data,'scope':q.get('scope',[''])[0]})
     page.route(origin+'/api/usage?*',usage)
-    assert page.goto(origin+'/?view=analysis&group=model').status==200
+    assert page.goto(origin+'/?view=usage&group=model').status==200
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     expect(page.locator('#legend button')).to_have_count(12)
     expect(page.locator('#legend button[data-label="gpt-6.1-sol"]')).to_be_visible()
@@ -65,7 +65,8 @@ with sync_playwright() as p:
     expect(page.locator('#legend button')).to_have_count(12)
     # Crossing the gap below the plot must keep the mouse-scrollable list open.
     expect(page.locator('#refresh')).to_be_enabled()
-    plot=page.locator('#chart > svg');plot.scroll_into_view_if_needed()
+    # The period cards sit above the chart now; centre the plot so its tooltip list fits below.
+    plot=page.locator('#chart > svg');plot.evaluate("el=>el.scrollIntoView({block:'start'})");page.evaluate('scrollBy(0,-200)')
     plot.hover(position={'x':100,'y':100})
     tip=page.locator('#chart-tooltip');expect(tip).to_be_visible()
     detail=tip.bounding_box()
@@ -98,7 +99,7 @@ with sync_playwright() as p:
     touch.on('pageerror',lambda e:errors.append(str(e)));watch_csp(touch,errors)
     if args.preview_assets:touch.route(origin+'/**',serve)
     touch.route(origin+'/api/usage?*',usage)
-    touch.goto(origin+'/?view=analysis&group=model')
+    touch.goto(origin+'/?view=usage&group=model')
     expect(touch.locator('#legend button')).to_have_count(12)
     svg=touch.locator('#chart > svg');svg.scroll_into_view_if_needed()
     point=svg.evaluate('''svg=>{const p=svg.createSVGPoint();

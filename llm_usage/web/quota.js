@@ -212,11 +212,15 @@ function moveQuota(route,dir){
 }
 const panelSections=()=>[...document.querySelectorAll('main>[data-view]')].filter(s=>s.querySelector(':scope>[data-panel]'));
 const panelEls=section=>[...section.querySelectorAll(':scope>[data-panel]')];
+// The saved list spans every section (and ids from earlier layouts); each section only
+// follows the ids it owns, so a panel never leaves its own tab.
 function applyPanelOrder(){
- const saved=orderStore.get().panels;if(!saved||!saved.length)return;
- panelSections().forEach(section=>panelEls(section)
-  .sort((a,b)=>{const ai=saved.indexOf(a.dataset.panel),bi=saved.indexOf(b.dataset.panel);return(ai<0?1e9:ai)-(bi<0?1e9:bi);})
-  .forEach(el=>el.parentElement.appendChild(el)));
+ const saved=orderStore.get().panels;if(!Array.isArray(saved)||!saved.length)return;
+ panelSections().forEach(section=>{
+  const els=panelEls(section),own=saved.filter(id=>els.some(el=>el.dataset.panel===id));
+  els.sort((a,b)=>{const ai=own.indexOf(a.dataset.panel),bi=own.indexOf(b.dataset.panel);return(ai<0?1e9:ai)-(bi<0?1e9:bi);})
+   .forEach(el=>section.appendChild(el));
+ });
 }
 function movePanel(id,dir){
  const el=document.querySelector(`[data-panel="${id}"]`);if(!el)return;
@@ -259,10 +263,10 @@ function renderAlerts(limits,usage){
  for(const [project,budget] of Object.entries(usage.project_budgets||{})){
   if(!usage.project_month)break;
   const st=budgetState(usage.project_month.projects[project],budget);
-  if(st.ratio>=.8)items.push({text:`${project} 월 예산 ${Math.round(st.ratio*100)}%${st.ratio>=1?' 초과':''}`,view:'insights'});
+  if(st.ratio>=.8)items.push({text:`${project} 월 예산 ${Math.round(st.ratio*100)}%${st.ratio>=1?' 초과':''}`,view:'usage'});
  }
  // A burst far above this account's usual hours, and models whose cost cannot be estimated.
- if(usage.spike)items.push({text:`사용량 급증 · ${when(usage.spike.hour_start)}부터 1시간 ${compact(usage.spike.tokens)} 토큰 (평소 상위 5%의 ${usage.spike.ratio.toFixed(1)}배)`,view:'analysis'});
+ if(usage.spike)items.push({text:`사용량 급증 · ${when(usage.spike.hour_start)}부터 1시간 ${compact(usage.spike.tokens)} 토큰 (평소 상위 5%의 ${usage.spike.ratio.toFixed(1)}배)`,view:'usage'});
  if((usage.unpriced_models||[]).length)items.push({text:`단가 미등록 모델 ${usage.unpriced_models.length}개 · ${usage.unpriced_models.slice(0,3).join(', ')}${usage.unpriced_models.length>3?' 외':''}`,view:'settings'});
  // Only states the owner can act on become chips: an 'unavailable' source (an app that is
  // closed, a status line not in use, a path that does not exist) stays in 수집 상태.
@@ -290,10 +294,10 @@ function renderAlerts(limits,usage){
  el.querySelectorAll('[data-alert]').forEach(button=>button.onclick=()=>{
   const it=items[Number(button.dataset.alert)];
   if(it.route){
-   setView('overview');selectedQuota=it.route;syncQuotaSelection();
+   setView('quota');selectedQuota=it.route;syncQuotaSelection();
    document.getElementById('quota-'+it.route)?.scrollIntoView({behavior:motion(),block:'nearest'});
   }else if(it.view){setView(it.view);if(it.view==='settings'){priceFilter.unset=true;$('price-unset').setAttribute('aria-pressed','true');$('price-unset').classList.add('on');}}
-  else{setView('sources');$('sources-panel').scrollIntoView({behavior:motion()});}
+  else{setView('status');$('sources-panel').scrollIntoView({behavior:motion()});}
  });
 }
 const notifyEnabled=()=>'Notification' in window&&Notification.permission==='granted'&&storage.get('llmNotify')==='1';

@@ -32,8 +32,8 @@ if args.origin:
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
         assert page.goto(live+'/').status==200
         expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+        page.locator('#tab-usage').click()
         expect(page.locator('#cards .stat').first).to_be_visible()
-        page.locator('#tab-analysis').click()
         expect(page.locator('#chart > svg')).to_be_visible()
         page.set_viewport_size({'width':390,'height':844})
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
@@ -59,22 +59,38 @@ with sync_playwright() as p:
                 route.fulfill(path=web/Path(path).name,content_type='text/css' if path.endswith('.css') else 'text/javascript')
             else:
                 route.fallback()
-        # Match query strings too: view URLs like /?view=analysis must serve preview HTML.
+        # Match query strings too: view URLs like /?view=usage must serve preview HTML.
         page.route(url+'**',serve)
     assert page.goto(url).status==200
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
-    # Overview is the default view: summary cards and quota cards.
-    expect(page.locator('section[data-view="overview"]')).to_be_visible()
-    expect(page.locator('#cards .stat').first).to_be_visible()
+    # Quota is the default view: quota cards; period cards live on the usage tab.
+    expect(page.locator('section[data-view="quota"]')).to_be_visible()
+    expect(page.locator('#limits .limit-card').first).to_be_visible()
+    expect(page.locator('#cards')).to_be_hidden()
+    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()][:5]==['한도','계획','사용량','리포트','상태']
+    # Old view names in bookmarked URLs still land on the renamed tabs.
+    for old,new in (('overview','quota'),('analysis','usage'),('insights','reports'),('sources','status')):
+        page.goto(url+'?view='+old)
+        expect(page.locator(f'#tab-{new}')).to_have_attribute('aria-selected','true')
+        expect(page.locator(f'#view-{new}')).to_be_visible()
+        if new!='quota':assert 'view='+new in page.url,page.url
+    page.goto(url);expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+    # The forecast sits on the plan tab next to 지금 작업, visible without any click.
+    page.locator('#tab-plan').click()
+    expect(page.locator('#work-now')).to_be_visible()
+    expect(page.locator('#work-budget')).to_be_visible()
+    expect(page.locator('#plan-today-hours')).to_be_visible()
+    page.locator('#tab-quota').click()
     # Dormant routes (ended or past quota_hide_days) fold into .quota-dormant;
     # every route still renders a card somewhere inside #limits.
     assert page.locator('#limits .limit-card').count()==5
     assert page.locator('#limits > .limit-card').count()>=3
     expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단')
     # Tab bar switches views and syncs ?view= to the URL.
-    page.locator('#tabs [data-view="analysis"]').click()
-    expect(page.locator('section[data-view="analysis"]')).to_be_visible()
-    assert 'view=analysis' in page.url
+    page.locator('#tabs [data-view="usage"]').click()
+    expect(page.locator('section[data-view="usage"]')).to_be_visible()
+    assert 'view=usage' in page.url
+    expect(page.locator('#cards .stat').first).to_be_visible()
     expect(page.locator('#chart > svg')).to_be_visible()
     expect(page.locator('#composition .donut')).to_be_visible()
     expect(page.locator('#ranking svg').first).to_be_visible()
@@ -109,20 +125,21 @@ with sync_playwright() as p:
     page.locator('.heat-cell').first.dispatch_event('pointerover')
     expect(page.locator('#tip')).to_be_visible()
     page.screenshot(path=str(artifacts/'dashboard-desktop.png'),full_page=True)
-    # Insights view: subscription value rows and the activity calendar.
-    page.locator('#tabs [data-view="insights"]').click()
-    assert 'view=insights' in page.url
+    # Usage view also hosts the filter-dependent insight panels.
+    expect(page.locator('#sessions tr').first).to_be_visible()
+    expect(page.locator('#projects tr').first).to_be_visible()
+    # Reports view: subscription value rows and the activity calendar.
+    page.locator('#tabs [data-view="reports"]').click()
+    assert 'view=reports' in page.url
     expect(page.locator('#subvalue .sub-row').first).to_be_visible()
     # Insights load lazily after the tab switch; wait for the calendar before
     # counting its cells.
     expect(page.locator('#calendar .cal-cell[data-tip]').first).to_be_visible()
     assert page.locator('#calendar .cal-cell[data-tip]').count()>90
-    expect(page.locator('#sessions tr').first).to_be_visible()
-    expect(page.locator('#projects tr').first).to_be_visible()
     page.locator('#calendar .cal-cell[data-tip]').last.dispatch_event('pointerover')
     expect(page.locator('#tip')).to_be_visible()
-    # Sources view lists collectors.
-    page.locator('#tabs [data-view="sources"]').click()
+    # Status view lists collectors.
+    page.locator('#tabs [data-view="status"]').click()
     assert page.locator('#sources .source').count()>0
     # Settings view renders config editors (read-only checks; no mutation on live).
     page.locator('#tabs [data-view="settings"]').click()
@@ -133,8 +150,8 @@ with sync_playwright() as p:
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
     assert page.locator('.cfg-toggles input').count()==6
-    # Back to analysis for chart interactions.
-    page.locator('#tabs [data-view="analysis"]').click()
+    # Back to usage for chart interactions.
+    page.locator('#tabs [data-view="usage"]').click()
     page.locator('#cumulative').select_option('1')
     expect(page.locator('#chart path').first).to_be_visible()
     page.locator('#cumulative').select_option('0')

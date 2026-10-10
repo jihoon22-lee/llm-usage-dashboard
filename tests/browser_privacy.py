@@ -34,6 +34,7 @@ with sync_playwright() as p:
         expect(page.locator('#offline')).to_be_visible()
         page.evaluate('loadConfig()')
         expect(page.locator('#settings-status')).to_contain_text('온라인 연결')
+        page.locator('#tab-status').click()  # the offline-copy control lives on the status tab
         page.locator('#local-statistics-clear').click()
         expect(page.locator('#local-statistics-status')).to_contain_text('다시 저장')
         assert page.evaluate("caches.has('llm-usage-data-v1')")==False
@@ -102,7 +103,7 @@ with sync_playwright() as p:
     context.add_init_script("Object.defineProperty(window,'caches',{get(){throw Error('storage unavailable')}})")
     page=context.new_page();page.goto(ORIGIN+'/')
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
-    page.locator('#tab-settings').click();page.locator('#local-statistics-clear').click()
+    page.locator('#tab-settings').click();page.locator('#tab-status').click();page.locator('#local-statistics-clear').click()
     expect(page.locator('#local-statistics-status')).to_contain_text('삭제를 확인하지 못했습니다')
     expect(page.locator('#cfg-subs-save')).to_be_enabled()
     browser.close()

@@ -96,13 +96,16 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             expect(page.locator('#work-decision')).to_contain_text('Sonnet')
             expect(page.locator('#work-decision')).not_to_contain_text('Opus 기준 보기')
             # Subscription quota must be the first overview content on every width.
-            expect(page.locator('#view-overview > .section-heading h2').first).to_have_text('구독 한도')
+            expect(page.locator('#view-quota > .section-heading h2').first).to_have_text('구독 한도')
             if width<600:page.locator('[data-quota="codex"]').click()
             page.evaluate('scrollTo(0,0)')
             quota=page.locator('#quota-codex').bounding_box()
             assert quota['y'] < 900
             assert page.locator('#limits').bounding_box()['y'] < page.locator('#resource-panel').bounding_box()['y']
-            assert page.locator('#resource-panel').bounding_box()['y'] < page.locator('#work-now').bounding_box()['y']
+            # 지금 작업 has its own tab after the quota tab; the quota tab never shows it.
+            expect(page.locator('#work-now')).to_be_hidden()
+            tabs=page.locator('#tabs [role=tab]').evaluate_all('ts=>ts.map(t=>t.id)')
+            assert tabs.index('tab-quota')==0 and tabs.index('tab-plan')==1,tabs
             if width==1440:page.screenshot(path=str(output/'dashboard.png'))
             expect(page.locator('#quota-codex .bucket-pace').first).to_be_visible()
             assert page.locator('#quota-codex .bucket-detail[open]').count()==0
@@ -152,6 +155,9 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility='hidden'")
                 page.locator('#resource-panel').screenshot(path=str(output/'resource-expiry.png'))
                 page.evaluate("() => document.querySelector('.sticky-nav').style.visibility=''")
+            page.locator('#tab-plan').click()
+            expect(page.locator('#work-now')).to_be_visible()
+            if width==1440:page.screenshot(path=str(output/'plan-1440.png'),full_page=True)
             page.locator('#plan-model').select_option('special')
             expect(page.locator('#work-decision')).to_contain_text('구독 한도 소진')
             page.locator('#plan-route').select_option('claude-code')
@@ -160,8 +166,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             page.locator('#plan-model').select_option('sonnet')
             expect(page.locator('#work-decision')).to_contain_text('관측상 여유')
             expect(page.locator('#work-decision')).not_to_contain_text('70시간')
-            page.locator('#tab-analysis').click()
-            page.locator('#work-budget > summary').click()
+            expect(page.locator('#work-budget')).to_be_visible()  # no click needed to open the forecast
             page.locator('#plan-today-hours').fill('3')
             page.locator('#plan-week-hours').fill('10')
             page.locator('#work-budget-controls button').click()

@@ -23,7 +23,7 @@ with sync_playwright() as p:
     expect(page.locator('#cfg-pricing-msg')).to_contain_text('저장')
     expect(b).to_have_value('8.75');expect(subscription).to_have_value('99')
     expect(b.locator('xpath=ancestor::tr')).to_have_class('dirty')
-    page.locator('#tab-overview').click();page.locator('#tab-settings').click()
+    page.locator('#tab-quota').click();page.locator('#tab-settings').click()
     expect(a).to_have_value('7.25');expect(b).to_have_value('8.75');expect(subscription).to_have_value('99')
     # A configuration read started before a save may arrive after it.
     stale=[]
@@ -51,7 +51,7 @@ with sync_playwright() as p:
     held=[];page.route('**/api/config/pricing',lambda route:held.append(route))
     a.fill('9');page.locator('[data-price-save="gpt-test"]').click()
     expect(a).to_be_disabled();expect(b).to_be_enabled()
-    page.locator('#tab-overview').click();page.locator('#tab-settings').click()
+    page.locator('#tab-quota').click();page.locator('#tab-settings').click()
     expect(a).to_be_disabled();expect(subscription).to_have_value('99')
     assert len(held)==1
     page.unroute('**/api/config/pricing');page.route('**/api/config/pricing',writes)
