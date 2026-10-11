@@ -41,7 +41,7 @@ with sync_playwright() as p:
     expect(page.locator('#error')).to_be_hidden()
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     assert page.evaluate('lastLimits.limits[0].remaining')==10
-    # No repeated attempt for the same transition; all three transitions are retained.
+    # No repeated attempt for the same transition; observed transitions are retained.
     page.evaluate("() => {window.sent=[];ServiceWorkerRegistration.prototype.showNotification=async function(title){sent.push(title);};}")
     page.evaluate('refresh()')
     assert page.evaluate('sent')==[]
@@ -51,40 +51,40 @@ with sync_playwright() as p:
     page.wait_for_function('sent.length===1')
     row['forecast']={'within_window':True}
     page.evaluate('refresh()')
-    page.wait_for_function('sent.length===2')
-    # A toggling forecast must not page twice for the same reset window.
+    assert page.evaluate('sent.length')==1
+    # Legacy forecast fields must not trigger predicted depletion notifications.
     row['forecast']=None
     page.evaluate('refresh()')
     row['forecast']={'within_window':True}
     page.evaluate('refresh()')
-    assert page.evaluate('sent')==['한도 회복 확인','한도 소진 예상']
+    assert page.evaluate('sent')==['한도 회복 확인']
     # The reset anchor changes after a provider rollover, so a new low
     # transition in the new window notifies again.
     row['remaining']=10;row['resets']=2000000000
     page.evaluate('refresh()')
-    page.wait_for_function('sent.length===3')
-    assert page.evaluate('sent')==['한도 회복 확인','한도 소진 예상','한도 잔여 적음']
+    page.wait_for_function('sent.length===2')
+    assert page.evaluate('sent')==['한도 회복 확인','한도 잔여 적음']
     # A resource ending within a day notifies once (not again on refresh or reload, not when
     # already past, not when the kind is switched off).
     soon_item={'id':'r1','route':'codex','kind':'reset','label':'Codex 초기화권','unit':'count','status':'fresh','amount':1,
                'checked':now,'grants':[{'id':'g1','amount':1,'expires':now+1800,'status':'available'},{'id':'g2','amount':1,'expires':now-60,'status':'expired'}]}
-    expect(page.locator('#plan-summary')).to_be_hidden()  # no planning data: no summary
+    expect(page.locator('#plan-summary')).to_have_count(0)
     row['forecast']=None
     limits['resources']={'items':[soon_item]}
     page.evaluate("localStorage.setItem('llmNotify:exp','0')")
     page.evaluate('refresh()')
     expect(page.locator('#alerts')).to_contain_text('Codex 초기화권 1개')
-    assert page.evaluate('sent.length')==3
+    assert page.evaluate('sent.length')==2
     page.evaluate("localStorage.removeItem('llmNotify:exp')")
     page.evaluate('refresh()')
-    page.wait_for_function('() => sent.length===4')
-    assert page.evaluate('sent[3]')=='자원 만료 임박'
+    page.wait_for_function('() => sent.length===3')
+    assert page.evaluate('sent[2]')=='자원 만료 임박'
     page.evaluate('refresh()')
     page.evaluate('refresh()')
-    assert page.evaluate('sent.length')==4
+    assert page.evaluate('sent.length')==3
     page.evaluate('notifySent.clear()')
     page.evaluate('refresh()')
-    assert page.evaluate('sent.length')==4
+    assert page.evaluate('sent.length')==3
     # Failed worker registration also stays isolated.
     page.evaluate("() => {notificationWorker=null;navigator.serviceWorker.register=async()=>{throw Error('offline');};}")
     page.evaluate("sendNotification('failure',{})")
@@ -93,4 +93,4 @@ with sync_playwright() as p:
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     assert not errors, errors
     browser.close()
-print('Notifications passed: real worker activation/delivery, mobile constructor rejection, 3 transitions, once-only expiry notice, failure isolation, no repeat, mobile layout.')
+print('Notifications passed: real worker activation/delivery, mobile constructor rejection, 2 observed transitions, once-only expiry notice, failure isolation, no repeat, mobile layout.')

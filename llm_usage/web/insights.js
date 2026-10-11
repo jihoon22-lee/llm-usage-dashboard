@@ -3,6 +3,11 @@
 function renderInsights(data){
  const subs=data.subscriptions||[];
  const month=data.insights&&data.insights.month;
+ const recent=data.period==='1h';
+ // Optional summaries need evidence. A new/empty hour should not replace its
+ // useful records with an unavailable comparison or a misleading subscription setup prompt.
+ $('comparison').closest('[data-panel]').hidden=recent&&(!data.insights||data.insights.comparison?.percent==null);
+ $('subvalue').closest('[data-panel]').hidden=recent&&!month;
  const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
  const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
   ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';

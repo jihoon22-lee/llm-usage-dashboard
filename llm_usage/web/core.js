@@ -171,9 +171,7 @@ function quotaLine(history,row){
  const points=history.filter(p=>p.remaining!=null);
  if(!points.length)return '<p class="hint">표시할 한도 관측이 없습니다.</p>';
  const first=points[0],last=points.at(-1);
- // The x domain runs to the earlier of the next reset and last observation+6h
- // so the burn-down forecast has room to draw.
- const horizon=Math.max(last.checked,Math.min(row&&row.resets||Infinity,last.checked+21600));
+ const horizon=last.checked;
  const span=Math.max(300,horizon-first.checked);
  const low=Math.max(0,Math.floor(Math.min(...points.map(p=>p.remaining))-5));
  const high=Math.min(100,Math.ceil(Math.max(...points.map(p=>p.remaining))+5));
@@ -181,10 +179,7 @@ function quotaLine(history,row){
  let path='';const isolated=[];
  points.forEach((p,i)=>{path+=`${i&&!p.break_before?'L':'M'}${x(p).toFixed(1)},${y(p).toFixed(1)} `;if((i===0||p.break_before)&&(i===points.length-1||points[i+1].break_before))isolated.push(p);});
  const markers=points.filter(p=>p.break_before&&p.break_reason!=='start').slice(-3).map(p=>`<g><line class="quota-break" x1="${x(p)}" x2="${x(p)}" y1="12" y2="116"/><text x="${Math.min(470,x(p)+3)}" y="9">${({reset:'초기화 변경',gap:'수집 공백',error:'조회 실패',increase:'잔여 증가',expired:'초기화 경과',unknown:'정보 부족'})[p.break_reason]||'수집 공백'}</text></g>`).join('');
- const pace=row&&row.forecast&&row.forecast.per_hour;
- const forecast=pace&&(!row.resets||row.resets>last.checked)&&horizon>last.checked
-  ?`<path class="quota-forecast" d="M${x(last).toFixed(1)},${y(last).toFixed(1)} L${x({checked:horizon}).toFixed(1)},${y({remaining:Math.max(low,last.remaining-pace*(horizon-last.checked)/3600)}).toFixed(1)}"/>`:'';
- return `<svg class="quota-line" viewBox="0 0 580 146" role="img" aria-label="잔여 한도 선 그래프${forecast?' · 점선은 최근 페이스 예측':''} · 세로축 ${low}~${high}%"><text x="0" y="20">${high}%</text><text x="0" y="115">${low}%</text><line class="chart-gridline" x1="38" x2="513" y1="112" y2="112"/>${markers}<path d="${path}"/>${forecast}${isolated.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="2"/>`).join('')}<circle cx="${x(last)}" cy="${y(last)}" r="3"/><text class="quota-end" x="520" y="${Math.max(22,y(last)+4)}">${percent(last.remaining)}</text><text x="38" y="141">${esc(when(first.checked))}</text><text x="513" y="141" text-anchor="end">${esc(when(horizon))}</text></svg>`;
+ return `<svg class="quota-line" viewBox="0 0 580 146" role="img" aria-label="잔여 한도 선 그래프 · 세로축 ${low}~${high}%"><text x="0" y="20">${high}%</text><text x="0" y="115">${low}%</text><line class="chart-gridline" x1="38" x2="513" y1="112" y2="112"/>${markers}<path d="${path}"/>${isolated.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="2"/>`).join('')}<circle cx="${x(last)}" cy="${y(last)}" r="3"/><text class="quota-end" x="520" y="${Math.max(22,y(last)+4)}">${percent(last.remaining)}</text><text x="38" y="141">${esc(when(first.checked))}</text><text x="513" y="141" text-anchor="end">${esc(when(horizon))}</text></svg>`;
 }
 function quotaBars(rows){
  if(!rows.some(r=>r.decrease_pp!=null))return '<p class="hint">감소량을 비교할 관측이 부족합니다.</p>';
@@ -197,9 +192,9 @@ function quotaBars(rows){
 }
 function quotaTrends(row){
  // Only observed spans are listed, on one line; an unobserved span adds nothing.
- const trends=(row.trends||[]).filter(t=>t.available);
+ const trends=row.status==='fresh'&&!row.scope?.identity_unverified?(row.trends||[]).filter(t=>t.available&&t.observed_minutes>=15):[];
  if(!trends.length)return '';
- return `<p class="quota-trends">${trends.map(t=>`<span class="nowrap">최근 ${t.window_minutes===60?'1시간':'30분'} −${t.decrease_pp.toFixed(1)}%p</span> <span class="nowrap">(${percent(t.start_remaining)} → ${percent(t.end_remaining)},</span> <span class="nowrap">${t.observed_minutes.toFixed(1)}분 관측,</span> <span class="nowrap">${t.per_hour.toFixed(1)}%p/시간)</span>`).join('<br>')}</p>`;
+ return `<p class="quota-trends">${trends.map(t=>`<span class="nowrap">최근 ${t.window_minutes===60?'1시간':'30분'} −${t.decrease_pp.toFixed(1)}%p</span> <span class="nowrap">(${percent(t.start_remaining)} → ${percent(t.end_remaining)},</span> <span class="nowrap">${t.observed_minutes.toFixed(1)}분 관측)</span>`).join('<br>')}</p>`;
 }
 function quotaHistory(row,opened,now){
  const key=row.route+':'+row.bucket,history=row.history||[];

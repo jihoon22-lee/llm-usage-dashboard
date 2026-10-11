@@ -185,11 +185,9 @@ async def main():
                 return w?parseFloat(getComputedStyle(t).fontSize)*w/s.viewBox.baseVal.width:null;})
               .filter(v=>v!=null)""")
             assert sizes and all(9<=v<=15 for v in sizes),sizes
-            await expect(page.locator('.bucket').first).to_contain_text('12.0%p/시간')
-            # The burn-down forecast extends the domain toward the reset, and the
-            # overview lists the next resets. Single-observation rows get no line.
-            await expect(page.locator('.quota-history .quota-forecast').first).to_be_visible()
-            assert await page.locator('.quota-forecast').count()>=1
+            await expect(page.locator('.bucket').first).to_contain_text('%p 감소')
+            # Only observed history is drawn; no extrapolated line or work forecast.
+            assert await page.locator('.quota-forecast,.plan,.pace-mark').count()==0
             # The reset schedule is part of the overview, visible without opening anything.
             await expect(page.locator('#reset-timeline')).to_be_visible()
             await expect(page.locator('#reset-timeline')).to_contain_text('Codex')
@@ -204,7 +202,7 @@ async def main():
             devin=await page.locator('#quota-devin').inner_text()
             assert devin.count('초기화 정보 미제공')==1,devin
             # Trend figures stay on one line via .nowrap spans.
-            assert await page.locator('#quota-codex .quota-trends .nowrap').count()>=4
+            assert await page.locator('#quota-codex .quota-trends .nowrap').count()>=3
             antigrav=await page.locator('#quota-antigravity .quota-forecast').count()
             assert antigrav==0,'rows without pace must not draw a forecast line'
             # Hold a response while changing period, grouping and cumulative mode.
@@ -243,7 +241,7 @@ async def main():
             overview=await page.locator('#quota-overview').bounding_box()
             assert overview['height']<350
             order=await page.locator('main h3, #sources-panel h2').all_text_contents()
-            assert order==['다음 초기화','오늘·이번 주 작업 전망','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
+            assert order==['다음 초기화','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
                            '프로젝트별 사용량','세션별 사용량','이전 기간과 비교','캐시 활용률 분석','주간 리포트','일별 활동','구독 가치 분석',
                            '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('usage')
@@ -549,10 +547,10 @@ async def main():
             assert await page.locator('section[data-view="reports"]').get_attribute('role')=='tabpanel'
             await page.locator('#tab-quota').focus()
             await page.keyboard.press('ArrowRight')
-            await expect(page.locator('#tab-plan')).to_have_attribute('aria-selected','true')
-            await expect(page.locator('#tab-plan')).to_have_attribute('tabindex','0')
+            await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
+            await expect(page.locator('#tab-usage')).to_have_attribute('tabindex','0')
             await expect(page.locator('#tab-quota')).to_have_attribute('tabindex','-1')
-            assert 'view=plan' in page.url
+            assert 'view=usage' in page.url
             # This page visited settings earlier. Its old controls can satisfy
             # visibility/count assertions before the next loadConfig replaces
             # them, detaching a handle during bounding_box(). Wait for that

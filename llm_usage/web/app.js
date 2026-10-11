@@ -39,6 +39,7 @@ function loadInsights(){
  if(insightsPending?.key===key)return insightsPending.promise;
  cancelInsights();insightsState('loading');
  const q=query();q.set('sections','insights');
+ if(q.get('period')==='1h')q.set('as_of',Date.parse(lastUsage.end_exclusive)/1000);
  const operation={key,generation:insightsGeneration,controller:new AbortController(),promise:null};
  const source={};insightsPending=operation;
  const current=()=>insightsPending===operation&&operation.generation===insightsGeneration&&query().toString()===key&&usageKey===key;
@@ -104,17 +105,16 @@ async function refresh(manual=false){
      activeQuery=query().toString();queued=false;
      const core=query();core.set('sections','core');coreController=new AbortController();
      const sources={core:{},limits:{}};
-     const workQuery=planningQuery();
      const [usage,limits]=await Promise.all([api('/api/usage?'+core,undefined,undefined,{signal:coreController.signal,source:sources.core}),
-       api(workQuery,undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
+       api('/api/limits',undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
      if(activeQuery!==query().toString()){queued=true;continue;}
      usageKey=activeQuery;
      renderUsage(usage);if(!sources.core.saved)checkOpsNotify(usage);
-     if(workQuery===planningQuery())acceptLimits(limits,sources.limits);
+     acceptLimits(limits,sources.limits);
      lastRefresh=Date.now()/1000;
      // Rendering can fall back from an unavailable cost metric to tokens.
      usageKey=query().toString();activeQuery=usageKey;
-     showSource('core',sources.core);if(workQuery===planningQuery())showSource('limits',sources.limits);
+     showSource('core',sources.core);showSource('limits',sources.limits);
      if(INSIGHT_VIEWS.includes(currentView))await loadInsights();
      if(currentView==='status')loadNotifyLog();
     }catch(e){
@@ -132,6 +132,7 @@ $('theme').addEventListener('change',()=>window.LLMTheme.set($('theme').value));
 window.addEventListener('llm-theme-change',()=>{syncThemeColor();updateColors();if(lastUsage){chart(lastUsage);composition(lastUsage);ranking(lastUsage);renderCacheTrend(lastUsage);}});
 $('refresh').addEventListener('click',()=>refresh(true));$('auto').addEventListener('change',schedule);
 for(const id of FILTER_IDS)$(id).addEventListener('change',()=>{
+ if(id==='period'&&$('period').value==='1h'){$('granularity').value='hour';sessSort.key='tokens';sessSort.dir='desc';}
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;saveDefaults();syncUrl();filterSummary();refresh();
 });
 $('scope-chip').addEventListener('click',()=>{$('scope').value='';$('scope').dispatchEvent(new Event('change'));});
@@ -166,6 +167,7 @@ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric
   else if(/^\d{4}-\d{2}-\d{2}$/.test(v))el.value=v;
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
+ if($('period').value==='1h'){sessSort.key='tokens';sessSort.dir='desc';}
  setView(params.get('view')??saved?.view);filterSummary();
 }
 $('filter-reset').addEventListener('click',()=>{
@@ -173,9 +175,9 @@ $('filter-reset').addEventListener('click',()=>{
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
-// Keyboard shortcuts outside text fields: r refreshes, 1–5 switch tabs, , opens settings,
+// Keyboard shortcuts outside text fields: r refreshes, 1–4 switch tabs, , opens settings,
 // / focuses the current view's search, ? lists them.
-const SHORTCUT_VIEWS=['quota','plan','usage','reports','status'];
+const SHORTCUT_VIEWS=['quota','usage','reports','status'];
 document.addEventListener('keydown',event=>{
  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,select,textarea,[contenteditable]')||document.querySelector('dialog[open]'))return;
  const view=SHORTCUT_VIEWS[Number(event.key)-1];

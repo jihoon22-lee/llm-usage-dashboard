@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -36,18 +36,16 @@ test('reset countdown and relative time',()=>{
   assert.equal(f.ago(now-7300),'2시간 전');
 });
 
-test('cached quota, reset countdown and recommendations age together without mutating observations',()=>{
+test('cached quotas and countdowns age without mutating observations',()=>{
  const now=10000;
  const data={now,stale_seconds:600,limits:[{route:'codex',bucket:'weekly',status:'fresh',checked:now,remaining:80,resets:now+1800,
-  seconds_to_reset:1800,forecast:{within_window:true},paces:{recent:{per_hour:2}}}],
-  planning:{route:'codex',applies:['weekly'],state:'room',valid_until:now+600,resources:[{id:'credit'}],alternatives:[{route:'claude-code',valid_until:now+100}]}};
+  seconds_to_reset:1800,forecast:{within_window:true},paces:{recent:{per_hour:2}}}]};
  const view=f.currentLimits(data,now+7200,true);
  assert.equal(view.limits[0].status,'stale');assert.equal(view.limits[0].remaining,80);
  assert.equal(view.limits[0].seconds_to_reset,0);assert.equal(view.limits[0].forecast,null);
- assert.equal(view.planning.state,'unknown');assert.equal(view.planning.alternatives.length,0);
  assert.equal(data.limits[0].status,'fresh');assert.equal(data.limits[0].seconds_to_reset,1800);
- assert.equal(f.currentLimits(data,now+150).planning.alternatives.length,0);
- assert.equal(f.currentLimits(data,now+700).planning.state,'unknown');
+ assert.equal(f.currentLimits(data,now+150).limits[0].status,'fresh');
+ assert.equal(f.currentLimits(data,now+700).limits[0].status,'stale');
 });
 
 test('resource expiry and spending-condition age do not imply remaining funds or an active cap',()=>{
@@ -56,6 +54,12 @@ test('resource expiry and spending-condition age do not imply remaining funds or
  const view=f.currentLimits(data,1200);
  assert.equal(view.resources.items[0].status,'stale');assert.equal(view.resources.items[0].amount,50);
  assert.equal(view.resources.items[0].usage_conditions,null);
+ const resets={limits:[],resources:{items:[{id:'r',status:'fresh',checked:1200,amount:2,
+  grants:[{amount:1,expires:1100,status:'available'},{amount:1,expires:1800,status:'available'}]}]}};
+ const expired=f.currentLimits(resets,1200).resources.items[0];
+ assert.equal(expired.status,'stale');assert.equal(expired.amount,2); // recheck, never subtract from provider count
+ resets.resources.items[0].grants[0].status='expired';
+ assert.equal(f.currentLimits(resets,1200).resources.items[0].status,'fresh'); // already-accounted historical grant
 });
 
 test('conditional duration rounds away floating point noise instead of losing a minute',()=>{
@@ -207,4 +211,37 @@ test('expiring resources: within a day, grouped per hour, never past, used or fo
  assert.deepEqual(plain(split.map(e=>[e.ids[0],e.amount])),[['x',1],['y',1]]);
  assert.equal(f.expiringResources(null,now).length,0);
  assert.equal(f.expiringResources(items,now,10).length,0);
+});
+
+
+test('observed decreases include measured zero but omit missing, short and stale intervals',()=>{
+ const metric={available:true,window_minutes:30,observed_minutes:25,decrease_pp:5,start:100,end:1600};
+ const row={status:'fresh',trends:[metric]};
+ assert.equal(f.observedDecrease(row),metric);
+ assert.equal(f.observedDecrease({...row,trends:[{...metric,decrease_pp:0}]}).decrease_pp,0);
+ for(const changed of [{status:'stale'},{scope:{identity_unverified:true}},{trends:[]},
+  {trends:[{...metric,observed_minutes:14.9}]},{trends:[{...metric,available:false}]},
+  {trends:[{...metric,decrease_pp:NaN}]},{trends:[{...metric,decrease_pp:-1}]}]){
+  assert.equal(f.observedDecrease({...row,...changed}),null);
+ }
+ const aged=f.currentLimits({limits:[{...row,checked:1000}]},2000).limits[0];
+ assert.equal(f.observedDecrease(aged),null);
+});
+
+test('owned resources omit spending caps, sort confirmed expiry and preserve failed known values',()=>{
+ const now=1000;
+ const make=(id,extra={})=>({id,label:id,amount:5,status:'fresh',...extra});
+ const items=[make('unknown-expiry'),make('later',{expires:now+200}),
+  make('reset',{kind:'reset',grants:[{amount:1,expires:now-1},{amount:1,expires:now+100}]}),
+  make('cap',{allowance:true}),make('missing',{amount:null}),make('failed',{status:'error',expires:now+1}),
+  make('zero',{amount:0}),make('expired',{status:'expired'}),make('previous',{status:'previous_account'}),
+  make('duplicate',{duplicate_of:'other',effective:false}),make('manual',{status:'manual',expires:now+150}),
+  make('lost-zero',{amount:0,status:'unavailable'}),make('never-owned',{amount:null,status:'previous_account'})];
+ const groups=f.resourceGroups(items,now),ids=rows=>Array.from(rows,r=>r.id);
+ assert.deepEqual(ids(groups.current),['reset','manual','later','unknown-expiry','failed']);
+ assert.deepEqual(ids(groups.older),['zero','expired','previous','duplicate','lost-zero']);
+ assert.deepEqual(ids(groups.unconfirmed),['missing']);
+ assert.equal(groups.current.at(-1).amount,5);
+ assert.equal(items[0].id,'unknown-expiry'); // sorting must not mutate API observations
+ assert.equal(f.resourceGroups(undefined,now).current.length,0);
 });

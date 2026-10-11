@@ -102,8 +102,9 @@ def create_app(config=None):
     @app.get('/api/usage')
     def usage():
         try:
+            as_of=float(request.args['as_of']) if 'as_of' in request.args else None
             data=(store.usage(period=request.args.get('period','7d'),start=request.args.get('start'),end=request.args.get('end'),
-                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=config.get('subscription_prices'),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all')))
+                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=config.get('subscription_prices'),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of))
             return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {}} if 'rows' in data else data)
         except (ValueError,TypeError,OverflowError):abort(400,description='기간 또는 집계 단위를 확인하세요.')
 
@@ -131,28 +132,7 @@ def create_app(config=None):
 
     @app.get('/api/limits')
     def limits():
-        from .planning import choices, plan, decide
-        data=store.limits()
-        options=choices(data)
-        if options:
-            try:
-                route=request.args.get('route','codex' if any(o['route']=='codex' for o in options) else options[0]['route'])
-                model=request.args.get('model','common')
-                selected=next((o for o in options if o['route']==route and o['model']==model),None)
-                selected=selected or next((o for o in options if o['route']==route),options[0])
-                hours=float(request.args.get('hours',2));pace=request.args.get('pace','recent')
-                today_hours=float(request.args.get('today_hours',2));week_hours=float(request.args.get('week_hours',10))
-                if not .1<=today_hours<=24 or not .1<=week_hours<=168:raise ValueError
-                data['planning']=plan(data,selected['route'],selected['model'],hours,pace)
-                data['planning']['today']=decide(data,selected['route'],selected['model'],today_hours,pace)
-                data['planning']['week']=decide(data,selected['route'],selected['model'],week_hours,pace)
-                data['planning']['selection_changed']=(route,model)!=(selected['route'],selected['model'])
-                if data['planning']['selection_changed']:
-                    for result in (data['planning'],data['planning']['today'],data['planning']['week']):
-                        result.update(state='unknown',seconds=None,bottleneck=None,alternatives=[],resources=[],
-                                      reason='이전 선택의 최신 정보를 확인하지 못했습니다. 모델·한도 묶음을 선택하고 다시 확인하세요.')
-            except (ValueError,TypeError,OverflowError):abort(400,description='작업 시간·속도 기준을 확인하세요.')
-        return jsonify(data)
+        return jsonify(store.limits())
 
     def manual_resource(rid=None,delete=False):
         from .resources import write_manual,Conflict

@@ -61,15 +61,9 @@ PLAN_PREVIEWS = ['계획 대비 +12.3%p 여유 · 창 42% 경과', '계획 대�
 
 
 def check_plan_text(page):
-    card = page.locator('#quota-claude-code')
-    expect(card.locator('.bucket-detail > summary small')).to_have_text(PLAN_PREVIEWS)
-    expect(card.locator('.plan strong')).to_have_text(['+12.3%p 여유', '-6.8%p 빠름'])
-    expect(card.locator('.plan strong.warn-text')).to_have_text('-6.8%p 빠름')
-    # Provider text that resembles nested tags remains literal text. It cannot
-    # create elements or execute handlers when the collapsed summary is rendered.
-    expect(card.locator('.quota-note')).to_have_text(PLAN_NOTE)
-    expect(card.locator('.quota-note script, .quota-note img')).to_have_count(0)
-    assert page.evaluate('window.quotaInjected===undefined')
+    # Old API fields must not reintroduce a work forecast into the new UI.
+    expect(page.locator('.plan,.pace-mark,.forecast,.capacity')).to_have_count(0)
+
 
 
 blocked = fixture(120)

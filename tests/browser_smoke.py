@@ -67,20 +67,15 @@ with sync_playwright() as p:
     expect(page.locator('section[data-view="quota"]')).to_be_visible()
     expect(page.locator('#limits .limit-card').first).to_be_visible()
     expect(page.locator('#cards')).to_be_hidden()
-    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()][:5]==['한도','계획','사용량','리포트','상태']
+    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()]==['한도','사용량','리포트','상태']
     # Old view names in bookmarked URLs still land on the renamed tabs.
-    for old,new in (('overview','quota'),('analysis','usage'),('insights','reports'),('sources','status')):
+    for old,new in (('overview','quota'),('plan','quota'),('analysis','usage'),('insights','reports'),('sources','status')):
         page.goto(url+'?view='+old)
         expect(page.locator(f'#tab-{new}')).to_have_attribute('aria-selected','true')
         expect(page.locator(f'#view-{new}')).to_be_visible()
         if new!='quota':assert 'view='+new in page.url,page.url
     page.goto(url);expect(page.locator('#updated')).to_contain_text('마지막 갱신')
-    # The forecast sits on the plan tab next to 지금 작업, visible without any click.
-    page.locator('#tab-plan').click()
-    expect(page.locator('#work-now')).to_be_visible()
-    expect(page.locator('#work-budget')).to_be_visible()
-    expect(page.locator('#plan-today-hours')).to_be_visible()
-    page.locator('#tab-quota').click()
+    expect(page.locator('#tab-plan,#work-now,#work-budget,#plan-summary')).to_have_count(0)
     # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
     page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
     assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
@@ -153,7 +148,7 @@ with sync_playwright() as p:
     assert page.locator('#sources .source').count()>0
     # Settings is not a tab: the header gear opens it, no tab stays selected, and Back returns.
     expect(page.locator('#settings-open')).to_have_attribute('aria-label','설정')
-    assert page.locator('#tabs [role=tab]').count()==5 and page.locator('#tab-settings').count()==0
+    assert page.locator('#tabs [role=tab]').count()==4 and page.locator('#tab-settings').count()==0
     page.locator('#settings-open').click()
     assert 'view=settings' in page.url
     expect(page.locator('#view-settings')).to_be_visible()
@@ -162,10 +157,10 @@ with sync_playwright() as p:
     page.locator('#settings-back').click()
     expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
     assert 'view=status' in page.url
-    # The ',' shortcut opens settings too (outside text fields); keys 1-5 leave it again.
+    # The ',' shortcut opens settings too (outside text fields); keys 1-4 leave it again.
     page.locator('#settings-open').focus();page.keyboard.press(',')
     expect(page.locator('#view-settings')).to_be_visible()
-    page.keyboard.press('3')
+    page.keyboard.press('2')
     expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
     page.keyboard.press(',')
     # Settings view renders config editors (read-only checks; no mutation on live).
@@ -177,7 +172,7 @@ with sync_playwright() as p:
     assert page.locator('#cfg-thresholds input').count()==4
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
-    assert page.locator('.cfg-toggles input').count()==7
+    assert page.locator('.cfg-toggles input').count()==6
     # Back to usage for chart interactions.
     page.locator('#tabs [data-view="usage"]').click()
     page.locator('#cumulative').select_option('1')
@@ -201,12 +196,12 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(artifacts/'dashboard-mobile.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
-    # Five two-character tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
+    # Four two-character tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
     page.set_viewport_size({'width':320,'height':740})
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'320px overflow'
     assert page.evaluate("(()=>{const t=document.querySelector('#tabs');return t.scrollWidth<=t.clientWidth})()"),'tab bar scrolls sideways'
     lines=page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].map(b=>{const r=document.createRange();r.selectNodeContents(b);return r.getClientRects().length})")
-    assert lines==[1]*5,lines
+    assert lines==[1]*4,lines
     boxes=page.locator('#tabs [role=tab]').evaluate_all('bs=>bs.map(b=>{const r=b.getBoundingClientRect();return[r.left,r.right,r.height]})')
     assert all(0<=l and r<=320 and h<=64 for l,r,h in boxes),boxes
     page.set_viewport_size({'width':390,'height':844})

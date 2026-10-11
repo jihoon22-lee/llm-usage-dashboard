@@ -14,9 +14,8 @@ function sortedModelRows(data){
 function downloadCsv(kind,header,rows){
  const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
  const lines=[header.map(quote).join(',')].concat(rows.map(r=>r.map(quote).join(',')));
- const last=lastUsage?new Date(lastUsage.end_exclusive.slice(0,10)+'T00:00:00Z'):null;
- if(last)last.setUTCDate(last.getUTCDate()-1);
- const span=lastUsage?lastUsage.start.slice(0,10)+'_'+last.toISOString().slice(0,10):new Date().toISOString().slice(0,10);
+ const endDate=lastUsage?new Date(Date.parse(lastUsage.end_exclusive)-1+9*3600e3).toISOString().slice(0,10):null;
+ const span=lastUsage?lastUsage.start.slice(0,10)+'_'+endDate+(lastUsage.period==='1h'?'_1h':''):new Date().toISOString().slice(0,10);
  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`llm-usage-${kind}-${span}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
@@ -64,7 +63,7 @@ function renderScope(data){
  if(scope)chip.textContent=scopeText(scope)+' ×';
 }
 // Earlier releases used other tab names; saved views and bookmarked URLs still resolve.
-const VIEW_ALIASES={overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
+const VIEW_ALIASES={plan:'quota',overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
 // Panels fed by the lazily fetched insights section.
 const INSIGHT_VIEWS=['usage','reports','status'];
 let currentView='quota',previousView='quota';
@@ -173,7 +172,7 @@ const foldedPanels=[...document.querySelectorAll('details.mobile-fold')];
 // stay folded until the user touches them (compactPanels honours this map).
 const mobileOpen=new Map(foldedPanels.map(panel=>[panel,panel.hasAttribute('data-mobile-open')]));
 const filterOptions=[...document.querySelectorAll('.filters option')].map(option=>({option,label:option.textContent}));
-const shortOptions={period:{today:'오늘','7d':'7일','30d':'30일',all:'전체',custom:'직접'},
+const shortOptions={period:{'1h':'1시간',today:'오늘','7d':'7일','30d':'30일',all:'전체',custom:'직접'},
  granularity:{day:'일별',hour:'시간',week:'주별',month:'월별'},
  group:{provider:'제작사',route:'서비스',model:'모델',project:'프로젝트',agent:'에이전트'},
  metric:{tokens:'토큰',requests:'요청 수',cost:'비용'},
@@ -205,7 +204,12 @@ function renderUsage(data){
  const periodLabel=$('period').value==='custom'
   ?`${data.start.slice(0,10)} ~ ${new Date(Date.parse(data.end_exclusive)-864e5).toISOString().slice(0,10)}`
   :fullLabel('period');
- $('cards-period').textContent=`${periodLabel}${data.scope?' · '+scopeText(data.scope):''}`;
+ const recent=data.period==='1h';
+ const range=recent?`${when(Date.parse(data.start)/1000)} → ${when(Date.parse(data.end_exclusive)/1000)} KST`:null;
+ $('cards-period').textContent=`${periodLabel}${range?' · '+range:''}${data.scope?' · '+scopeText(data.scope):''}`;
+ $('recent-usage').setAttribute('aria-pressed',String(recent));
+ $('recent-usage-note').hidden=!recent;
+ document.querySelector('[data-panel="heatmap"]').hidden=recent;
  renderScope(data);
  // Card deltas always compare token totals, whatever metric is selected.
  // The earlier window is cut at the same elapsed time as the running period.
@@ -223,7 +227,7 @@ function renderUsage(data){
  const costOption=$('metric').querySelector('[value="cost"]');
  costOption.disabled=!(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null));
  if(costOption.disabled&&$('metric').value==='cost')$('metric').value='tokens';
- $('chart-caption').textContent=`${data.start.slice(0,10)}부터 · ${fullLabel('group')} · ${metricName()} · ${modeNames[$('cumulative').value]}`;
+ $('chart-caption').textContent=`${range||data.start.slice(0,10)+'부터'} · ${fullLabel('group')} · ${metricName()} · ${modeNames[$('cumulative').value]}`;
  $('chart-by-model').hidden=$('group').value==='model';
  chart(data);composition(data);ranking(data);renderInsights(data);renderWhatif();
  // A refresh may land after a lazy insights fetch; if the new core payload
@@ -370,10 +374,18 @@ function renderWhatif(){
 $('whatif-model').addEventListener('focus',()=>{loadWhatif().catch(e=>{$('whatif-result').textContent='단가를 불러오지 못했습니다. '+e.message;});});
 $('whatif-model').addEventListener('change',async()=>{await loadWhatif();renderWhatif();});
 // Frequent filter combinations in one tap; each is one history entry like a drill-down.
-const PRESETS={today:{period:'today',granularity:'hour',group:'route'},week:{period:'7d',granularity:'day',group:'route'},
+const PRESETS={recent:{period:'1h',granularity:'hour',group:'project',metric:'tokens'},today:{period:'today',granularity:'hour',group:'route'},week:{period:'7d',granularity:'day',group:'route'},
  models:{period:'30d',granularity:'day',group:'model'},projects:{period:'30d',granularity:'day',group:'project'},
  months:{period:'all',granularity:'month',group:'route'}};
-document.querySelector('.presets').addEventListener('click',event=>{
+$('view-usage').addEventListener('click',event=>{
+ const jump=event.target.closest('[data-usage-jump]');
+ if(jump){
+  const panel=document.querySelector(`[data-panel="${jump.dataset.usageJump}"]`);
+  panel.open=true;mobileOpen.set(panel,true);panel.scrollIntoView({behavior:motion(),block:'start'});return;
+ }
  const preset=PRESETS[event.target.closest('[data-preset]')?.dataset.preset];
- if(preset)applyDrill({cumulative:'0',compare:'',scope:'',...preset});
+ if(preset){
+  if(preset.period==='1h'){sessSort.key='tokens';sessSort.dir='desc';sessPage=0;}
+  applyDrill({cumulative:'0',compare:'',scope:'',...preset});
+ }
 });

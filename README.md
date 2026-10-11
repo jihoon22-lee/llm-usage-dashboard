@@ -1,21 +1,21 @@
 # LLM Usage Dashboard
 
-개인 LLM 도구의 **구독 한도·작업 전망·크레딧과 토큰 사용량**을 확인하는 자체 호스팅 대시보드입니다.
+개인 LLM 도구의 **구독 한도·초기화권·크레딧과 기록된 토큰 사용량**을 확인하는 자체 호스팅 대시보드입니다.
 Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다. 웹과 수집기는 독립 프로세스이고 Resource Guard는 필요하지 않습니다.
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.3.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.3.0)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.4.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.4.0)** · [변경 기록](CHANGELOG.md)
 
 ## 기능
 
-- 한도·계획·사용량·리포트·상태 다섯 탭: 한도 탭에서 잔여·다음 초기화 일정·추가 자원을 펼치지 않고 확인하고, 계획 탭에서 작업 전망을 확인
-- 24시간 안에 만료되는 크레딧·초기화권 알림, 모바일 아래 시트로 여는 수동 자원 기록
-- 한도·초기화·수집 상태, 모든 모델의 사용 추이·비용 추정·프로젝트/세션 분석
-- 서비스·모델별 작업 지속 시간과 먼저 제약하는 한도, 최근 30분·비교 3시간 소모 속도
-- Codex·Claude 크레딧·초기화권 읽기 전용 조회, 자동 조회를 보완하는 수동 자원 기록
-- 각 초기화권·크레딧의 만료일을 연도·KST 시각으로 상시 표시, 미제공·부분 만료 구분
-- 오늘·이번 주 작업시간별 전망, 적용 범위·지출 조건·만료·확인 시각 구분
+- 한도·사용량·리포트·상태 네 탭: 잔여 한도·다음 초기화·보유 초기화권과 크레딧 확인
+- 최근 1시간 빠른 보기: 정확한 60분의 로컬 기록을 서비스·모델·프로젝트·세션별로 집계하고 CSV로 내보내기
+- 한도별 실제 감소량: 최근 30분 안의 연속 관측 구간과 감소한 %p 표시, 작업 지속 시간은 예측하지 않음
+- 보유 초기화권·크레딧을 확인된 만료일 순으로 표시하고 24시간 이내 만료 알림 제공
+- Codex·Claude 자원 읽기 전용 조회와 모바일 대화상자로 입력하는 수동 기록
+- 지출 한도는 크레딧 사용 조건으로 구분, 수치 미수신은 빈 카드 대신 짧은 상태 안내
+- 조회 실패한 기존 잔액은 마지막 확인값으로 보존하고 0·만료·이전 계정 기록은 접어서 표시
 - 캐시·추론 구분, 스트리밍·재수집·Windows/WSL 사본 중복 제거
 - 데스크톱·모바일, CSV, 제한된 오프라인 통계 사본, 선택적 외부 알림
 - 없는 원본 값을 0이나 100%로 채우지 않고 미제공·실패·오래된 관측을 구분
@@ -33,9 +33,9 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 [구조와 수집 경로](docs/architecture.md)에서 과거 실수신과 합성 검증을 구분합니다.
 Windows는 선택한 프로필의 **기록 수집 대상**입니다. Windows/macOS 네이티브 서버 설치는 지원하지 않습니다.
 
-작업 전망은 관측한 속도가 유지된다는 조건의 추정입니다. 처음 계정을 확인하거나 계정·구독 조건이 바뀌면 새 관측이 필요합니다. 최근 속도는 최소 15분, 비교 속도는 최소 90분의 연속 이력을 사용하며 초기화 후 용량을 미리 더하지 않습니다. 모델 매핑·필수 한도·속도가 불확실하면 판단을 보류합니다.
+최근 1시간은 계정 전체나 현재 실행 중인 작업이 아닌 **수집된 로컬 사용 기록**을 보여 줍니다. 프로젝트·세션 정보가 없는 기록도 전체 합계에 포함하며 미분류·미귀속을 표시합니다. 요약과 상세는 같은 시간 범위를 사용합니다. 한도 감소량은 계정·출처·초기화·수집 공백을 구분한 연속 15분 이상의 관측이 있을 때만 표시합니다. 확인된 감소량 0과 관측 부족은 다르며, 부족한 이력으로 예측 카드를 만들지 않습니다.
 
-추가 자원의 잔액·지출 한도·초기화권 횟수는 합산하지 않습니다. Claude 클라우드 세션 전용 크레딧은 별도 잔액·만료로 표시하며 로컬 구독 한도에 합산하지 않습니다. API 전용 크레딧은 수동 기록을 지원하며 구독형 작업의 추가 자원으로 추천하지 않습니다. 조회·기록만 제공하고 초기화권 사용·크레딧 구매·자동 충전 설정 변경은 실행하지 않습니다. [화면과 자원 조건](docs/usage.md)을 확인하세요.
+추가 자원의 잔액·지출 한도·초기화권 횟수는 합산하지 않습니다. Claude 클라우드 세션 전용 크레딧은 별도 잔액·만료로 표시하며 로컬 구독 한도에 합산하지 않습니다. API 전용 크레딧은 수동 기록을 지원하며 구독형 작업의 보유 자원과 합산하지 않습니다. 조회·기록만 제공하고 초기화권 사용·크레딧 구매·자동 충전 설정 변경은 실행하지 않습니다. [화면과 자원 조건](docs/usage.md)을 확인하세요.
 
 ![합성 데이터 대시보드](docs/assets/dashboard.png)
 
@@ -47,7 +47,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.3.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.4.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -56,7 +56,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.3.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.4.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.
