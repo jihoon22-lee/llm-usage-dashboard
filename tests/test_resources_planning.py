@@ -222,6 +222,17 @@ class ResourcesPlanningTests(unittest.TestCase):
         self.assertEqual((limit['amount'], limit['spent'], balance['amount']), (0, 30, 50))
         self.assertTrue(limit['allowance'])
 
+    def test_credit_keeps_disabled_condition_without_guessing_a_currency(self):
+        with self.store.connect() as c:
+            claude_limits(self.store,c,{'extra_usage':{'is_enabled':False,'monthly_limit':None,'used_credits':0,'currency':'USD'}},self.now)
+            claude_balance(c,{'amount':500,'currency':None},self.now)
+        credit=self.item('prepaid-credits')
+        self.assertFalse(credit['usage_conditions']['enabled'])
+        self.assertIsNone(credit['usage_conditions']['spend_remaining'])
+        self.assertIsNone(self.item('spending-allowance')['amount'])
+        aged=next(r for r in self.store.limits(self.now+700)['resources']['items'] if r['pool_key']=='prepaid-credits')
+        self.assertNotIn('usage_conditions',aged)
+
     def test_null_currency_is_not_assumed_usd(self):
         with self.store.connect() as c:
             claude_balance(c, {'amount': 0, 'currency': None}, self.now)
@@ -477,15 +488,14 @@ class ResourceApiTests(unittest.TestCase):
         self.assertEqual(self.request(endpoint, 'DELETE', {'revision': 1}).status_code, 200)
         self.assertEqual(self.request(endpoint, 'DELETE', {'revision': 1}).status_code, 404)
 
-    def test_limits_and_decision_share_one_observation(self):
+    def test_limits_serve_observations_without_removed_work_decisions(self):
         self.paced()
         data = self.request('/api/limits?route=codex&hours=2').get_json()
-        self.assertEqual(data['now'], data['planning']['now'])
-        self.assertEqual(data['planning']['state'], 'shortage')
-        for query in ('hours=nan', 'hours=-1', 'pace=wrong', 'today_hours=40', 'week_hours=inf'):
-            self.assertEqual(self.request('/api/limits?'+query).status_code, 400)
-        changed=self.request('/api/limits?route=codex&model=removed').get_json()['planning']
-        self.assertTrue(changed['selection_changed']);self.assertEqual(changed['state'],'unknown')
+        self.assertNotIn('planning',data)
+        self.assertTrue(data['limits'])
+        self.assertIn('resources',data)
+        # Old saved requests must not break the remaining quota/resource view.
+        self.assertEqual(self.request('/api/limits?model=removed&hours=nan').status_code,200)
 
 
 if __name__ == '__main__':

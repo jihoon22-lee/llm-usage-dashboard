@@ -474,7 +474,11 @@ def inventory(c, now, sources):
         row['effective'] = not row['duplicate_of'] or target['status'] != 'fresh'
         row['conflicts_with_auto'] = bool(target and row['duplicate_of'] and (row.get('amount'), row.get('unit')) != (target.get('amount'), target.get('unit')))
         if row['kind']=='usage_credit' and not row.get('allowance') and row.get('scope')=='subscription':
-            allowance=next((r for r in result if r.get('allowance') and r['route']==row['route'] and r['account_key']==row['account_key'] and r['active_account'] and r['status']=='fresh' and r['unit']==row['unit']),None)
+            allowance=next((r for r in result if r.get('allowance') and r['route']==row['route'] and r['account_key']==row['account_key'] and r['active_account'] and r['status']=='fresh'),None)
             if allowance:
                 row['usage_conditions']={k:allowance.get(k) for k in ('enabled','spend_remaining','spend_unlimited','checked','ttl')}
+                if allowance.get('unit')!=row.get('unit'):
+                    # An explicit disabled flag still applies. Money from an
+                    # unverified or different unit cannot label this balance.
+                    row['usage_conditions']['spend_remaining']=None
     return dict(items=result, accounts=[dict(route=r, verified=bool(a['account_key']), epoch=a['epoch']) for r, a in owners.items()])

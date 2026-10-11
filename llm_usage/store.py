@@ -6,6 +6,7 @@ import functools
 from zoneinfo import ZoneInfo
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
@@ -594,7 +595,7 @@ class Store:
             cache=self._usage_cache;cache[key]=body
             while len(cache)>12:cache.popitem(last=False)
 
-    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all'):
+    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None):
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all','core','insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql,scope_args='',()
@@ -603,6 +604,12 @@ class Store:
             if kind not in self.SCOPE_KINDS or not value:raise ValueError('범위가 올바르지 않습니다.')
             scope_sql=' AND '+self.SCOPE_KINDS[kind]+'=?';scope_args=(value,)
         now = datetime.fromtimestamp(now or time.time(),KST)
+        if as_of is not None and (period!='1h' or isinstance(as_of,bool) or not isinstance(as_of,(int,float))
+                                  or not math.isfinite(as_of) or not 0<as_of<=now.timestamp()):
+            raise ValueError('최근 1시간의 기준 시각이 올바르지 않습니다.')
+        # Pin the core and lazy detail requests to one second. Time passing must
+        # evict records from this rolling range even when the collector is idle.
+        cutoff=int(as_of if as_of is not None else now.timestamp()) if period=='1h' else None
         midnight = now.replace(hour=0,minute=0,second=0,microsecond=0)
         sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
         count='COUNT(*) AS requests'
@@ -615,13 +622,13 @@ class Store:
             # sum-preserving relabels move data_version.
             key=(period,start,end,granularity,group,cumulative,compare,scope,sections,value_alert_usd,
                  tuple(lifetime.values()),collected_at,self.state(c,'data_version') or 0,
-                 midnight.date().isoformat(),
+                 midnight.date().isoformat(),cutoff,
                  json.dumps(pricing,sort_keys=True) if pricing else None,
                  json.dumps(subscriptions,sort_keys=True) if subscriptions else None)
             body=self._usage_get(key)
             if body is None:
                 body=self._usage_body(c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime)
+                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff)
                 if len(body['series'])<=5000:self._usage_put(key,body)
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .signals import usage_spike
@@ -631,7 +638,7 @@ class Store:
         if sections=='all':return data
         insight_keys={'insights','sessions','sessions_total','sessionless_requests','projects','calendar'}
         if sections=='core':return {k:v for k,v in data.items() if k not in insight_keys}
-        shared={'start','end_exclusive','timezone','granularity','labels','series','subscriptions','sources','scope','collected_at'}
+        shared={'period','start','end_exclusive','timezone','granularity','labels','series','subscriptions','sources','scope','collected_at'}
         return {k:v for k,v in data.items() if k in insight_keys|shared}
 
     def project_month(self,c,now,pricing=None):
@@ -735,9 +742,12 @@ class Store:
                     models=sorted(models,key=lambda m:-token_total(m)),hours=hours)
 
     def _usage_body(self,c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime):
+                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff):
         first = c.execute('SELECT MIN(ts) FROM events WHERE 1=1'+scope_sql,scope_args).fetchone()[0]
-        if period=='custom':
+        if period=='1h':
+            b=datetime.fromtimestamp(cutoff,KST)
+            a=b-timedelta(hours=1)
+        elif period=='custom':
             a = datetime.strptime(start,'%Y-%m-%d').replace(tzinfo=KST)
             b = datetime.strptime(end,'%Y-%m-%d').replace(tzinfo=KST)+timedelta(days=1)
         elif period in ('today','7d','30d','all'):
@@ -747,7 +757,9 @@ class Store:
         else:
             raise ValueError('기간이 올바르지 않습니다.')
         intervals=calendar_buckets(a,b,granularity)
-        R,rcount=self.table,self.rcount
+        # A rolling hour cuts through two hourly rollups. Read original events
+        # at both boundaries so charts, models, sessions and totals agree.
+        R,rcount=('events',count) if period=='1h' else (self.table,self.rcount)
         total = dict(c.execute('SELECT '+sums+','+rcount+' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql,(a.timestamp(),b.timestamp(),*scope_args)).fetchone())
         rows = [dict(r) for r in c.execute('SELECT provider,route,model,'+rcount+','+sums+' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY provider,route,model ORDER BY SUM(uncached_input+cached_input+output+cache_creation) DESC,provider,route,model',(a.timestamp(),b.timestamp(),*scope_args))]
         from .pricing import estimate,rate_for
@@ -888,7 +900,7 @@ class Store:
                 cost['lifetime']=lifetime_cost
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
         subs=[]
-        if subscriptions:
+        if subscriptions and period!='1h':
             by_route={}
             for row in rows:
                 if row.get('est_cost') is not None:
@@ -914,7 +926,7 @@ class Store:
                 values[label] = dict(running[label]) if cumulative else {k:entry.get(k,0) for k in SERIES_KEYS}
             series.append(dict(time=begin.isoformat(),values=values,range_start=max(a,begin).isoformat(),
                 range_end_exclusive=min(b,finish).isoformat(),partial=begin<a or finish>b))
-        return dict(start=a.isoformat(),end_exclusive=b.isoformat(),timezone='Asia/Seoul',totals=total,lifetime=lifetime,
+        return dict(period=period,start=a.isoformat(),end_exclusive=b.isoformat(),timezone='Asia/Seoul',totals=total,lifetime=lifetime,
                     granularity=granularity,heatmap=heatmap,cost=cost,
                     rows=rows,series=series,labels=labels,first_record=first,insights=insights,
                     calendar=calendar,subscriptions=subs,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,

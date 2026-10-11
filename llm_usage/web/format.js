@@ -140,6 +140,36 @@ function dayKinds(startIso,endIso,nowSec){
  return {weekday,weekend};
 }
 
+// A measured decline in the latest uninterrupted 30-minute window, including a
+// measured zero. Missing, stale, unverified or short observations add no UI row.
+function observedDecrease(row){
+ if(row.status!=='fresh'||row.scope?.identity_unverified)return null;
+ const t=row.trends?.find(t=>t.window_minutes===30&&t.available);
+ return t&&Number.isFinite(t.decrease_pp)&&t.decrease_pp>=0&&t.observed_minutes>=15?t:null;
+}
+
+// Spending caps are conditions on a balance, never another owned resource.
+// Keep known past values on failed reads; a value never received gets one compact notice.
+function resourceGroups(items,now){
+ const groups={current:[],older:[],unconfirmed:[]};
+ for(const row of items||[]){
+  if(row.allowance)continue;
+  const reference=['previous_account','expired'].includes(row.status)||(row.duplicate_of&&!row.effective);
+  if(!Number.isFinite(row.amount)){
+   if(!reference)groups.unconfirmed.push(row);
+  }else if(reference||row.amount===0)groups.older.push(row);
+  else groups.current.push(row);
+ }
+ const expiry=row=>{
+  const dates=(row.grants||[]).filter(g=>g.amount>0&&!['used','expired'].includes(g.status)).map(g=>g.expires);
+  dates.push(row.expires);
+  return Math.min(...dates.filter(t=>Number.isFinite(t)&&t>now));
+ };
+ const current=row=>['fresh','manual'].includes(row.status)?0:1;
+ groups.current.sort((a,b)=>current(a)-current(b)||expiry(a)-expiry(b)||String(a.label).localeCompare(String(b.label))||String(a.id).localeCompare(String(b.id)));
+ return groups;
+}
+
 // Age the observation itself, not just the offline banner. This is a pure view
 // transform; cached provider data and reset values are never modified in place.
 function currentLimits(data,now,offline=false){
@@ -165,21 +195,13 @@ function currentLimits(data,now,offline=false){
   const r={...original},checked=r.value_checked??r.checked;
   if(['fresh','manual'].includes(r.status)&&(offline||checked==null||checked>now+120||now-checked>(r.ttl??1800)))r.status='stale';
   if(['fresh','manual'].includes(r.status)&&r.expires&&r.expires<=now)r.status=r.expiry_is_partial?'stale':'expired';
+  if(['fresh','manual'].includes(r.status)&&(r.grants||[]).some(g=>g.amount>0&&!['used','expired'].includes(g.status)&&g.expires&&g.expires<=now))r.status='stale';
   if(r.usage_conditions&&(offline||now-r.usage_conditions.checked>(r.usage_conditions.ttl??600)))r.usage_conditions=null;
   return r;
  });
- let planning=data.planning?{...data.planning}:null;
- if(planning)planning.alternatives=(planning.alternatives||[]).filter(p=>p.valid_until!=null&&p.valid_until>now);
- if(planning&&planning.resources_valid_until<=now){
-  planning.resources=[];
-  planning.conditions=[...(planning.conditions||[]),'추가 자원의 확인·만료 시점이 지났습니다. 제공사에서 재확인하세요.'];
- }
- if(planning&&(offline||planning.valid_until<=now||rows.some(r=>r.route===planning.route&&planning.applies?.includes(r.bucket)&&r.status!=='fresh'))){
-  const invalidate=p=>p?{...p,state:'unknown',seconds:null,bottleneck:null,resources:[],alternatives:[],reason:offline?'오프라인 사본입니다. 연결 후 한도를 다시 확인하세요.':'관측값이 오래됐습니다. 한도를 다시 확인하세요.'}:p;
-  planning=invalidate(planning);planning.today=invalidate(planning.today);planning.week=invalidate(planning.week);
- }
- return {...data,now,limits:rows,resources:{...data.resources,items},planning,_offline:offline};
+ return {...data,now,limits:rows,resources:{...data.resources,items},_offline:offline};
 }
+
 const duration=s=>{if(s==null)return '추정 보류';if(s<=0)return '현재 소진';if(s<60)return '1분 미만';const minutes=Math.round(s/60);return `${Math.floor(minutes/60)?Math.floor(minutes/60)+'시간 ':''}${minutes%60}분`;};
 // Resources and reset grants that run out within `within` seconds (default a day). Past expiry,
 // folded rows (previous account, expired, unlinked duplicates), spending allowances (their date

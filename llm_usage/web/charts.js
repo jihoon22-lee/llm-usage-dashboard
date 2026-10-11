@@ -80,7 +80,11 @@ function bindChartTooltip(data,grouped,geometry,comparisonTotals){
   const allTotal=grouped.labels.filter(l=>!hiddenLabels.has(l)).reduce((sum,label)=>sum+metricValue(p.values[label]||{}),0);
   const cmp=grouped.compare,cmpP=(cmp&&cmp.series||[])[index];
   const cmpTotal=cmpP?comparisonTotals[index]:null;
-  tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)} KST</strong><small>${modeNames[$('cumulative').value]}${p.partial&&['week','month'].includes($('granularity').value)?' · 일부 기간':''}${p.range_start&&['week','month'].includes($('granularity').value)?'<br>'+esc(p.range_start.slice(0,10))+' ~ '+esc(p.range_end_exclusive.slice(0,10))+' (종료 미포함)':''}</small></div>${grouped.labels.map(label=>`<div class="tooltip-row${hiddenLabels.has(label)?' muted-series':''}"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colorOf(label)}"/></svg> ${esc(seriesLabel(label))}${hiddenLabels.has(label)?' · 숨김':''}</span><strong>${shareMode?percent(!hiddenLabels.has(label)&&allTotal?metricValue(p.values[label]||{})/allTotal*100:null):metricFmt(metricValue(p.values[label]||{}))+costNote(p.values[label])}</strong></div>`).join('')}${missingRoutes(data).map(row=>`<div class="tooltip-row tooltip-missing"><span>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span><strong>—</strong></div>`).join('')}<div class="tooltip-total"><span>표시 항목 합계</span><strong>${metricFmt(allTotal)}</strong></div>${cmpTotal!=null&&!shareMode?`<div class="tooltip-row tooltip-missing"><span>⎯⎯ ${esc(cmp.label)} 합계<small>${esc((cmpP.compared_time||cmpP.time).slice(0,10))} 시작</small></span><strong>${metricFmt(cmpTotal)}</strong></div>`:''}${armed===index?'<div class="tooltip-hint">한 번 더 탭하면 이 구간을 확대합니다</div>':''}`;
+  const showRange=data.period==='1h'||['week','month'].includes($('granularity').value);
+  const rangeText=p.range_start&&showRange?(data.period==='1h'
+   ?when(Date.parse(p.range_start)/1000)+' ~ '+when(Date.parse(p.range_end_exclusive)/1000)
+   :p.range_start.slice(0,10)+' ~ '+p.range_end_exclusive.slice(0,10)):'';
+  tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)} KST</strong><small>${modeNames[$('cumulative').value]}${p.partial&&showRange?' · 일부 기간':''}${rangeText?'<br>'+esc(rangeText)+' (종료 미포함)':''}</small></div>${grouped.labels.map(label=>`<div class="tooltip-row${hiddenLabels.has(label)?' muted-series':''}"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colorOf(label)}"/></svg> ${esc(seriesLabel(label))}${hiddenLabels.has(label)?' · 숨김':''}</span><strong>${shareMode?percent(!hiddenLabels.has(label)&&allTotal?metricValue(p.values[label]||{})/allTotal*100:null):metricFmt(metricValue(p.values[label]||{}))+costNote(p.values[label])}</strong></div>`).join('')}${missingRoutes(data).map(row=>`<div class="tooltip-row tooltip-missing"><span>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span><strong>—</strong></div>`).join('')}<div class="tooltip-total"><span>표시 항목 합계</span><strong>${metricFmt(allTotal)}</strong></div>${cmpTotal!=null&&!shareMode?`<div class="tooltip-row tooltip-missing"><span>⎯⎯ ${esc(cmp.label)} 합계<small>${esc((cmpP.compared_time||cmpP.time).slice(0,10))} 시작</small></span><strong>${metricFmt(cmpTotal)}</strong></div>`:''}${armed===index?'<div class="tooltip-hint">한 번 더 탭하면 이 구간을 확대합니다</div>':''}`;
   tooltip.hidden=false;
   const center=geometry.x(index);
   cursor.setAttribute('x1',center);cursor.setAttribute('x2',center);cursor.setAttribute('visibility','visible');
@@ -103,6 +107,7 @@ function bindChartTooltip(data,grouped,geometry,comparisonTotals){
  function zoom(index){
   const p=grouped.points[index];if(!p||!p.range_start)return;
   const g=$('granularity').value;if(g==='hour')return;
+  if(data.period==='1h'){applyDrill({granularity:'hour'});return;}
   const until=new Date(p.range_end_exclusive.slice(0,10)+'T00:00:00Z');until.setUTCDate(until.getUTCDate()-1);
   applyDrill({period:'custom',start:p.range_start.slice(0,10),end:until.toISOString().slice(0,10),
               granularity:g==='day'?'hour':'day'});

@@ -495,7 +495,7 @@ class InsightsSectionTests(unittest.TestCase):
         full=self.store.usage(**self.kwargs)
         ins=self.store.usage(sections='insights',**self.kwargs)
         insight_keys={'insights','sessions','sessions_total','sessionless_requests','projects','calendar'}
-        shared={'start','end_exclusive','timezone','granularity','labels','series',
+        shared={'period','start','end_exclusive','timezone','granularity','labels','series',
                 'subscriptions','sources','scope','collected_at'}
         # The insights response is exactly the kept subset of the full response.
         self.assertEqual(ins,{k:v for k,v in full.items() if k in insight_keys|shared})
@@ -632,7 +632,7 @@ class WebTests(unittest.TestCase):
         self.assertTrue(any(i['sizes']=='192x192' for i in data['icons']))
         self.assertTrue(any(i['sizes']=='512x512' for i in data['icons']))
         shortcuts={i['url']:i for i in data['shortcuts']}
-        self.assertEqual(sorted(shortcuts),['/?view=plan','/?view=quota'])
+        self.assertEqual(sorted(shortcuts),['/?view=quota','/?view=usage&period=1h&granularity=hour&group=project'])
         for item in shortcuts.values():
             self.assertTrue(item['name'] and item['icons'])
             for icon in item['icons']:

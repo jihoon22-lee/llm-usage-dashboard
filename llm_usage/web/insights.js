@@ -3,6 +3,11 @@
 function renderInsights(data){
  const subs=data.subscriptions||[];
  const month=data.insights&&data.insights.month;
+ const recent=data.period==='1h';
+ // Optional summaries need evidence. A new/empty hour should not replace its
+ // useful records with an unavailable comparison or a misleading subscription setup prompt.
+ $('comparison').closest('[data-panel]').hidden=recent&&data.insights?.comparison?.status!=='observed';
+ $('subvalue').closest('[data-panel]').hidden=recent&&!month;
  const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
  const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
   ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';
@@ -41,8 +46,9 @@ function renderInsights(data){
  const c=insights.comparison;
  if(c.current==null)$('comparison').innerHTML=`<p>${esc(c.reason)}</p>`;
  else{
-  const change=c.percent==null?'증감률 계산 불가':`${c.percent>0?'+':''}${c.percent.toFixed(1)}%`;
-  $('comparison').innerHTML=`<div class="comparison-value">${esc(change)}<small>관측 토큰 차이 ${signed(c.delta)}</small></div><p class="hint">현재 ${esc(c.start.slice(0,16).replace('T',' '))} → ${esc(c.end_exclusive.slice(0,16).replace('T',' '))}<br>이전 ${esc(c.previous_start.slice(0,16).replace('T',' '))} → ${esc(c.previous_end_exclusive.slice(0,16).replace('T',' '))} KST · 종료 미포함</p><p class="hint">${esc(c.reason)}${c.previous===0?' 이전 관측값이 0이면 증감률을 계산하지 않습니다.':''}</p><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong>${signed(r.delta)}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div><p class="hint">캐시 생성 포함 · 변화량 절댓값 상위 6개</p>`;
+  const absolute=c.status==='observed'&&c.percent==null;
+  const change=absolute?`${signed(c.delta)} 토큰`:c.percent==null?'증감률 계산 불가':`${c.percent>0?'+':''}${c.percent.toFixed(1)}%`;
+  $('comparison').innerHTML=`<div class="comparison-value">${esc(change)}<small>${absolute?'이전 구간 대비 기록된 토큰 차이':'관측 토큰 차이 '+signed(c.delta)}</small></div><p class="hint">현재 ${esc(c.start.slice(0,16).replace('T',' '))} → ${esc(c.end_exclusive.slice(0,16).replace('T',' '))}<br>이전 ${esc(c.previous_start.slice(0,16).replace('T',' '))} → ${esc(c.previous_end_exclusive.slice(0,16).replace('T',' '))} KST · 종료 미포함</p><p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong>${signed(r.delta)}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div><p class="hint">캐시 생성 포함 · 변화량 절댓값 상위 6개</p>`;
  }
  const cache=insights.cache;
  const saved=data.cost&&data.cost.cache_savings;

@@ -83,20 +83,16 @@ async def main():
             await page.goto(ORIGIN+'/')
             await expect(page.locator('#updated')).to_contain_text('마지막 갱신')
 
-            # A job decision replaces cross-provider percentage rankings. Claude
-            # has no observed pace here, so it must not become a confident pick.
-            await expect(page.locator('#work-decision')).to_contain_text('부족 예상')
+            # Plans and cross-provider rankings no longer occupy the quota view.
+            assert await page.locator('#work-decision,#plan-summary,#tab-plan').count()==0
             await expect(page.locator('#quota-strip')).to_be_hidden()
-            assert await page.locator('.decision-alternatives button').count()==0
             dots=await page.locator('.reset-dot').evaluate_all('ds=>ds.map(d=>parseFloat(d.style.left))')
             assert len(dots)>=2 and all(0<x<=100 for x in dots),dots
-            # The pace mark sits at the even-pace position, not at the bar's left edge.
-            await page.locator('#quota-codex .bucket-detail summary').first.click()
-            mark=await page.locator('#quota-codex .pace-mark').first.evaluate('m=>parseFloat(getComputedStyle(m).left)/m.parentElement.clientWidth')
-            assert 0.3<mark<0.95,mark
+            await expect(page.locator('#quota-codex .bucket-decrease').first).to_contain_text('%p 감소')
+            assert await page.locator('.pace-mark').count()==0
 
             # Usage: presets, the unified total and what-if pricing.
-            await page.keyboard.press('3')
+            await page.keyboard.press('2')
             await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
             await page.locator('[data-preset="models"]').click()
             await expect(page.locator('#group')).to_have_value('model')
@@ -118,13 +114,13 @@ async def main():
 
             # Reports: value bars have width. Shortcuts ignore keys typed into fields; leave the select first.
             await page.evaluate('document.activeElement.blur()')
-            await page.keyboard.press('4')
+            await page.keyboard.press('3')
             # The lazy insights answer redraws the panel; wait for the bar to carry its width.
             await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
 
             # Status: the notification history lists the failed send waiting for retry.
             await page.evaluate('document.activeElement.blur()')
-            await page.keyboard.press('5')
+            await page.keyboard.press('4')
             await expect(page.locator('#notify-log')).to_contain_text('전송 실패 · 재시도')
             if args.artifacts:
                 args.artifacts.mkdir(parents=True,exist_ok=True)
