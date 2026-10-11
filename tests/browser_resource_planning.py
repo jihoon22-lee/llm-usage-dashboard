@@ -104,6 +104,20 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             assert tabs==['tab-quota','tab-usage','tab-reports','tab-status'],tabs
             if width==1440:page.screenshot(path=str(output/'dashboard.png'))
             expect(page.locator('#quota-codex .bucket-decrease').first).to_be_visible()
+            single=page.evaluate('''()=>{
+              const host=document.createElement('div');
+              host.innerHTML=quotaLine([{checked:lastLimits.now,remaining:50,break_before:true,break_reason:'start'}],{});
+              const svg=host.querySelector('svg');
+              return {point:svg.querySelector('circle').getAttribute('cx'),end:svg.querySelector('.chart-gridline').getAttribute('x2'),
+                times:svg.querySelectorAll('text[y="141"]').length,points:svg.querySelectorAll('circle').length};
+            }''')
+            assert single['point']==single['end'] and single['times']==1 and single['points']==1,single
+            short=page.evaluate('''()=>{
+              const host=document.createElement('div');
+              host.innerHTML=quotaLine([{checked:lastLimits.now-60,remaining:51},{checked:lastLimits.now,remaining:50}],{});
+              return host.querySelector('circle').getAttribute('cx')===host.querySelector('.chart-gridline').getAttribute('x2');
+            }''')
+            assert short
             assert page.locator('#quota-codex .bucket-detail[open]').count()==0
             expect(page.locator('#resource-list')).to_contain_text('2회')
             expect(page.locator('#resource-list')).to_contain_text('25 크레딧')
@@ -284,6 +298,54 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
         items=call('/api/limits').get_json()['resources']['items']
         assert len([r for r in items if r['label']=='응답 실패 후 재시도'])==1
         page.locator('#resource-cancel').click()
+
+        # A confirmed write stays successful when only the following GET fails.
+        writes=[]
+        page.on('request',lambda r:writes.append(r.method) if urlsplit(r.url).path.startswith('/api/resources/manual') and r.method!='GET' else None)
+        page.evaluate('()=>{window.cacheOpenBefore=caches.open;}')
+        def fail_limits():
+            page.evaluate("()=>{offlineCacheReady=null;caches.open=async()=>{throw Error('fixture cache unavailable');};}")
+            page.route('**/api/limits*',lambda route:route.abort('internetdisconnected'))
+        def restore_limits():
+            page.evaluate('()=>{offlineCacheReady=null;caches.open=window.cacheOpenBefore;}')
+            page.unroute('**/api/limits*')
+        page.locator('#resource-add').click()
+        page.locator('#resource-label').fill('저장 확정 후 조회 실패')
+        page.locator('#resource-amount').fill('10')
+        fail_limits()
+        page.locator('#resource-save').click()
+        expect(page.locator('#resource-message')).to_contain_text('기록을 저장했습니다. 목록 갱신')
+        expect(page.locator('#resource-message')).not_to_contain_text('입력 내용은 유지')
+        expect(page.locator('#resource-reload')).to_be_visible()
+        saved=next(r for r in call('/api/limits').get_json()['resources']['items'] if r['label']=='저장 확정 후 조회 실패')
+        assert saved['amount']==10 and page.evaluate('editingResource.revision')==saved['revision']
+        page.locator('#resource-reload').click()
+        expect(page.locator('#resource-message')).to_contain_text('목록을 불러오지 못했습니다')
+        assert writes==['POST'],writes
+        restore_limits();page.locator('#resource-reload').click()
+        expect(page.locator('#resource-reload')).to_be_hidden()
+        expect(page.locator('#resource-amount')).to_have_value('10')
+        page.locator('#resource-amount').fill('15');fail_limits()
+        page.locator('#resource-save').click()
+        expect(page.locator('#resource-message')).to_contain_text('기록을 저장했습니다. 목록 갱신')
+        expect(page.locator(f'[data-resource-id="{saved["id"]}"] .resource-value')).to_contain_text('이전 확인값')
+        updated=next(r for r in call('/api/limits').get_json()['resources']['items'] if r['id']==saved['id'])
+        assert updated['amount']==15 and updated['revision']==saved['revision']+1
+        assert page.evaluate('editingResource.revision')==updated['revision']
+        restore_limits();page.locator('#resource-reload').click()
+        expect(page.locator('#resource-reload')).to_be_hidden()
+        expect(page.locator('#resource-amount')).to_have_value('15')
+        page.locator('#resource-cancel').click()
+        page.evaluate('()=>{window.beforeConfirmedDelete=structuredClone(lastLimitSnapshot);}')
+        fail_limits();page.once('dialog',lambda dialog:dialog.accept())
+        page.locator(f'[data-resource-delete="{saved["id"]}"]').click()
+        expect(page.locator('#resource-summary')).to_contain_text('기록을 삭제했습니다. 목록 갱신')
+        expect(page.locator(f'[data-resource-id="{saved["id"]}"]')).to_have_count(0)
+        assert not any(r['id']==saved['id'] for r in call('/api/limits').get_json()['resources']['items'])
+        page.evaluate('()=>acceptLimits(window.beforeConfirmedDelete,{saved:Date.now()})')
+        expect(page.locator(f'[data-resource-id="{saved["id"]}"]')).to_have_count(0)
+        assert writes==['POST','PATCH','DELETE'],writes
+        restore_limits();page.evaluate('()=>loadLimits()')
 
         # Cache freshness, countdown and recommendations age together even with
         # auto refresh off; then a fresh server reply restores the decision.

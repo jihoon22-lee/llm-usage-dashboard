@@ -96,6 +96,23 @@ with tempfile.TemporaryDirectory(prefix='llm-recent-browser-') as root:
             expect(page.locator('#error')).to_be_hidden()
             if width<=600:page.locator('#filter-fold > summary').click()
             expect(page.locator('[data-panel="comparison"]')).to_be_hidden()
+            # An observed zero baseline is useful evidence, although a percentage
+            # is undefined. The API case is also exercised by test_recent_usage.py.
+            page.evaluate('''()=>{
+              const data=structuredClone(lastUsage);
+              Object.assign(data.insights.comparison,{status:'observed',current:240,previous:0,delta:240,percent:null,
+                reason:'확보한 로컬 기록끼리 비교합니다.',
+                contributions:data.rows.map(r=>({provider:r.provider,route:r.route,model:r.model,current:total(r),previous:0,delta:total(r)}))});
+              renderInsights(data);
+            }''')
+            expect(page.locator('[data-panel="comparison"]')).to_be_visible()
+            if page.locator('[data-panel="comparison"]').get_attribute('open') is None:
+                page.locator('[data-panel="comparison"] > summary').click()
+            expect(page.locator('#comparison .comparison-value')).to_contain_text('+240 토큰')
+            expect(page.locator('#comparison')).to_contain_text('이전 구간 0토큰')
+            expect(page.locator('#comparison')).not_to_contain_text('계산 불가')
+            page.evaluate('()=>renderInsights(lastUsage)')
+            expect(page.locator('[data-panel="comparison"]')).to_be_hidden()
             page.locator('[data-usage-jump="projects"]').click()
             expect(page.locator('#projects')).to_be_visible()
             assert page.locator('#projects > tr').count()==3

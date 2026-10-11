@@ -172,14 +172,15 @@ function quotaLine(history,row){
  if(!points.length)return '<p class="hint">표시할 한도 관측이 없습니다.</p>';
  const first=points[0],last=points.at(-1);
  const horizon=last.checked;
- const span=Math.max(300,horizon-first.checked);
+ const singleTime=horizon===first.checked;
+ const span=singleTime?1:horizon-first.checked;
  const low=Math.max(0,Math.floor(Math.min(...points.map(p=>p.remaining))-5));
  const high=Math.min(100,Math.ceil(Math.max(...points.map(p=>p.remaining))+5));
- const x=p=>38+(p.checked-first.checked)/span*475,y=p=>112-(p.remaining-low)/Math.max(1,high-low)*96;
+ const x=p=>singleTime?513:38+(p.checked-first.checked)/span*475,y=p=>112-(p.remaining-low)/Math.max(1,high-low)*96;
  let path='';const isolated=[];
  points.forEach((p,i)=>{path+=`${i&&!p.break_before?'L':'M'}${x(p).toFixed(1)},${y(p).toFixed(1)} `;if((i===0||p.break_before)&&(i===points.length-1||points[i+1].break_before))isolated.push(p);});
  const markers=points.filter(p=>p.break_before&&p.break_reason!=='start').slice(-3).map(p=>`<g><line class="quota-break" x1="${x(p)}" x2="${x(p)}" y1="12" y2="116"/><text x="${Math.min(470,x(p)+3)}" y="9">${({reset:'초기화 변경',gap:'수집 공백',error:'조회 실패',increase:'잔여 증가',expired:'초기화 경과',unknown:'정보 부족'})[p.break_reason]||'수집 공백'}</text></g>`).join('');
- return `<svg class="quota-line" viewBox="0 0 580 146" role="img" aria-label="잔여 한도 선 그래프 · 세로축 ${low}~${high}%"><text x="0" y="20">${high}%</text><text x="0" y="115">${low}%</text><line class="chart-gridline" x1="38" x2="513" y1="112" y2="112"/>${markers}<path d="${path}"/>${isolated.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="2"/>`).join('')}<circle cx="${x(last)}" cy="${y(last)}" r="3"/><text class="quota-end" x="520" y="${Math.max(22,y(last)+4)}">${percent(last.remaining)}</text><text x="38" y="141">${esc(when(first.checked))}</text><text x="513" y="141" text-anchor="end">${esc(when(horizon))}</text></svg>`;
+ return `<svg class="quota-line" viewBox="0 0 580 146" role="img" aria-label="잔여 한도 선 그래프 · 세로축 ${low}~${high}%"><text x="0" y="20">${high}%</text><text x="0" y="115">${low}%</text><line class="chart-gridline" x1="38" x2="513" y1="112" y2="112"/>${markers}<path d="${path}"/>${isolated.filter(p=>p!==last).map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="2"/>`).join('')}<circle cx="${x(last)}" cy="${y(last)}" r="3"/><text class="quota-end" x="520" y="${Math.max(22,y(last)+4)}">${percent(last.remaining)}</text>${singleTime?'':`<text x="38" y="141">${esc(when(first.checked))}</text>`}<text x="513" y="141" text-anchor="end">${esc(when(horizon))}</text></svg>`;
 }
 function quotaBars(rows){
  if(!rows.some(r=>r.decrease_pp!=null))return '<p class="hint">감소량을 비교할 관측이 부족합니다.</p>';

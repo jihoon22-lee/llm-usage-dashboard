@@ -74,6 +74,14 @@ class RecentUsageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.usage(period='today',now=self.now,as_of=self.now)
 
+    def test_observed_zero_baseline_keeps_absolute_change(self):
+        with self.store.connect() as c:
+            self.store.event(c,'earlier-observation',self.now-10800,'fixture','antigravity','m',dict(output=1))
+        comparison=self.store.usage(period='1h',scope='route:antigravity',now=self.now)['insights']['comparison']
+        self.assertEqual(comparison['status'],'observed')
+        self.assertEqual((comparison['current'],comparison['previous'],comparison['delta']),(120,0,120))
+        self.assertIsNone(comparison['percent'])
+
     def test_http_core_and_details_use_the_same_range(self):
         app=create_app(dict(database=str(self.path),origin='https://fixture.test',
                             secret_key='fixture-key',allowed_logins=['fixture']))

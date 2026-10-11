@@ -104,7 +104,7 @@ async function refresh(manual=false){
      }
      activeQuery=query().toString();queued=false;
      const core=query();core.set('sections','core');coreController=new AbortController();
-     const sources={core:{},limits:{}};
+     const sources={core:{},limits:limitsReadSource()};
      const [usage,limits]=await Promise.all([api('/api/usage?'+core,undefined,undefined,{signal:coreController.signal,source:sources.core}),
        api('/api/limits',undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
      if(activeQuery!==query().toString()){queued=true;continue;}

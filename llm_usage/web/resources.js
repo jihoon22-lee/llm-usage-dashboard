@@ -76,7 +76,7 @@ function renderResources(data){
  const pending=unconfirmed.map(r=>`${shortService[r.route]||r.route} ${r.kind==='reset'?'초기화권':'크레딧'}`);
  $('resource-unconfirmed').innerHTML=unconfirmed.length?`${esc([...new Set(pending)].join(' · '))} 확인되지 않음 · <button type="button" class="mini-btn" data-resource-status>수집 상태</button>`:'';
  const failed=current.some(r=>!['fresh','manual'].includes(r.status));
- $('resource-summary').textContent=data._offline?'오프라인 사본 · 마지막 확인값입니다.':failed?'재확인이 필요한 항목은 이전 확인값입니다.':current.length?'확인된 만료일이 가까운 순 · 사용·구매는 제공사 화면에서 진행하세요.':'사용·구매는 제공사 화면에서 진행하세요.';
+ $('resource-summary').textContent=resourcesNeedReload(data)?'저장은 완료됐습니다. 목록 갱신이 필요합니다.':data._offline?'오프라인 사본 · 마지막 확인값입니다.':failed?'재확인이 필요한 항목은 이전 확인값입니다.':current.length?'확인된 만료일이 가까운 순 · 사용·구매는 제공사 화면에서 진행하세요.':'사용·구매는 제공사 화면에서 진행하세요.';
  $('resource-save').disabled=resourceSaving||data._offline;
  if(focused)$('resource-panel').querySelector(`[data-resource-${focused.kind}="${focused.id}"]`)?.focus({preventScroll:true});
 }
@@ -139,6 +139,14 @@ $('resource-linked').addEventListener('change',()=>{
  const row=lastLimits?.resources?.items.find(r=>r.id===$('resource-linked').value);
  if(row){$('resource-unit').value=row.unit;$('resource-scope').value=row.scope;}
 });
+async function reloadAfterResourceWrite(confirmation,target){
+ $(target).textContent=confirmation;
+ try{
+  if(await loadLimits()){$(target).textContent=confirmation;return true;}
+ }catch(error){/* The write was already confirmed; only the follow-up read failed. */}
+ $(target).textContent=confirmation+' 목록 갱신을 완료하지 못했습니다. 다시 불러오세요.';
+ return false;
+}
 $('resource-editor').addEventListener('submit',async event=>{
  event.preventDefault();if(resourceSaving||lastLimits?._offline)return;
  resourceSaving=true;$('resource-save').disabled=true;$('resource-message').textContent='저장 중…';
@@ -147,8 +155,9 @@ $('resource-editor').addEventListener('submit',async event=>{
  try{
   const result=await api('/api/resources/manual'+(editing?'/'+editing.id:''),body,undefined,{method:editing?'PATCH':'POST'});
   editingResource={id:result.id,revision:result.revision};resourceDirty=false;
+  confirmResourceWrite(result.id,result.revision);
   $('resource-message').textContent='기록을 저장했습니다.';$('resource-reload').hidden=true;
-  await loadLimits();
+  $('resource-reload').hidden=await reloadAfterResourceWrite('기록을 저장했습니다.','resource-message');
  }catch(error){
   $('resource-message').textContent=error.message+' 입력 내용은 유지됩니다.';
   $('resource-reload').hidden=error.status!==409;
@@ -156,9 +165,12 @@ $('resource-editor').addEventListener('submit',async event=>{
 });
 $('resource-reload').addEventListener('click',async()=>{
  const id=editingResource?.id||resourceRequestId;if(!id)return;
- await loadLimits();
- const row=lastLimits?.resources?.items.find(r=>r.id===id);
- if(row)editResource(row);else $('resource-message').textContent='최신 기록을 확인하지 못했습니다. 입력은 유지됩니다.';
+ try{
+  const live=await loadLimits();
+  if((editingResource?.id||resourceRequestId)!==id)return;
+  const row=live&&lastLimits?.resources?.items.find(r=>r.id===id);
+  if(row)editResource(row);else $('resource-message').textContent='최신 기록을 확인하지 못했습니다. 입력은 유지됩니다.';
+ }catch(error){if((editingResource?.id||resourceRequestId)===id)$('resource-message').textContent='목록을 불러오지 못했습니다. 입력은 유지됩니다.';}
 });
 $('resource-panel').addEventListener('click',async event=>{
  if(event.target.closest('[data-resource-status]')){setView('status');return;}
@@ -168,6 +180,8 @@ $('resource-panel').addEventListener('click',async event=>{
  if(edit){if(resourceDirty&&!confirm('저장하지 않은 입력을 지우고 이 기록을 수정할까요?'))return;editResource(row);return;}
  if(lastLimits?._offline||!confirm('이 수동 기록을 삭제할까요? 제공사의 실제 자원에는 영향이 없습니다.'))return;
  remove.disabled=true;
- try{await api('/api/resources/manual/'+id,{revision:row.revision},undefined,{method:'DELETE'});await loadLimits();}
- catch(error){$('resource-summary').textContent=error.message;remove.disabled=false;}
+ try{await api('/api/resources/manual/'+id,{revision:row.revision},undefined,{method:'DELETE'});}
+ catch(error){$('resource-summary').textContent=error.message;remove.disabled=false;return;}
+ confirmResourceWrite(id,null);
+ await reloadAfterResourceWrite('기록을 삭제했습니다.','resource-summary');
 });
