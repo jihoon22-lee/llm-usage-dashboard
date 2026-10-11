@@ -186,6 +186,10 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             # Legacy bookmarked plan URLs resolve to quota, including on mobile.
             page.goto(ORIGIN+'/?view=plan')
             expect(page.locator('#tab-quota')).to_have_attribute('aria-selected','true')
+            # Tab selection precedes the asynchronous quota response on a new page.
+            # Wait for data before injecting a failed-read snapshot, including on CI.
+            expect(page.locator('#updated')).to_contain_text('마지막 갱신')
+            expect(page.locator('#resource-list .resource-card').first).to_be_visible()
             expect(page.locator('#resource-list')).not_to_contain_text('추가 사용 지출 한도')
             # Never-received values get one notice; a failed known credit keeps its number.
             page.evaluate("""()=>{
