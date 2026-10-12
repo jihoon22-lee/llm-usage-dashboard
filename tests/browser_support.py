@@ -23,7 +23,7 @@ import socket
 import tempfile
 import time
 from urllib.parse import urlsplit
-from llm_usage.store import Store
+from llm_usage.store import Store,KST
 from llm_usage.webapp import create_app
 
 ORIGIN = 'https://dashboard.test'
@@ -43,12 +43,16 @@ def fixture_client():
     folder = Path(_temp.name)
     store = Store(folder/'usage.db')
     now = time.time()
+    from datetime import datetime, timedelta, timezone
+    midnight=datetime.fromtimestamp(now,KST).replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+    # The fixture promises one sample per KST day, including just after midnight.
+    event_time=max(midnight,now-1200)
     models = [('codex', 'OpenAI', 'gpt-test'), ('claude-code', 'Anthropic', 'claude-test'),
               ('antigravity', 'Google', 'gemini-3.8-flash')]
     with store.connect() as c:
         for day in range(100):
             for i, (route, provider, model) in enumerate(models):
-                store.event(c, f'fixture-{day}-{i}', now-day*86400-1200, provider, route, model,
+                store.event(c, f'fixture-{day}-{i}', event_time-day*86400, provider, route, model,
                             dict(uncached_input=100*(i+1)*(day%7+1), cached_input=400, output=80, cache_creation=50),
                             session=f'fixture-session-{day%3}', project='fixture-project', agent_kind='main')
         for route, _, _ in models:
@@ -57,7 +61,6 @@ def fixture_client():
         for route in ('opencode-go','devin'):
             store.source(c, route, 'ended', 'Synthetic inactive subscription', now-30)
         # Account-wide daily totals above the local records: work run on the provider's side.
-        from datetime import datetime, timedelta, timezone
         today = datetime.fromtimestamp(now, timezone.utc).date()
         store.account_tokens(c, 'codex', [dict(startDate=(today-timedelta(days=d)).isoformat(), tokens=900_000+d) for d in range(3)], now-30)
         store.save_state(c, 'collector', dict(status='idle', checked=now-30))
