@@ -18,7 +18,7 @@ const fields=['uncached_input','cached_input','output','total','cache_creation',
 const modelTotal=v=>total(v);
 const usd=v=>v==null?'—':'$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:v>=100?0:2});
 const DETAIL_COLS=new Set(['uncached_input','cached_input','output','cache_creation','reasoning']);
-const total=v=>(v.uncached_input||0)+(v.cached_input||0)+(v.output||0)+(v.cache_creation||0);
+const total=v=>v.total_tokens??((v.uncached_input||0)+(v.cached_input||0)+(v.output||0)+(v.cache_creation||0));
 // Cost CSV retains the distinction between a known zero and unpriced tokens.
 function costCsvFields(values){
  const missing=values.map(v=>v.unpriced||0),tokens=values.map(v=>total(v));
@@ -31,7 +31,7 @@ const percent=v=>v==null?'—':Number(v).toFixed(1)+'%';
 const signed=v=>(v>0?'+':'')+fmt(v);
 // These sources do not report reasoning separately: their 0 means not provided.
 const REASONING_UNREPORTED=new Set(['claude-code','devin']);
-const KIND_NAMES={main:'메인',sub:'서브 에이전트',fork:'포크'};
+const KIND_NAMES={main:'메인',sub:'서브 에이전트',fork:'포크',unattributed:'미귀속'};
 // Period rows priced at one rate (USD per 1M tokens), cache reads at its cached rate.
 const estimateWith=(rows,rate)=>rows.reduce((s,r)=>s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)
  +(r.output||0)*rate.output+(r.cache_creation||0)*(rate.cache_write??rate.input))/1e6,0);

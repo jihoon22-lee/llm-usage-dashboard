@@ -26,6 +26,12 @@ test('escaping and number formats',()=>{
   assert.equal(f.pctChange(null),'—');
 });
 
+test('provider totals preserve tokens with an unavailable breakdown',()=>{
+ assert.equal(f.total({uncached_input:20,output:10,total_tokens:130,unclassified_tokens:100}),130);
+ assert.equal(f.total({total_tokens:0}),0);
+ assert.equal(f.modelTotal({output:25,supplemental_tokens:15,total_tokens:40}),40);
+});
+
 test('reset countdown and relative time',()=>{
   assert.equal(f.left(null),'초기화 정보 미제공');
   assert.equal(f.left(0),'초기화 경과 · 재확인 대기');

@@ -1,0 +1,172 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from llm_usage.store import Store,stamp,identity
+from llm_usage.reconciliation import snapshot,link,total
+from llm_usage.cloud import _ingest,IncompletePages
+from llm_usage.collect import model_provider,parse_line
+from llm_usage.telemetry import ingest,resolve
+
+
+class ReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.store=Store(Path(self.tmp.name)/'usage.db')
+        self.now=stamp('2026-10-12T12:00:00Z')
+
+    def event(self,key='a',output=20):
+        with self.store.connect() as c:
+            self.store.event(c,key,stamp('2026-10-12T09:30:00Z'),'Anthropic','claude-code','claude-test',dict(output=output),session='s',project='p')
+            link(c,'claude:s',key,'local')
+
+    def evidence(self,tokens=100,start='2026-10-12T09:00:00Z',end='2026-10-12T10:00:00Z'):
+        with self.store.connect() as c:
+            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',
+                     model='claude-test',session='s',project='p',start=stamp(start),end=stamp(end),tokens=tokens,
+                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
+
+    def usage(self,**kw):return self.store.usage(now=self.now,**kw)
+
+    def test_late_records_shrink_supplement_and_do_not_mutate_cached_body(self):
+        self.event();self.evidence()
+        a=self.usage(period='today');b=self.usage(period='today')
+        self.assertEqual(a,b)
+        self.assertEqual(total(a['totals']),100)
+        self.assertEqual(a['reconciliation']['supplemental_tokens'],80)
+        self.event('b',40)
+        u=self.usage(period='today')
+        self.assertEqual(total(u['totals']),100)
+        self.assertEqual(u['reconciliation']['supplemental_tokens'],40)
+        self.assertEqual(u['totals']['requests'],2)
+        self.assertTrue(self.store.rollup_matches())
+
+    def test_cumulative_results_are_differenced_not_summed(self):
+        self.event();self.evidence()
+        self.evidence(160,end='2026-10-12T11:00:00Z')
+        u=self.usage(period='today',granularity='hour',group='route')
+        self.assertEqual(total(u['totals']),160)
+        self.assertEqual(sum(total(v) for p in u['series'] for v in p['values'].values()),160)
+        self.assertEqual(self.usage(period='today',scope='project:other')['totals']['output'],0)
+
+    def test_account_intervals_remain_unallocated_at_kst_midnight(self):
+        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)
+        today=self.usage(period='today')
+        self.assertEqual(total(today['totals']),0)
+        self.assertEqual(today['reconciliation']['overlapping_intervals'][0]['start'],'2026-10-11T09:00:00+09:00')
+        u=self.usage(period='custom',start='2026-10-11',end='2026-10-12')
+        self.assertEqual(total(u['totals']),1000)
+        self.assertEqual(u['reconciliation']['unallocated_tokens'],1000)
+        self.assertEqual(u['totals']['unclassified_tokens'],1000)
+        self.assertEqual(u['totals']['requests'],0)
+        self.assertIsNone(u['cost']['period'])
+        week=self.usage(period='all',granularity='month')
+        self.assertEqual(total(week['totals']),1000)
+        self.assertEqual(week['reconciliation']['unallocated_tokens'],0)
+
+    def test_counter_decrease_and_records_exceeding_total_are_visible(self):
+        self.event(output=120);self.evidence(100)
+        u=self.usage(period='today')
+        self.assertEqual(total(u['totals']),120)
+        self.assertEqual(u['reconciliation']['conflicts'][0]['reason'],'records_exceed_aggregate')
+        self.evidence(50,end='2026-10-12T11:00:00Z')
+        self.assertIn('counter_decreased',[x['reason'] for x in self.usage(period='today')['reconciliation']['conflicts']])
+
+    def test_running_account_bucket_is_bounded_by_receipt_not_fabricated_time(self):
+        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-12',tokens=1000)],self.now)
+        u=self.usage(period='today')
+        self.assertEqual(total(u['totals']),1000)
+        self.assertEqual(u['reconciliation']['overlapping_intervals'],[])
+        hour=self.usage(period='1h')
+        self.assertEqual(total(hour['totals']),0)
+        self.assertEqual(len(hour['reconciliation']['overlapping_intervals']),1)
+
+    def test_session_project_and_report_use_reconciled_totals(self):
+        self.event();self.evidence()
+        d=self.store.session_detail('s')
+        self.assertEqual(total(d['totals']),100)
+        self.assertEqual(sum(total(m) for m in d['models']),100)
+        p=self.store.project_detail('p',now=self.now)
+        self.assertEqual(sum(m['tokens'] for m in p['models']),100)
+        self.assertEqual(sum(d['tokens'] for d in p['daily']),100)
+        u=self.usage(period='today')
+        self.assertEqual(total(u['sessions'][0]),100)
+        self.assertEqual(total(u['projects'][0]),100)
+
+    def test_receiver_auth_size_and_content_type(self):
+        import http.client
+        import threading
+        from http.server import ThreadingHTTPServer
+        from llm_usage.telemetry import handler
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler(self.store,'fixture-token'))
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            for headers,status in [({},401),({'Authorization':'Bearer fixture-token','Content-Type':'application/x-protobuf'},415),
+                                   ({'Authorization':'Bearer fixture-token','Content-Type':'application/json'},200)]:
+                client=http.client.HTTPConnection(*server.server_address,timeout=3)
+                client.request('POST','/v1/logs',body='{}',headers=headers)
+                response=client.getresponse();self.assertEqual(response.status,status);response.read();client.close()
+        finally:server.shutdown();server.server_close();worker.join(timeout=3)
+
+    def test_real_cloud_shape_parent_tool_and_model_usage(self):
+        item=dict(id='remote',created_at='2026-10-12T09:00:00Z')
+        message={'payload':dict(type='assistant',session_id='s',timestamp='2026-10-12T09:30:00Z',parent_tool_use_id='tool1',
+            message=dict(id='m1',model='claude-test',usage=dict(input_tokens=2,output_tokens=1,cache_read_input_tokens=30,cache_creation_input_tokens=4),content='NEVER STORE'))}
+        result={'created_at':'2026-10-12T10:00:00Z','payload':dict(type='result',session_id='s',modelUsage={'claude-test':dict(inputTokens=2,outputTokens=20,cacheReadInputTokens=30,cacheCreationInputTokens=4)})}
+        fetch=lambda *args:dict(data=[message,result])
+        with self.store.connect() as c:_ingest(self.store,c,fetch,{},item,model_provider,'events')
+        u=self.usage(period='today')
+        self.assertEqual(total(u['totals']),56)
+        self.assertEqual(u['reconciliation']['supplemental_tokens'],19)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute('SELECT agent_kind FROM events').fetchone()[0],'sub')
+            self.assertNotIn('NEVER STORE','\n'.join(c.iterdump()))
+
+    def test_repeated_pagination_is_not_success(self):
+        fetch=lambda *a:dict(data=[],next_cursor='same')
+        with self.assertRaises(IncompletePages),self.store.connect() as c:
+            _ingest(self.store,c,fetch,{},dict(id='s'),model_provider)
+
+    def test_large_event_history_returns_a_durable_resume_cursor(self):
+        from llm_usage.cloud import _batch
+        calls=[]
+        def fetch(url,headers):
+            from urllib.parse import urlparse,parse_qs
+            cursor=int(parse_qs(urlparse(url).query).get('cursor',['0'])[0]);calls.append(cursor)
+            return dict(data=[],next_cursor=str(cursor+1) if cursor<22 else None)
+        _,cursor=_batch(fetch,{},dict(id='s'))
+        self.assertEqual(cursor,'20')
+        _,cursor=_batch(fetch,{},dict(id='s'),cursor)
+        self.assertIsNone(cursor)
+        self.assertEqual(calls,list(range(23)))
+
+    def test_reasoning_remains_part_of_output_and_is_not_added_twice(self):
+        self.event(output=100)
+        with self.store.connect() as c:
+            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',
+                     model='claude-test',start=stamp('2026-10-12T09:00:00Z'),end=stamp('2026-10-12T10:00:00Z'),tokens=100,
+                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=100,reasoning=60))
+        u=self.usage(period='today')
+        self.assertEqual(total(u['totals']),100)
+        self.assertEqual(u['totals']['reasoning'],60)
+
+    def test_telemetry_waits_for_request_alias_and_discards_content(self):
+        values={'event.name':'claude_code.api_request','request_id':'req1','session.id':'s','model':'claude-test',
+                'input_tokens':2,'output_tokens':30,'cache_read_tokens':3,'cache_creation_tokens':4,'prompt':'PRIVATE'}
+        record=dict(timeUnixNano=str(int((self.now-10)*1e9)),attributes=[dict(key=k,value={'stringValue':v} if isinstance(v,str) else {'intValue':str(v)}) for k,v in values.items()])
+        data=dict(resourceLogs=[dict(scopeLogs=[dict(logRecords=[record])])])
+        result=ingest(self.store,data,self.now)
+        self.assertEqual(result['pending'],1)
+        self.assertEqual(total(self.usage(period='today')['totals']),0)
+        with self.store.connect() as c:
+            parse_line(self.store,c,'claude-code',dict(type='assistant',timestamp=self.now-10,requestId='req1',sessionId='s',
+                message=dict(id='m1',model='claude-test',usage=dict(input_tokens=2,output_tokens=1,cache_read_input_tokens=3,cache_creation_input_tokens=4))),{})
+            self.assertEqual(resolve(self.store,c),1)
+            self.assertNotIn('PRIVATE','\n'.join(c.iterdump()))
+        ingest(self.store,data,self.now)
+        self.assertEqual(total(self.usage(period='today')['totals']),39)
+        self.assertEqual(self.usage(period='today')['totals']['requests'],1)
+
+
+if __name__=='__main__':unittest.main()

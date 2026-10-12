@@ -100,8 +100,13 @@ with sync_playwright() as p:
     # Check rendered arithmetic against the synthetic Flask response.
     expect(page.get_by_role('heading',name='모델별 사용량 상세',exact=True)).to_be_visible()
     cells=page.locator('#rows tr').first.locator('td').all_text_contents()
-    values=[int(cells[i].replace(',','')) for i in (5,6,7,8,10)]
-    assert values[3]==values[0]+values[1]+values[2]+values[4], 'Total = uncached + cached + output + cache creation'
+    first=page.evaluate('sortedModelRows(lastUsage)[0]')
+    assert int(cells[8].replace(',','')) == sum(first.get(k,0) for k in ('uncached_input','cached_input','output','cache_creation','unclassified_tokens'))
+    if first.get('unclassified_tokens') and not first.get('recorded_tokens'):
+        assert cells[5:8]==['미제공']*3
+    else:
+        values=[int(cells[i].replace(',','')) for i in (5,6,7,8,10)]
+        assert values[3]==values[0]+values[1]+values[2]+values[4]
     labels=page.evaluate('lastUsage.labels')
     page.locator('#chart > svg').focus()
     expect(page.locator('#chart-tooltip .tooltip-row:not(.tooltip-missing)')).to_have_count(min(len(labels),8))
@@ -141,7 +146,7 @@ with sync_playwright() as p:
     # counting its cells.
     expect(page.locator('#calendar .cal-cell[data-tip]').first).to_be_visible()
     assert page.locator('#calendar .cal-cell[data-tip]').count()>90
-    page.locator('#calendar .cal-cell[data-tip]').last.dispatch_event('pointerover')
+    page.locator('#calendar .cal-cell[data-tip]').last.hover()
     expect(page.locator('#tip')).to_be_visible()
     # Status view lists collectors.
     page.locator('#tabs [data-view="status"]').click()

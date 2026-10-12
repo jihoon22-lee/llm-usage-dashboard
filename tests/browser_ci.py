@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-CHECKS = ('smoke','dashboard','features','insights','model_visibility','notifications',
+CHECKS = ('smoke','reconciliation','dashboard','features','insights','model_visibility','notifications',
           'quota_hierarchy','review','status','antigravity','privacy','remediation',
           'usability_settings','usability_requests','usability_output','resource_planning','recent_usage')
 if __name__ == '__main__':

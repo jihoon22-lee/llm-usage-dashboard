@@ -7,6 +7,8 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 
 현재 릴리스: **[v0.5.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.5.0)** · [변경 기록](CHANGELOG.md)
 
+개발 변경: [클라우드 누계 대조·한국시간 미배분량·선택적 telemetry](docs/collection-reconciliation.md).
+
 ## 기능
 
 - 한도·사용량·리포트·상태 네 탭: 잔여 한도·다음 초기화·보유 초기화권과 크레딧 확인
@@ -24,8 +26,8 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 
 | 도구 | 토큰 원본 | 한도 경로 | 제한 |
 |---|---|---|---|
-| Codex | 로컬 JSONL, 계정 일별 합계(App Server) | 기존 CLI App Server, 크레딧·초기화권 | 불완전·모호한 누적 이력은 완전 복구 불가. ChatGPT 에이전트(dot)·클라우드 실행분은 UTC 일별 총량 차이로만 표시 |
-| Claude Code | 로컬 JSONL, 클라우드 세션 원격 기록(OAuth) | 기존 OAuth·상태줄, 선불 잔액·지출 조건·초기화권 | OAuth·세션 기록 API는 외부 연동용 공개 API가 아님. 클라우드 세션의 서버 누계(modelUsage)는 transcript 합보다 커서 원인 미확인 상태 |
+| Codex | 로컬 JSONL, 계정 합계·스레드 상세 기능 조회(App Server) | 기존 CLI App Server, 크레딧·초기화권 | 계정 집계 범위는 KST 09:00–다음 날 09:00. 날짜 미배분량을 별도 표시하며 차이를 dot 사용량으로 단정하지 않음. 스레드 상세는 미제공일 수 있음 |
+| Claude Code | 로컬 JSONL, 클라우드 transcript·전체 이벤트·modelUsage | 기존 OAuth·상태줄, 선불 잔액·지출 조건·초기화권 | 하위 에이전트 누락과 최종 누계를 대조. 내부 OAuth·세션 API의 외부 연동 허용은 확인되지 않았으며 공식 지원으로 보장하지 않음. 누계 감소·복원 범위가 모호한 이력은 충돌 표시 |
 | Antigravity | CLI/앱 SQLite | 상태줄·실행 중인 WSL 앱 | 내부 스키마/RPC 변경에 영향받음 |
 | OpenCode Go | 로컬 SQLite | 계정 usage 경로 | 구독 계정의 실제 한도 수신 미검증 |
 | Devin CLI | 로컬 SQLite | 기존 CLI 계정 경로 | 내부 API, Cloud 세션 미지원 |

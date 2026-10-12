@@ -2,7 +2,7 @@
 // Model table, CSV, filters, views and URL state, usage summary and collection sources.
 function modelRowValue(row){
  const key=tableSort.key;
- return key==='total'||key==='share'?modelTotal(row):key==='provider'?`${row.provider} / ${row.route}`:key==='est_cost'?(row.est_cost??-1):key==='avg'?(row.requests?modelTotal(row)/row.requests:-1):row[key];
+ return key==='total'||key==='share'?modelTotal(row):key==='provider'?`${row.provider} / ${row.route}`:key==='est_cost'?(row.est_cost??-1):key==='avg'?(row.requests?(row.recorded_tokens??modelTotal(row))/row.requests:-1):row[key];
 }
 function sortedModelRows(data){
  return[...data.rows].sort((a,b)=>{
@@ -23,17 +23,17 @@ $('csv-export').addEventListener('click',()=>{
  if(!lastUsage)return;
  const denom=modelTotal(lastUsage.totals);
  downloadCsv('models',['제작사','사용 서비스','모델','요청 수','평균 토큰/요청','비중 %','Uncached Input','Cached Input','Output','Total (incl. cache creation)','Cache creation','Reasoning','비용 추정 USD'],
-  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,r.model,r.requests||0,r.requests?Math.round(modelTotal(r)/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.uncached_input||0,r.cached_input||0,r.output||0,modelTotal(r),r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
+  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,r.model,r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
 });
 $('csv-sessions').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.sessions)return;
  downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD'],
-  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,s.uncached_input+s.cached_input+s.output+s.cache_creation,s.cost??'']));
+  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'']));
 });
 $('csv-projects').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.projects)return;
  downloadCsv('projects',['프로젝트','세션','요청 수','토큰','비용 추정 USD','최근 활동 KST'],
-  lastUsage.projects.map(p=>[p.project,p.sessions||'',p.requests||0,p.uncached_input+p.cached_input+p.output+p.cache_creation,p.cost??'',when(p.last_ts)]));
+  lastUsage.projects.map(p=>[p.project,p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
 });
 $('csv-series').addEventListener('click',event=>{
  event.preventDefault();event.stopPropagation();
@@ -43,7 +43,7 @@ $('csv-series').addEventListener('click',event=>{
  const header=['시간 KST',...labels.map(seriesLabel),'합계 '+metricName()];
  if(cost)header.push(...labels.map(label=>seriesLabel(label)+' 미산정 토큰'),'합계 미산정 토큰');
  downloadCsv('series-'+$('metric').value,header,(lastUsage.series||[]).map(p=>[p.time,
-  ...(cost?costCsvFields(labels.map(l=>p.values[l]||{})):[...labels.map(l=>metricValue(p.values[l]||{})),labels.reduce((s,l)=>s+metricValue(p.values[l]||{}),0)])]));
+  ...(cost?costCsvFields(labels.map(l=>p.values[l]||{})):[...labels.map(l=>metricValue(p.values[l]||{})),labels.reduce((s,l)=>s+metricValue(p.values[l]||{}),0)])]).concat($('metric').value==='tokens'?(lastUsage.reconciliation?.unallocated_intervals||[]).map(e=>['날짜 미배분: '+e.start+' → '+e.end_exclusive,...labels.map(()=>''),e.tokens]):[]));
 });
 const FILTER_IDS=['period','start','end','granularity','group','cumulative','metric','compare','scope'];
 const FILTER_DEFAULTS={period:'7d',granularity:'day',group:'route',cumulative:'0',metric:'tokens',compare:'',scope:''};
@@ -197,7 +197,7 @@ foldedPanels.forEach(panel=>panel.addEventListener('toggle',()=>{if(compactMedia
 compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
- $('first-use').hidden=!!data.scope||data.lifetime?.requests!==0;
+ $('first-use').hidden=!!data.scope||total(data.lifetime||{})>0||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
  $('usage-gaps').innerHTML=gaps.map(row=>`<strong>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</strong><span>${row.observed?'입력·출력·캐시 숫자는 보존되고 있습니다. 반복 수신과 누적값의 의미를 검증하기 전까지 차트·합계에는 포함하지 않습니다. 마지막 수신 '+when(row.observation_checked):'구독 한도와 별개로 소비량 원본이 확보되지 않아 차트·합계에 포함되지 않습니다.'}</span>`).join('');
@@ -224,6 +224,7 @@ function renderUsage(data){
  renderModelTable(data);renderHeatmap(data.heatmap);
  $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note;
  renderAccountGap(data.account_gap);
+ renderReconciliation(data.reconciliation);
  renderSources(data.sources||[]);
  const costOption=$('metric').querySelector('[value="cost"]');
  costOption.disabled=!(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null));
@@ -242,10 +243,22 @@ function renderAccountGap(gap){
  if(!gap||!gap.days||!gap.days.length){box.innerHTML='';return;}
  const days=gap.days.slice(-7).reverse();
  box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 로컬 미기록 <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
-  +`<p class="source-detail">OpenAI 계정이 집계한 일별 토큰(UTC 날짜)에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버에서 실행된 작업이 여기에 나타납니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다.</p>`
-  +`<div class="table-wrap"><table><thead><tr><th>날짜(UTC)</th><th>계정 합계</th><th>로컬 기록</th><th>미기록</th></tr></thead><tbody>`
-  +days.map(d=>`<tr><td>${esc(d.day)}</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
+  +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다.</p>`
+  +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>미기록</th></tr></thead><tbody>`
+  +days.map(d=>`<tr><td>${esc(d.day)} 09:00–다음 날 09:00</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
   +'</tbody></table></div></details>';
+}
+function renderReconciliation(r){
+ const box=$('usage-reconciliation');if(!box)return;
+ box.hidden=!r||!(r.supplemental_tokens||r.overlapping_intervals?.length||r.conflicts?.length);
+ if(box.hidden){box.replaceChildren();return;}
+ const interval=e=>`${stamp(Date.parse(e.start)/1000)} → ${stamp(Date.parse(e.end_exclusive)/1000)} KST · ${compact(e.tokens)} 토큰`;
+ box.innerHTML=`<strong>사용량 대조 · KST</strong><span>요청 기록 ${compact(r.recorded_tokens)} + 서버 누계 보완 ${compact(r.supplemental_tokens)} 토큰</span>`
+  +(r.origin_tokens?`<span>세부 기록 출처 · 로컬 ${compact(r.origin_tokens.local||0)} · 클라우드 ${compact(r.origin_tokens.cloud||0)} · telemetry ${compact(r.origin_tokens.telemetry||0)} 토큰</span>`:'')
+  +(r.unallocated_tokens?`<span>기간 합계에 포함된 날짜 미배분 ${compact(r.unallocated_tokens)} 토큰 · 일별 차트에는 배분하지 않았습니다.</span>`:'')
+  +[...(r.unallocated_intervals||[]).map(e=>`<span>${esc(interval(e))}</span>`),...(r.overlapping_intervals||[]).map(e=>`<span>기간 경계에 걸쳐 합계에서 제외 · ${esc(interval(e))}</span>`)].join('')
+  +(r.conflicts?.length?`<span>누계 대조 충돌 ${fmt(r.conflicts.length)}건 · 원본 재확인 필요</span>`:'')
+  +'<span>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</span>';
 }
 // Collection status: a summary, problems first, grouped by provider, each with what it means.
 function renderSources(list){
@@ -282,8 +295,8 @@ function renderModelTable(data){
  const match=r=>`${r.provider} ${routeNames[r.route]||r.route} ${r.model}`.toLowerCase().includes(modelFilter);
  const rows=modelFilter?all.filter(match):all;
  $('model-search-count').textContent=modelFilter?`${rows.length}/${all.length}개`:'';
- const avg=r=>r.requests?modelTotal(r)/r.requests:null;
- $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
+ const avg=r=>r.requests?(r.recorded_tokens??modelTotal(r))/r.requests:null;
+ $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
  $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${fmt(row.requests)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
  document.querySelectorAll('[data-sort]').forEach(button=>{
   const selected=button.dataset.sort===tableSort.key;
@@ -381,7 +394,8 @@ function renderWhatif(){
  const model=$('whatif-model').value,out=$('whatif-result');
  if(!model||!whatifRates||!lastUsage){out.textContent='선택 기간 토큰을 모두 다른 모델의 현재 공개 단가로 쓰면 얼마였을지 환산합니다.';return;}
  const value=estimateWith(lastUsage.rows||[],whatifRates[model]),now=lastUsage.cost&&lastUsage.cost.period;
- out.textContent=`선택 기간 ${compact(total(lastUsage.totals))} 토큰을 모두 ${model} 단가로: ${usd(value)}`
+ const known=(lastUsage.rows||[]).reduce((n,r)=>n+(r.uncached_input||0)+(r.cached_input||0)+(r.output||0)+(r.cache_creation||0),0);
+ out.textContent=`내역을 확인한 ${compact(known)} 토큰을 ${model} 단가로: ${usd(value)}`
   +(now?` · 현재 환산 ${usd(now)} 대비 ${value>=now?'+':'−'}${Math.abs((value-now)/now*100).toFixed(0)}%`:'')+' · 모델별 성능 차이와 실제 청구는 반영하지 않습니다.';
 }
 $('whatif-model').addEventListener('focus',()=>{loadWhatif().catch(e=>{$('whatif-result').textContent='단가를 불러오지 못했습니다. '+e.message;});});

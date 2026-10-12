@@ -101,6 +101,9 @@ def main():
     p.add_argument('--group',choices=['provider','route','model','project','agent'],default='provider');p.add_argument('--cumulative',action='store_true')
     p.add_argument('--scope',help='kind:value (kind=route,provider,model,project)')
     sub.add_parser('limits');sub.add_parser('brief',help='현재 한도를 한 줄로 출력 (상태줄·프롬프트용)')
+    p=sub.add_parser('telemetry',help='로컬 전용 OTLP/HTTP JSON 사용량 수신')
+    p.add_argument('--port',type=int,default=4318)
+    p.add_argument('--token-file',required=True,type=Path)
     p=sub.add_parser('collect');p.add_argument('--once',action='store_true')
     for command in ('init','install-hooks'):
         p=sub.add_parser(command)
@@ -120,6 +123,9 @@ def main():
         run(config,args.once);return
     store=Store(config['database'],thresholds=config.get('thresholds'))
     try:
+        if args.command=='telemetry':
+            from .telemetry import serve
+            serve(store,args.port,args.token_file);return
         if args.command=='brief':
             from .notify import brief_line
             print(brief_line(store.limits()));return

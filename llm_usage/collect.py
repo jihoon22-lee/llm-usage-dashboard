@@ -88,7 +88,10 @@ def parse_line(store,c,route,d,state):
             uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
             output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0),reasoning=u.get('reasoning_output_tokens',0)),
             session=d.get('sessionId'),project=project_label(d.get('cwd')),
-            agent_kind='sub' if d.get('isSidechain') else 'main')
+            agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main')
+        from .reconciliation import aliases,link
+        aliases(c,route,key,m.get('id'),d.get('requestId'),d.get('request_id'),d.get('uuid'))
+        if route=='claude-code' and d.get('sessionId'):link(c,'claude:'+d['sessionId'],key,'local')
 
 
 # Bytes just before the read offset identify the consumed prefix (as a digest only).
@@ -570,6 +573,8 @@ def run(settings,once=False):
                 if prepare_normalization(store,settings):
                     backfill_attribution(store,settings)
                     collect_local(store,settings)
+                    from .telemetry import resolve
+                    with store.connect() as c:resolve(store,c)
                 last_local=time.time()
             if once or manual or now-last_limits>=300:
                 poll_limits(store,settings,manual=manual);last_limits=time.time()

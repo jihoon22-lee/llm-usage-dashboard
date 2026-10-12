@@ -20,7 +20,7 @@ def last_week(now):
 
 def _totals(usage):
     from .insights import token_total
-    return dict(tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'))
+    return dict(unallocated_tokens=(usage.get('reconciliation') or {}).get('unallocated_tokens',0),supplemental_tokens=(usage.get('reconciliation') or {}).get('supplemental_tokens',0),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'))
 
 
 def exhaustions(c,start,end):
@@ -108,6 +108,18 @@ def ensure_report(store,now,pricing=None):
     count and never before the first recorded event."""
     monday,_=last_week(now)
     recount_exhaustions(store,now)
+    # Reconcile previously published local reports after a backfill. Do not
+    # re-send notifications for a report that already existed.
+    with store.connect() as c:
+        revision=store.state(c,'usage_evidence_version') or 0
+        refresh=revision!=store.state(c,'reports:usage-evidence-version',0)
+        old_weeks=[r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%'")] if refresh else []
+    for key in old_weeks:
+        week=datetime.strptime(key[7:],'%Y-%m-%d').replace(tzinfo=KST)
+        rebuilt=build(store,(week+timedelta(days=7)).timestamp(),pricing)
+        with store.connect() as c:store.save_state(c,key,rebuilt)
+    if refresh:
+        with store.connect() as c:store.save_state(c,'reports:usage-evidence-version',revision)
     with store.connect() as c:
         first=c.execute('SELECT MIN(ts) FROM events').fetchone()[0]
         missing=[]

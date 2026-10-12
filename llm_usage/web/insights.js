@@ -51,8 +51,9 @@ function renderInsights(data){
   $('comparison').innerHTML=`<div class="comparison-value">${esc(change)}<small>${absolute?'이전 구간 대비 기록된 토큰 차이':'관측 토큰 차이 '+signed(c.delta)}</small></div><p class="hint">현재 ${esc(c.start.slice(0,16).replace('T',' '))} → ${esc(c.end_exclusive.slice(0,16).replace('T',' '))}<br>이전 ${esc(c.previous_start.slice(0,16).replace('T',' '))} → ${esc(c.previous_end_exclusive.slice(0,16).replace('T',' '))} KST · 종료 미포함</p><p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong>${signed(r.delta)}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div><p class="hint">캐시 생성 포함 · 변화량 절댓값 상위 6개</p>`;
  }
  const cache=insights.cache;
+ if(data.reconciliation)$('comparison').insertAdjacentHTML('beforeend','<p class="hint">이 분석은 세부 요청 기록 기준이며 서버 누계 보완분은 상단 합계에서 확인할 수 있습니다.</p>');
  const saved=data.cost&&data.cost.cache_savings;
- $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>선택 기간 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
+ $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>세부 요청 기록의 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
  const selected=$('cache-series').value;
  $('cache-series').innerHTML=data.labels.map(label=>`<option value="${esc(label)}">${esc(seriesLabel(label))}</option>`).join('');
  if(data.labels.includes(selected))$('cache-series').value=selected;
@@ -60,7 +61,7 @@ function renderInsights(data){
  renderCacheTrend(data);
 }
 const sessSort={key:'first',dir:'desc'};let sessPage=0;
-const SESS_SORTS={first:s=>s.first_ts,requests:s=>s.requests||0,tokens:s=>s.uncached_input+s.cached_input+s.output+s.cache_creation,cost:s=>s.cost??-1};
+const SESS_SORTS={first:s=>s.first_ts,requests:s=>s.requests||0,tokens:s=>total(s),cost:s=>s.cost??-1};
 function renderSessions(data){
  document.querySelectorAll('[data-ssort]').forEach(button=>{
   const on=button.dataset.ssort===sessSort.key;
@@ -74,7 +75,7 @@ function renderSessions(data){
  const pages=Math.max(1,Math.ceil(sorted.length/20));sessPage=Math.min(sessPage,pages-1);
  $('sessions').innerHTML=sorted.slice(sessPage*20,sessPage*20+20).map(s=>{
   const span=when(s.first_ts)+(s.last_ts>s.first_ts+60?' ~ '+when(s.last_ts):'');
-  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span></td><td><code>${esc(String(s.session).slice(0,8))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(s.uncached_input+s.cached_input+s.output+s.cache_creation)}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
+  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span></td><td><code>${esc(String(s.session).slice(0,8))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(total(s))}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
  }).join('')||'<tr><td colspan="8" class="empty">선택 기간에 세션 귀속된 기록이 없습니다.</td></tr>';
  const sessTotal=data.sessions_total??sorted.length;
  $('sess-page').textContent=sorted.length?`${sessPage+1}/${pages} · ${sessTotal>100?`전체 ${fmt(sessTotal)}개 중 상위 100개`:`${fmt(sessTotal)}개`}`:'';
@@ -106,9 +107,9 @@ function sessionDetailHtml(d){
  if(!d.models.length)return '<tr class="sess-detail-row"><td colspan="8"><p class="hint">이 세션의 기록이 더 이상 없습니다.</p></td></tr>';
  const peak=Math.max(1,...d.hours.map(h=>h.tokens));
  const bars=d.hours.map((h,i)=>{const bh=Math.max(1,h.tokens/peak*36);return `<rect x="${i*8}" y="${40-bh}" width="6" height="${bh}" data-tip="${esc(when(h.hour))} KST · ${fmt(h.tokens)} 토큰 · ${fmt(h.requests)}회"></rect>`;}).join('');
- return `<tr class="sess-detail-row"><td colspan="8"><div class="sess-detail"><p><strong>${esc(d.project||'프로젝트 미분류')}</strong> · ${esc(KIND_NAMES[d.kind]||d.kind||'—')} · ${esc(when(d.first_ts))} ~ ${esc(when(d.last_ts))} KST · ${fmt(d.requests)}회 · 캐시 읽기 비중 ${percent(d.cache_share)} · 비용 추정 ${usd(d.cost)}</p>`
+ return `<tr class="sess-detail-row"><td colspan="8"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project||'프로젝트 미분류')}</strong> · ${esc(KIND_NAMES[d.kind]||d.kind||'—')} · ${esc(when(d.first_ts))} ~ ${esc(when(d.last_ts))} KST · ${fmt(d.requests)}회 · 캐시 읽기 비중 ${percent(d.cache_share)} · 비용 추정 ${usd(d.cost)}</p>`
   +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.hours.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="시간대별 토큰 ${d.hours.length}시간">${bars}</svg>`
-  +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>합계 토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(m=>`<tr><td>${esc(m.model)}</td><td>${esc(shortService[m.route]||m.route)}</td><td>${fmt(m.requests)}</td><td>${fmt(m.uncached_input+m.cached_input+m.output+m.cache_creation)}</td><td>${usd(m.cost)}</td></tr>`).join('')}</tbody></table></div></td></tr>`;
+  +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>합계 토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(m=>`<tr><td>${esc(m.model)}</td><td>${esc(shortService[m.route]||m.route)}</td><td>${fmt(m.requests)}</td><td>${fmt(total(m))}</td><td>${usd(m.cost)}</td></tr>`).join('')}</tbody></table></div></td></tr>`;
 }
 $('sessions').addEventListener('click',async event=>{
  const button=event.target.closest('.sess-open');if(!button)return;
@@ -139,7 +140,7 @@ function projectDetailHtml(d){
  const m=d.month,peak=Math.max(1,...d.daily.map(x=>x.tokens));
  const bars=d.daily.map((x,i)=>{const h=Math.max(1,x.tokens/peak*36);return `<rect x="${i*8}" y="${40-h}" width="6" height="${h}" data-tip="${esc(x.day)} · ${fmt(x.tokens)} 토큰 · ${fmt(x.requests)}회"></rect>`;}).join('');
  const budget=m.budget?` · 예산 ${Math.round(m.budget_ratio*100)}% 사용 → 월말 예상 <strong class="${m.projected_budget_ratio>=1?'warn-text':''}">${Math.round(m.projected_budget_ratio*100)}%</strong>`:'';
- return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail"><p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''} → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}${budget}</p>`
+ return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''} → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}${budget}</p>`
   +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽</p>`
   +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(x=>`<tr><td>${esc(x.model)}</td><td>${esc(shortService[x.route]||x.route)}</td><td>${fmt(x.requests)}</td><td>${fmt(x.tokens)}</td><td>${usd(x.cost)}</td></tr>`).join('')}</tbody></table>`
   +(d.sessions.length?`<p class="hint">많이 쓴 세션: ${d.sessions.map(x=>`<code>${esc(String(x.session).slice(0,8))}</code> ${compact(x.tokens)}`).join(' · ')}</p>`:'')+'</div></td></tr>';
@@ -163,7 +164,7 @@ function renderProjects(data){
  const budgets=data.project_budgets||{},month=data.project_month;
  const budgetLine=name=>{const b=budgets[name];if(!b||!month)return '';const st=budgetState(month.projects[name],b);
   return `<small class="budget-line">이번 달 예산 ${Math.round(st.ratio*100)}% · ${esc(st.text)}</small><span class="budget-bar ${st.level}"><i data-w="${Math.min(100,st.ratio*100).toFixed(1)}"></i></span>`;};
- $('projects').innerHTML=list.map(p=>`<tr data-scope="project:${esc(p.project)}" tabindex="0" aria-describedby="drill-hint"><td><strong>${esc(p.project)}</strong>${budgetLine(p.project)}</td><td class="col-detail">${p.sessions?fmt(p.sessions):'—'}</td><td>${fmt(p.requests)}</td><td>${fmt(p.uncached_input+p.cached_input+p.output+p.cache_creation)}</td><td>${p.cost!=null?usd(p.cost):'—'}</td><td class="col-detail">${esc(when(p.last_ts))}</td><td><button type="button" class="mini-btn proj-open" data-project="${esc(p.project)}" aria-expanded="${openProject===p.project}">상세</button></td></tr>`).join('')
+ $('projects').innerHTML=list.map(p=>`<tr data-scope="project:${esc(p.project)}" tabindex="0" aria-describedby="drill-hint"><td><strong>${esc(p.project)}</strong>${budgetLine(p.project)}</td><td class="col-detail">${p.sessions?fmt(p.sessions):'—'}</td><td>${fmt(p.requests)}</td><td>${fmt(total(p))}</td><td>${p.cost!=null?usd(p.cost):'—'}</td><td class="col-detail">${esc(when(p.last_ts))}</td><td><button type="button" class="mini-btn proj-open" data-project="${esc(p.project)}" aria-expanded="${openProject===p.project}">상세</button></td></tr>`).join('')
   ||'<tr><td colspan="7" class="empty">선택 기간에 수집된 사용 기록이 없습니다.</td></tr>';
  const opened=openProject&&$('projects').querySelector(`.proj-open[data-project="${CSS.escape(openProject)}"]`);
  if(opened&&projectDetails.has(openProject))opened.closest('tr').insertAdjacentHTML('afterend',projectDetails.get(openProject));
