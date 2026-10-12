@@ -162,8 +162,8 @@ $('donut-nocache').addEventListener('click',event=>{
  if(lastUsage)composition(lastUsage);
 });
 function composition(data){
- const all=[['일반 입력','uncached_input',0],['캐시 읽기','cached_input',1],['출력','output',2],['캐시 생성','cache_creation',3]];
- const totals=donutExcludeCache?{...data.totals,cached_input:0}:data.totals;
+ const all=[['일반 입력','uncached_input',0],['캐시 읽기','cached_input',1],['출력','output',2],['캐시 생성','cache_creation',3],['내역 미분류','unclassified_tokens',4]].filter(([,key])=>key!=='unclassified_tokens'||data.totals.unclassified_tokens);
+ const totals=donutExcludeCache?{...data.totals,cached_input:0,total_tokens:total(data.totals)-(data.totals.cached_input||0)}:data.totals;
  const segments=all.filter(([,key])=>!(donutExcludeCache&&key==='cached_input'))
   .sort((a,b)=>(totals[b[1]]||0)-(totals[a[1]]||0));
  const sum=total(totals);if(!sum){$('composition').innerHTML='<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';return;}

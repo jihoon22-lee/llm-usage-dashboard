@@ -341,7 +341,7 @@ def poll_claude_resources(store,settings):
         account_poll(store,path,source+'_poll',source,'Claude 기본 계정 정보·인증 확인 필요',read,record,interval=900)
 
 
-def read_codex(binary,timeout=35,extra=None,extra_grace=10):
+def read_codex(binary,timeout=35,extra=None,extra_grace=10,extra_params=None):
     """account/rateLimits/read through a short-lived app-server. `extra` maps further
     read methods to None; their results (or None on error/silence) are filled in from
     the same process, waiting at most `extra_grace` seconds past the rate limits."""
@@ -372,7 +372,10 @@ def read_codex(binary,timeout=35,extra=None,extra_grace=10):
                     if 'error' in reply:raise RuntimeError('app-server 초기화 실패')
                     send(dict(method='initialized'))
                     send(dict(id=2,method='account/rateLimits/read'))
-                    for rid,method in ids.items():send(dict(id=rid,method=method))
+                    for rid,method in ids.items():
+                        msg=dict(id=rid,method=method)
+                        if extra_params and method in extra_params:msg['params']=extra_params[method]
+                        send(msg)
                 elif reply.get('id')==2:
                     if 'error' in reply:raise RuntimeError('Codex 한도 조회 실패')
                     limits=reply['result'];deadline=min(deadline,time.monotonic()+extra_grace)
@@ -625,7 +628,50 @@ def record_codex_account(store,usage):
             store.source(c,'codex-account-usage','unavailable','계정 일별 토큰 합계 미제공 · 로컬 기록만 집계합니다.')
             return
         store.account_tokens(c,'codex',buckets,time.time())
-        store.source(c,'codex-account-usage','ok','계정 일별 토큰 합계(UTC) · 로컬 기록과의 차이를 클라우드 사용량으로 표시')
+        from .resources import account
+        from .reconciliation import snapshot,number
+        owner=account(c,'codex') or {}
+        checked=time.time()
+        for b in buckets:
+            if not isinstance(b,dict) or not number(b.get('tokens')):continue
+            try:start=stamp(b.get('startDate')+'T00:00:00Z')
+            except (ValueError,TypeError,OverflowError):continue
+            snapshot(store,c,source='codex-account',scope_id='codex-day:'+b['startDate'],route='codex',provider='OpenAI',
+                     model=None,start=start,end=start+86400,tokens=b['tokens'],checked=checked,
+                     account_key=owner.get('account_key'))
+        store.source(c,'codex-account-usage','ok','계정 집계 범위 KST 09:00–다음 날 09:00 · 기간 합계와 날짜 미배분량 대조')
+
+
+def poll_codex_thread(store,settings):
+    """Optional native capability probe. A thread total has no per-request time;
+    keep it as a diagnostic rather than fabricate a dated event."""
+    with store.connect() as c:
+        last=store.state(c,'codex-thread:checked',0)
+        if time.time()-last<3600:return
+        row=c.execute("SELECT session FROM events WHERE route='codex' AND session IS NOT NULL ORDER BY ts DESC LIMIT 1").fetchone()
+    if not row:return
+    try:
+        result={'account/usage/read':None}
+        read_codex(settings['codex_binary'],timeout=12,extra=result,extra_grace=2,
+                   extra_params={'account/usage/read':dict(threadId=row[0])})
+        usage=(result['account/usage/read'] or {}).get('threadUsage')
+        from .reconciliation import number
+        groups=[]
+        for g in (usage or {}).get('groups') or []:
+            if not number(g.get('totalTokens')):continue
+            model=g.get('model')
+            if not isinstance(model,str) or not re.fullmatch(r'[A-Za-z0-9._:/() -]{1,100}',model):model=None
+            groups.append(dict(model=model,tokens=g['totalTokens'],
+                               **{k:g[k] for k in ('inputTokens','outputTokens','cachedInputTokens','netNewInputTokens') if number(g.get(k))}))
+        with store.connect() as c:
+            store.save_state(c,'codex-thread:checked',time.time())
+            store.save_state(c,'codex-thread:usage',dict(checked=time.time(),groups=groups))
+            store.source(c,'codex-thread-usage','partial' if groups else 'unavailable',
+                         '스레드 모델별 누계 수신 · 발생 시각 미제공, 계정 총량에 중복 합산하지 않음' if groups else '스레드 상세 사용량 미제공 · 계정 합계 수집 유지')
+    except Exception as exc:
+        with store.connect() as c:
+            store.save_state(c,'codex-thread:checked',time.time())
+            store.source(c,'codex-thread-usage','error',f'스레드 누계 조회 실패 ({type(exc).__name__}) · 계정 합계 유지')
 
 
 def poll_limits(store,settings,manual=False):
@@ -659,7 +705,9 @@ def poll_limits(store,settings,manual=False):
                 store.source(c,route,'ok' if n else 'unavailable','' if n else '원본 한도 필드 미제공')
                 if route=='opencode-go':store.save_state(c,'opencode_go_poll',{})
             if route=='codex':
-                try:record_codex_account(store,account['account/usage/read'])
+                try:
+                    record_codex_account(store,account['account/usage/read'])
+                    poll_codex_thread(store,settings)
                 except Exception as exc:  # the limits above are already kept
                     with store.connect() as c:store.source(c,'codex-account-usage','error',f'계정 토큰 합계 기록 실패 ({type(exc).__name__})')
         except Exception as exc:

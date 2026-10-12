@@ -154,6 +154,7 @@ def create_app(config=None):
     def collection():
         with store.connect() as c:
             return jsonify(collector=store.state(c,'collector',{}),backup=store.state(c,'backup',{}),verify=store.state(c,'verify',{}),
+                           telemetry=store.state(c,'telemetry:received',dict(checked=None,accepted=0,pending=0,status='unavailable')),
                            requested=store.state(c,'refresh_requested',0),completed=store.state(c,'refresh_completed',0),
                            request_id=store.state(c,'refresh_request_id',0),completed_id=store.state(c,'refresh_completed_id',0))
 

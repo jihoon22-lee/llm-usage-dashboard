@@ -8,7 +8,7 @@ TOTAL_SQL='uncached_input+cached_input+output+cache_creation'
 
 
 def token_total(values):
-    return sum(values.get(key,0) for key in TOKENS if key!='reasoning')
+    return values.get('total_tokens',sum(values.get(key,0) for key in TOKENS if key!='reasoning'))
 
 
 def cache_rate(values):

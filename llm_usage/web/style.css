@@ -337,6 +337,10 @@ tr[data-scope]:hover{background:var(--raised)}
 @media(max-width:600px){.alerts.collapsible:not(.expanded) .alert-chip{display:none}}
 .collector-banner{background:var(--error-bg);color:var(--error-ink);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:var(--fs-small);font-weight:600}
 .collector-banner[hidden]{display:none}
+#usage-reconciliation{display:grid;gap:7px;background:var(--soft);color:var(--ink);font-weight:400;line-height:1.6}
+#usage-reconciliation[hidden]{display:none}
+#usage-reconciliation>strong{color:var(--accent)}
+#usage-reconciliation>span{display:block;overflow-wrap:anywhere}
 /* The insights banner belongs to the tabs that show insight panels. */
 body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #insights-status{display:none}
 .quota-note{font-size:11px;color:var(--muted);margin-top:4px}

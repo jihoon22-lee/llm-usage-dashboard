@@ -11,6 +11,7 @@ const compactNumbers=()=>storage.get('llmCompactNumbers')==='1';
 const tableNumber=v=>compactNumbers()?`<span data-tip="${fmt(v)}">${compact(v)}</span>`:fmt(v);
 const tableCells=(row,denom)=>fields.map(k=>{
  const cls=k==='total'?'total-cell':DETAIL_COLS.has(k)?'col-detail':'';
+ if(k!=='total'&&row.unclassified_tokens&&!row.recorded_tokens)return `<td class="${cls}"><span class="na-text">미제공</span></td>`;
  if(k==='reasoning'&&REASONING_UNREPORTED.has(row.route)&&!row.reasoning)return `<td class="${cls}"><span class="na-text" data-tip="이 경로는 추론 토큰을 따로 기록하지 않습니다">미제공</span></td>`;
  const cell=`<td${cls?` class="${cls}"`:''}>${tableNumber(k==='total'?modelTotal(row):row[k])}${k==='reasoning'&&row.output?`<small>${(row.reasoning/row.output*100).toFixed(0)}%</small>`:''}</td>`;
  return k==='total'?cell+`<td class="share-cell">${denom?percent(modelTotal(row)/denom*100):'—'}</td>`:cell;

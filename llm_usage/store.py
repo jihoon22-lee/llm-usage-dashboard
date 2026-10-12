@@ -179,6 +179,8 @@ class Store:
             c.execute('CREATE INDEX IF NOT EXISTS events_route_ts ON events(route,ts)')
             from .resources import initialize
             initialize(c)
+            from .reconciliation import initialize as initialize_usage
+            initialize_usage(c)
         self._ensure_rollup()
         os.chmod(path, 0o600)
 
@@ -590,6 +592,8 @@ class Store:
         for b in buckets:
             day,tokens=b.get('startDate'),b.get('tokens')
             if not isinstance(day,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',day) or type(tokens) is not int or tokens<0:continue
+            try:datetime.strptime(day,'%Y-%m-%d')
+            except ValueError:continue
             row=c.execute('SELECT tokens FROM account_tokens WHERE route=? AND day=?',(route,day)).fetchone()
             if row and row[0]==tokens:continue
             c.execute('INSERT OR REPLACE INTO account_tokens VALUES (?,?,?,?)',(route,day,tokens,checked));changed=True
@@ -661,6 +665,8 @@ class Store:
                 body=self._usage_body(c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
                                       compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff)
                 if len(body['series'])<=5000:self._usage_put(key,body)
+            from .reconciliation import apply as reconcile_usage
+            body=reconcile_usage(c,body,group,cumulative,scope)
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .signals import usage_spike
             spike=usage_spike(c,now.timestamp()) if sections!='insights' else None
@@ -670,7 +676,7 @@ class Store:
         if sections=='all':return data
         insight_keys={'insights','sessions','sessions_total','sessionless_requests','projects','calendar'}
         if sections=='core':return {k:v for k,v in data.items() if k not in insight_keys}
-        shared={'period','start','end_exclusive','timezone','granularity','labels','series','subscriptions','sources','scope','collected_at'}
+        shared={'reconciliation','period','start','end_exclusive','timezone','granularity','labels','series','subscriptions','sources','scope','collected_at'}
         return {k:v for k,v in data.items() if k in insight_keys|shared}
 
     def project_month(self,c,now,pricing=None):
@@ -691,6 +697,12 @@ class Store:
             e['tokens']+=tokens
             rate=rate_for(row['model'],pricing,row['day']) if pricing else None
             if rate:e['cost']+=estimate(row,rate);e['priced_tokens']+=tokens
+        from .reconciliation import supplements
+        additions,_=supplements(c)
+        for r in additions:
+            if r['start']>=start.timestamp() and r['end']<=now.timestamp():
+                e=out.setdefault(r['project'] or '미분류',dict(tokens=0,cost=0.0,priced_tokens=0))
+                e['tokens']+=r['tokens']
         for e in out.values():
             e['cost']=round(e['cost'],4) if e['priced_tokens'] else None
             e['priced_share']=e.pop('priced_tokens')/e['tokens']*100 if e['tokens'] else None
@@ -724,6 +736,22 @@ class Store:
             sessions=[dict(session=r[0],route=r[1],tokens=r[2],requests=r[3],first_ts=r[4],last_ts=r[5]) for r in c.execute(
                 'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),COUNT(*),MIN(ts),MAX(ts) FROM events'
                 +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC LIMIT 10',(project,start.timestamp()))]
+        from .reconciliation import supplements
+        with self.connect() as c:extra,conflicts=supplements(c)
+        unallocated=[]
+        for e in extra:
+            if (e['project'] or '미분류')!=project or e['end']>now.timestamp():continue
+            if e['start']>=month_start.timestamp():month['tokens']+=e['tokens']
+            if e['start']<start.timestamp():continue
+            m=models.setdefault((e['route'],e['model'] or 'unknown'),dict(route=e['route'],model=e['model'] or 'unknown',tokens=0,requests=0,cost=None))
+            m['tokens']+=e['tokens']
+            begin=datetime.fromtimestamp(e['start'],KST).date().isoformat()
+            finish=datetime.fromtimestamp(e['end']-0.000001,KST).date().isoformat()
+            if begin==finish:
+                d=daily.setdefault(begin,dict(day=begin,tokens=0,requests=0));d['tokens']+=e['tokens']
+            else:unallocated.append(dict(start=e['start'],end=e['end'],tokens=e['tokens']))
+            for session in sessions:
+                if session['session']==e['session']:session['tokens']+=e['tokens']
         elapsed=now.day;days_in_month=((month_start.replace(day=28)+timedelta(days=4)).replace(day=1)-month_start).days
         cost=month['cost'] if month['priced'] else None
         projection=dict(month=month_start.strftime('%Y-%m'),days_elapsed=elapsed,days_in_month=days_in_month,
@@ -737,7 +765,7 @@ class Store:
             _,projection['projected_budget_ratio']=budget_level(dict(tokens=projection['projected_tokens'],cost=projection['projected_cost']),budget)
             projection['budget']=budget
         for m in models.values():m['cost']=round(m['cost'],4) if m['cost'] is not None else None
-        return dict(project=project,days=days,start=start.strftime('%Y-%m-%d'),
+        return dict(project=project,days=days,start=start.strftime('%Y-%m-%d'),unallocated_intervals=unallocated,
                     models=sorted(models.values(),key=lambda m:-m['tokens']),
                     daily=[daily[k] for k in sorted(daily)],sessions=sessions,month=projection)
 
@@ -760,7 +788,10 @@ class Store:
                 key['requests']+=row['requests']
                 for k in TOKENS:key[k]+=row[k]
                 if part is not None:key['cost']=(key['cost'] or 0)+part;cost+=part;rated=True
-            if not models:return dict(session=session,models=[],hours=[])
+            if not models:
+                evidence=c.execute('SELECT * FROM usage_evidence WHERE session=? ORDER BY end DESC LIMIT 1',(session,)).fetchone()
+                if not evidence:return dict(session=session,models=[],hours=[])
+                models=[dict(route=evidence['route'],model=evidence['model'] or 'unknown',first_ts=evidence['start'],last_ts=evidence['end'],requests=0,cost=None,**dict.fromkeys(TOKENS,0))]
             meta=c.execute('SELECT MAX(project),MAX(agent_kind) FROM events WHERE session=?',(session,)).fetchone()
             hours=[dict(hour=r[0]*3600,requests=r[1],tokens=r[2]) for r in c.execute(
                 'SELECT CAST(ts/3600 AS INTEGER),COUNT(*),SUM(uncached_input+cached_input+output+cache_creation) '
@@ -768,14 +799,39 @@ class Store:
         totals={k:sum(m[k] for m in models) for k in TOKENS}
         inputs=totals['uncached_input']+totals['cached_input']+totals['cache_creation']
         for m in models:m['cost']=round(m['cost'],4) if m['cost'] is not None else None
-        return dict(session=session,project=meta[0],kind=meta[1],first_ts=min(m['first_ts'] for m in models),
+        data=dict(session=session,project=meta[0],kind=meta[1],first_ts=min(m['first_ts'] for m in models),
                     last_ts=max(m['last_ts'] for m in models),requests=sum(m['requests'] for m in models),totals=totals,
                     cache_share=totals['cached_input']/inputs*100 if inputs else None,cost=round(cost,4) if rated else None,
                     models=sorted(models,key=lambda m:-token_total(m)),hours=hours)
+        from .reconciliation import supplements,add
+        with self.connect() as c:extra,conflicts=supplements(c)
+        data['unallocated_intervals']=[]
+        for e in extra:
+            if e['session']!=session:continue
+            add(data['totals'],e)
+            m=next((m for m in data['models'] if m['route']==e['route'] and m['model']==e['model']),None)
+            if m is None:
+                m=dict(route=e['route'],model=e['model'] or 'unknown',requests=0,cost=None,first_ts=e['start'],last_ts=e['end'],**dict.fromkeys(TOKENS,0));data['models'].append(m)
+            add(m,e)
+            lo=int(e['start']//3600)*3600;hi=int((e['end']-0.000001)//3600)*3600
+            if lo==hi:
+                h=next((h for h in hours if h['hour']==lo),None)
+                if h is None:h=dict(hour=lo,requests=0,tokens=0);hours.append(h)
+                h['tokens']+=e['tokens']
+            else:data['unallocated_intervals'].append(dict(start=e['start'],end=e['end'],tokens=e['tokens']))
+        data['models'].sort(key=lambda m:-token_total(m));hours.sort(key=lambda h:h['hour'])
+        inputs=sum(data['totals'][k] for k in ('uncached_input','cached_input','cache_creation'))
+        data['cache_share']=data['totals']['cached_input']/inputs*100 if inputs else None
+        return data
 
     def _usage_body(self,c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
                     compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff):
         first = c.execute('SELECT MIN(ts) FROM events WHERE 1=1'+scope_sql,scope_args).fetchone()[0]
+        if period=='all':
+            from .reconciliation import supplements,matches
+            extra,_=supplements(c)
+            starts=[e['start'] for e in extra if matches(e,scope)]
+            if starts:first=min([first] + starts) if first is not None else min(starts)
         if period=='1h':
             b=datetime.fromtimestamp(cutoff,KST)
             a=b-timedelta(hours=1)
@@ -963,7 +1019,7 @@ class Store:
                     rows=rows,series=series,labels=labels,first_record=first,insights=insights,
                     calendar=calendar,subscriptions=subs,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,
                     scope=scope,scope_options=scope_options,
-                    coverage='로컬 기록 파일과 Claude Code 클라우드 세션(계정의 원격 기록 API)을 집계합니다. Remote Control 작업은 실행한 PC의 기록 기준입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 OpenAI 서버에서 실행된 작업은 요청별 기록이 없어 차트에 넣지 않고, 아래 계정 일별 합계와 로컬 기록의 차이로만 표시합니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
+                    coverage='로컬·클라우드 요청 기록과 서버 누계를 중복 없이 대조합니다. KST 기준으로 배분 가능한 토큰은 차트에 포함하고, 일자를 확정할 수 없는 계정·세션 누계는 미배분으로 표시합니다. 계정 차이를 dot 사용량으로 단정하지 않습니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
                     token_note='출력(Output)은 추론(reasoning)을 포함합니다. 캐시 생성(Cache creation)은 별도 입력으로 총 토큰에 한 번만 포함합니다. 추론은 출력의 부분집합이거나 원본 미제공(0)입니다.')
 
     def storage_row(self,checked=None):
