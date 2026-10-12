@@ -5,7 +5,7 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.4.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.4.0)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.5.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.5.0)** · [변경 기록](CHANGELOG.md)
 
 ## 기능
 
