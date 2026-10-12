@@ -252,13 +252,20 @@ function renderReconciliation(r){
  const box=$('usage-reconciliation');if(!box)return;
  box.hidden=!r||!(r.supplemental_tokens||r.overlapping_intervals?.length||r.conflicts?.length);
  if(box.hidden){box.replaceChildren();return;}
- const interval=e=>`${stamp(Date.parse(e.start)/1000)} → ${stamp(Date.parse(e.end_exclusive)/1000)} KST · ${compact(e.tokens)} 토큰`;
- box.innerHTML=`<strong>사용량 대조 · KST</strong><span>요청 기록 ${compact(r.recorded_tokens)} + 서버 누계 보완 ${compact(r.supplemental_tokens)} 토큰</span>`
-  +(r.origin_tokens?`<span>세부 기록 출처 · 로컬 ${compact(r.origin_tokens.local||0)} · 클라우드 ${compact(r.origin_tokens.cloud||0)} · telemetry ${compact(r.origin_tokens.telemetry||0)} 토큰</span>`:'')
-  +(r.unallocated_tokens?`<span>기간 합계에 포함된 날짜 미배분 ${compact(r.unallocated_tokens)} 토큰 · 일별 차트에는 배분하지 않았습니다.</span>`:'')
-  +[...(r.unallocated_intervals||[]).map(e=>`<span>${esc(interval(e))}</span>`),...(r.overlapping_intervals||[]).map(e=>`<span>기간 경계에 걸쳐 합계에서 제외 · ${esc(interval(e))}</span>`)].join('')
-  +(r.conflicts?.length?`<span>누계 대조 충돌 ${fmt(r.conflicts.length)}건 · 원본 재확인 필요</span>`:'')
-  +'<span>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</span>';
+ const opened=box.querySelector('details')?.open,focused=box.contains(document.activeElement);
+ const intervals=(items,label)=>items?.length?`<section><h4>${label}</h4><ul class="reconciliation-intervals">${items.map(e=>`<li><span>${esc(stamp(Date.parse(e.start)/1000))} → ${esc(stamp(Date.parse(e.end_exclusive)/1000))} KST</span><b>${compact(e.tokens)} 토큰</b></li>`).join('')}</ul></section>`:'';
+ box.innerHTML=`<details${opened?' open':''}><summary><strong>사용량 대조 <small>KST</small></strong><span>보완 <b>${compact(r.supplemental_tokens)}</b> 토큰</span>`
+  +(r.unallocated_tokens?`<span class="reconciliation-tag">날짜 미배분 ${fmt(r.unallocated_intervals?.length||0)}구간</span>`:'')
+  +(r.conflicts?.length?`<span class="reconciliation-warning">충돌 ${fmt(r.conflicts.length)}건</span>`:'')
+  +'<span class="reconciliation-toggle">상세 보기</span></summary><div class="reconciliation-detail">'
+  +`<p>요청 기록 ${compact(r.recorded_tokens)} + 서버 누계 보완 ${compact(r.supplemental_tokens)} 토큰</p>`
+  +(r.origin_tokens?`<p>세부 기록 출처 · 로컬 ${compact(r.origin_tokens.local||0)} · 클라우드 ${compact(r.origin_tokens.cloud||0)} · telemetry ${compact(r.origin_tokens.telemetry||0)} 토큰</p>`:'')
+  +(r.unallocated_tokens?`<p>날짜 미배분 ${compact(r.unallocated_tokens)} 토큰은 기간 합계에 포함되며 일별 차트에는 배분하지 않습니다.</p>`:'')
+  +intervals(r.unallocated_intervals,'합계 포함 · 날짜 미배분')
+  +intervals(r.overlapping_intervals,'합계 제외 · 기간 경계에 걸친 구간')
+  +(r.conflicts?.length?`<p class="reconciliation-warning">누계 대조 충돌 ${fmt(r.conflicts.length)}건 · 원본 재확인 필요</p>`:'')
+  +'<p>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</p></div></details>';
+ if(focused)box.querySelector('summary').focus({preventScroll:true});
 }
 // Collection status: a summary, problems first, grouped by provider, each with what it means.
 function renderSources(list){
