@@ -146,6 +146,9 @@ with sync_playwright() as p:
     # Status view lists collectors.
     page.locator('#tabs [data-view="status"]').click()
     assert page.locator('#sources .source').count()>0
+    # Codex account totals the local records do not explain are shown apart from the charts.
+    expect(page.locator('#account-gap tbody tr')).to_have_count(3)
+    expect(page.locator('#account-gap summary')).to_contain_text('로컬 미기록')
     # Settings is not a tab: the header gear opens it, no tab stays selected, and Back returns.
     expect(page.locator('#settings-open')).to_have_attribute('aria-label','설정')
     assert page.locator('#tabs [role=tab]').count()==4 and page.locator('#tab-settings').count()==0

@@ -223,6 +223,7 @@ function renderUsage(data){
  +(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?`<div class="stat"><div class="stat-label">비용 추정</div><div class="stat-value" data-tip="${esc(usd(data.cost.period))}">${usd(data.cost.period)}</div><small>공개 단가 기준 환산 · 단가 확정 토큰 ${percent(data.cost.coverage)}${data.cost.lifetime!=null?' · 전체 누계 '+usd(data.cost.lifetime):''}${data.cost.cache_savings?` · 캐시 읽기 덕분 ${usd(data.cost.cache_savings)} 절감 환산`:''}</small></div>`:'');
  renderModelTable(data);renderHeatmap(data.heatmap);
  $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note;
+ renderAccountGap(data.account_gap);
  renderSources(data.sources||[]);
  const costOption=$('metric').querySelector('[value="cost"]');
  costOption.disabled=!(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null));
@@ -233,6 +234,18 @@ function renderUsage(data){
  // A refresh may land after a lazy insights fetch; if the new core payload
  // dropped the merged section while a tab that shows it is open, fetch it again.
  if(INSIGHT_VIEWS.includes(currentView)&&!('insights' in data))loadInsights();
+}
+// Codex account totals minus local records: work that ran on OpenAI's side (ChatGPT
+// dot, Codex cloud). UTC days and tokens only, so it never enters charts or costs.
+function renderAccountGap(gap){
+ const box=$('account-gap');
+ if(!gap||!gap.days||!gap.days.length){box.innerHTML='';return;}
+ const days=gap.days.slice(-7).reverse();
+ box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 로컬 미기록 <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
+  +`<p class="source-detail">OpenAI 계정이 집계한 일별 토큰(UTC 날짜)에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버에서 실행된 작업이 여기에 나타납니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다.</p>`
+  +`<div class="table-wrap"><table><thead><tr><th>날짜(UTC)</th><th>계정 합계</th><th>로컬 기록</th><th>미기록</th></tr></thead><tbody>`
+  +days.map(d=>`<tr><td>${esc(d.day)}</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
+  +'</tbody></table></div></details>';
 }
 // Collection status: a summary, problems first, grouped by provider, each with what it means.
 function renderSources(list){

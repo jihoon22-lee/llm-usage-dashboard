@@ -56,6 +56,10 @@ def fixture_client():
             store.source(c, route, 'ok', 'Synthetic browser fixture', now-30)
         for route in ('opencode-go','devin'):
             store.source(c, route, 'ended', 'Synthetic inactive subscription', now-30)
+        # Account-wide daily totals above the local records: work run on the provider's side.
+        from datetime import datetime, timedelta, timezone
+        today = datetime.fromtimestamp(now, timezone.utc).date()
+        store.account_tokens(c, 'codex', [dict(startDate=(today-timedelta(days=d)).isoformat(), tokens=900_000+d) for d in range(3)], now-30)
         store.save_state(c, 'collector', dict(status='idle', checked=now-30))
         store.save_state(c, 'last_local', now-30)
     (folder/'config.json').write_text('{}')

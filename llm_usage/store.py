@@ -1,7 +1,7 @@
 """Only numeric usage, opaque identities and collection metadata enter SQLite."""
 from collections import OrderedDict
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import functools
 from zoneinfo import ZoneInfo
 import hashlib
@@ -166,6 +166,10 @@ class Store:
             CREATE TABLE IF NOT EXISTS quota_interruptions (
               source TEXT, checked REAL, status TEXT, PRIMARY KEY(source,checked));
             CREATE INDEX IF NOT EXISTS quota_interruptions_time ON quota_interruptions(checked);
+            -- Provider-side daily token totals (UTC days). They carry no request,
+            -- model or input/output split, so they stay out of events and pricing.
+            CREATE TABLE IF NOT EXISTS account_tokens (
+              route TEXT, day TEXT, tokens INTEGER NOT NULL, checked REAL NOT NULL, PRIMARY KEY(route,day));
             ''')
             for column in ('session','project','agent_kind'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
@@ -580,6 +584,33 @@ class Store:
             memo=dict(key=key,calendar=calendar,cost=cost,priced=priced,month=month);self._memo=memo
         return [dict(day) for day in memo['calendar']],memo['cost'],memo['priced'],memo['month'] and dict(memo['month'])
 
+    def account_tokens(self,c,route,buckets,checked):
+        """Store the account's daily totals; a running day's bucket keeps growing."""
+        changed=False
+        for b in buckets:
+            day,tokens=b.get('startDate'),b.get('tokens')
+            if not isinstance(day,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',day) or type(tokens) is not int or tokens<0:continue
+            row=c.execute('SELECT tokens FROM account_tokens WHERE route=? AND day=?',(route,day)).fetchone()
+            if row and row[0]==tokens:continue
+            c.execute('INSERT OR REPLACE INTO account_tokens VALUES (?,?,?,?)',(route,day,tokens,checked));changed=True
+        if changed:self.bump_data_version(c)
+        self.save_state(c,'account_tokens_checked:'+route,checked)
+
+    def account_gap(self,c,route,now,days=14):
+        """Account total minus the locally recorded tokens of the same route, per UTC
+        day. Computed when read, so it shrinks as local collection catches up. Only
+        the plain route counts: codex:<provider> traffic is not on this account."""
+        since=(datetime.fromtimestamp(now,timezone.utc)-timedelta(days=days-1)).strftime('%Y-%m-%d')
+        rows=c.execute('SELECT day,tokens FROM account_tokens WHERE route=? AND day>=? ORDER BY day',(route,since)).fetchall()
+        if not rows:return None
+        local=dict(c.execute("SELECT date(ts,'unixepoch') AS day,SUM(uncached_input+cached_input+output+cache_creation) FROM usage_hourly"
+                             ' WHERE route=? AND ts>=? GROUP BY day',(route,stamp(since+'T00:00:00Z'))))
+        out=[]
+        for day,tokens in rows:
+            mine=local.get(day,0)
+            out.append(dict(day=day,account=tokens,local=mine,gap=max(0,tokens-mine),over=max(0,mine-tokens)))
+        return dict(route=route,days=out,total_gap=sum(d['gap'] for d in out),checked=self.state(c,'account_tokens_checked:'+route))
+
     def bump_data_version(self,c):
         """Relabel/attribute writes keep every token sum, so they bump a version."""
         self.save_state(c,'data_version',(self.state(c,'data_version') or 0)+1)
@@ -634,7 +665,8 @@ class Store:
             from .signals import usage_spike
             spike=usage_spike(c,now.timestamp()) if sections!='insights' else None
             month=self.project_month(c,now,pricing) if sections!='insights' else None
-        data={**body,'sources':sources,'unavailable_routes':unavailable_routes,'collected_at':collected_at,'spike':spike,'project_month':month}
+            gap=self.account_gap(c,'codex',now.timestamp()) if sections!='insights' else None
+        data={**body,'sources':sources,'unavailable_routes':unavailable_routes,'collected_at':collected_at,'spike':spike,'project_month':month,'account_gap':gap}
         if sections=='all':return data
         insight_keys={'insights','sessions','sessions_total','sessionless_requests','projects','calendar'}
         if sections=='core':return {k:v for k,v in data.items() if k not in insight_keys}
@@ -931,7 +963,7 @@ class Store:
                     rows=rows,series=series,labels=labels,first_record=first,insights=insights,
                     calendar=calendar,subscriptions=subs,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,
                     scope=scope,scope_options=scope_options,
-                    coverage='로컬에서 확보한 세션만 집계합니다. 원격 작업은 실행한 PC의 기록 기준이며, 클라우드·다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
+                    coverage='로컬 기록 파일과 Claude Code 클라우드 세션(계정의 원격 기록 API)을 집계합니다. Remote Control 작업은 실행한 PC의 기록 기준입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 OpenAI 서버에서 실행된 작업은 요청별 기록이 없어 차트에 넣지 않고, 아래 계정 일별 합계와 로컬 기록의 차이로만 표시합니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
                     token_note='출력(Output)은 추론(reasoning)을 포함합니다. 캐시 생성(Cache creation)은 별도 입력으로 총 토큰에 한 번만 포함합니다. 추론은 출력의 부분집합이거나 원본 미제공(0)입니다.')
 
     def storage_row(self,checked=None):

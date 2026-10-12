@@ -16,6 +16,7 @@ from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
 
+from .cloud import collect_claude_cloud
 from .store import stamp,KST
 
 OPENCODE_GO_USAGE_URL='https://opencode.ai/zen/go/v1/usage'
@@ -340,7 +341,13 @@ def poll_claude_resources(store,settings):
         account_poll(store,path,source+'_poll',source,'Claude 기본 계정 정보·인증 확인 필요',read,record,interval=900)
 
 
-def read_codex(binary,timeout=35):
+def read_codex(binary,timeout=35,extra=None,extra_grace=10):
+    """account/rateLimits/read through a short-lived app-server. `extra` maps further
+    read methods to None; their results (or None on error/silence) are filled in from
+    the same process, waiting at most `extra_grace` seconds past the rate limits."""
+    extra=extra if extra is not None else {}
+    ids={3+i:method for i,method in enumerate(extra)}
+    limits=None
     p=subprocess.Popen([binary,'app-server','--stdio'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
     selector=selectors.DefaultSelector()
     selector.register(p.stdout,selectors.EVENT_READ)
@@ -365,9 +372,14 @@ def read_codex(binary,timeout=35):
                     if 'error' in reply:raise RuntimeError('app-server 초기화 실패')
                     send(dict(method='initialized'))
                     send(dict(id=2,method='account/rateLimits/read'))
+                    for rid,method in ids.items():send(dict(id=rid,method=method))
                 elif reply.get('id')==2:
                     if 'error' in reply:raise RuntimeError('Codex 한도 조회 실패')
-                    return reply['result']
+                    limits=reply['result'];deadline=min(deadline,time.monotonic()+extra_grace)
+                elif reply.get('id') in ids:
+                    extra[ids.pop(reply['id'])]=reply.get('result') if 'error' not in reply else None
+                if limits is not None and not ids:return limits
+        if limits is not None:return limits
         raise TimeoutError('Codex 한도 응답 시간 초과')
     finally:
         selector.close()
@@ -604,9 +616,24 @@ def poll_antigravity_app(store,settings,servers=None,reader=None,quota_reader=No
             store.source(c,'antigravity-app','error',f'데스크톱 앱 한도 조회 실패 ({exc if isinstance(exc,ConnectionError) else type(exc).__name__})',checked)
 
 
+def record_codex_account(store,usage):
+    """Daily token totals of the whole ChatGPT account, every surface included: the
+    only trace of agents that run on OpenAI's side (ChatGPT dot, Codex cloud)."""
+    with store.connect() as c:
+        buckets=(usage or {}).get('dailyUsageBuckets')
+        if not isinstance(buckets,list):
+            store.source(c,'codex-account-usage','unavailable','계정 일별 토큰 합계 미제공 · 로컬 기록만 집계합니다.')
+            return
+        store.account_tokens(c,'codex',buckets,time.time())
+        store.source(c,'codex-account-usage','ok','계정 일별 토큰 합계(UTC) · 로컬 기록과의 차이를 클라우드 사용량으로 표시')
+
+
 def poll_limits(store,settings,manual=False):
     poll_claude(store,settings)
     poll_claude_resources(store,settings)
+    try:collect_claude_cloud(store,settings)
+    except Exception as exc:  # never stops the other reads
+        with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 수집 실패 ({type(exc).__name__})')
     poll_devin(store,settings)
     poll_antigravity_app(store,settings)
     for route in ('codex','opencode-go'):
@@ -619,7 +646,8 @@ def poll_limits(store,settings,manual=False):
         try:
             if route=='codex':
                 if not settings.get('codex_binary'):raise FileNotFoundError('codex')
-                data=read_codex(settings['codex_binary'])
+                account={'account/usage/read':None}
+                data=read_codex(settings['codex_binary'],extra=account)
             else:
                 auth=json.loads(Path(settings['opencode_auth']).read_text()).get('opencode-go',{})
                 if auth.get('type')!='api' or not auth.get('key'):raise ValueError('구독 인증 미제공')
@@ -630,6 +658,10 @@ def poll_limits(store,settings,manual=False):
                 n=(codex_limits if route=='codex' else go_limits)(store,c,data,time.time())
                 store.source(c,route,'ok' if n else 'unavailable','' if n else '원본 한도 필드 미제공')
                 if route=='opencode-go':store.save_state(c,'opencode_go_poll',{})
+            if route=='codex':
+                try:record_codex_account(store,account['account/usage/read'])
+                except Exception as exc:  # the limits above are already kept
+                    with store.connect() as c:store.source(c,'codex-account-usage','error',f'계정 토큰 합계 기록 실패 ({type(exc).__name__})')
         except Exception as exc:
             # Errors contain no response body, endpoint credentials or command environment.
             detail=f'한도 수집 실패 ({type(exc).__name__})';status='error'

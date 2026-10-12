@@ -24,8 +24,8 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 
 | 도구 | 토큰 원본 | 한도 경로 | 제한 |
 |---|---|---|---|
-| Codex | 로컬 JSONL | 기존 CLI App Server, 크레딧·초기화권 | 불완전·모호한 누적 이력은 완전 복구 불가 |
-| Claude Code | 로컬 JSONL | 기존 OAuth·상태줄, 선불 잔액·지출 조건·초기화권 | OAuth는 외부 연동용 공개 API가 아님 |
+| Codex | 로컬 JSONL, 계정 일별 합계(App Server) | 기존 CLI App Server, 크레딧·초기화권 | 불완전·모호한 누적 이력은 완전 복구 불가. ChatGPT 에이전트(dot)·클라우드 실행분은 UTC 일별 총량 차이로만 표시 |
+| Claude Code | 로컬 JSONL, 클라우드 세션 원격 기록(OAuth) | 기존 OAuth·상태줄, 선불 잔액·지출 조건·초기화권 | OAuth·세션 기록 API는 외부 연동용 공개 API가 아님. transcript에 없는 분류기·advisor 호출은 미포함 |
 | Antigravity | CLI/앱 SQLite | 상태줄·실행 중인 WSL 앱 | 내부 스키마/RPC 변경에 영향받음 |
 | OpenCode Go | 로컬 SQLite | 계정 usage 경로 | 구독 계정의 실제 한도 수신 미검증 |
 | Devin CLI | 로컬 SQLite | 기존 CLI 계정 경로 | 내부 API, Cloud 세션 미지원 |
