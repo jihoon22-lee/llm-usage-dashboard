@@ -31,7 +31,7 @@ def number(value):
 
 
 def codex_limits(store,c,data,checked,source='codex'):
-    from .resources import observe_account, codex_resources, SKEW, timestamp
+    from .resources import observe_account, account, codex_resources, SKEW, timestamp
     if not isinstance(data,dict):raise ValueError('한도 응답 형식')
     if not number(checked) or checked>time.time()+SKEW:return 0
     resource_count=0
@@ -39,7 +39,8 @@ def codex_limits(store,c,data,checked,source='codex'):
         ident=data.get('accountId')
         groups_for_policy=data.get('rateLimitsByLimitId') or {'codex':data.get('rateLimits') or {}}
         plans=sorted({str(row['planType']) for row in groups_for_policy.values() if isinstance(row,dict) and row.get('planType')})
-        owner=observe_account(c,'codex',(ident,data.get('workspaceId')) if isinstance(ident,str) and ident else None,checked,plan_revision=plans or None)
+        owner=observe_account(c,'codex',(ident,data.get('workspaceId')) if isinstance(ident,str) and ident else None,checked,plan_revision=plans or None,
+                              credential_revision=(account(c,'codex') or {}).get('credential_revision'))
         if owner and owner['checked']>checked:return 0
         resource_count=codex_resources(c,data,checked)
         store.save_state(c,'quota_policy:codex',dict(checked=checked,
@@ -347,7 +348,7 @@ def read_codex(binary,timeout=35,extra=None,extra_grace=10,extra_params=None):
     the same process, waiting at most `extra_grace` seconds past the rate limits."""
     extra=extra if extra is not None else {}
     ids={3+i:method for i,method in enumerate(extra)}
-    limits=None
+    limits=None;limits_done=False;limits_error=None
     p=subprocess.Popen([binary,'app-server','--stdio'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
     selector=selectors.DefaultSelector()
     selector.register(p.stdout,selectors.EVENT_READ)
@@ -377,11 +378,16 @@ def read_codex(binary,timeout=35,extra=None,extra_grace=10,extra_params=None):
                         if extra_params and method in extra_params:msg['params']=extra_params[method]
                         send(msg)
                 elif reply.get('id')==2:
-                    if 'error' in reply:raise RuntimeError('Codex 한도 조회 실패')
-                    limits=reply['result'];deadline=min(deadline,time.monotonic()+extra_grace)
+                    limits_done=True
+                    if 'error' in reply:limits_error=RuntimeError('Codex 한도 조회 실패')
+                    else:limits=reply.get('result')
+                    deadline=min(deadline,time.monotonic()+extra_grace)
                 elif reply.get('id') in ids:
                     extra[ids.pop(reply['id'])]=reply.get('result') if 'error' not in reply else None
-                if limits is not None and not ids:return limits
+                if limits_done and not ids:
+                    if limits_error:raise limits_error
+                    return limits
+        if limits_error:raise limits_error
         if limits is not None:return limits
         raise TimeoutError('Codex 한도 응답 시간 초과')
     finally:
@@ -625,12 +631,11 @@ def record_codex_account(store,usage):
     with store.connect() as c:
         buckets=(usage or {}).get('dailyUsageBuckets')
         if not isinstance(buckets,list):
-            store.source(c,'codex-account-usage','unavailable','계정 일별 토큰 합계 미제공 · 로컬 기록만 집계합니다.')
+            store.source(c,'codex-account-usage','unavailable','계정 일별 토큰 합계 미제공 · 이전 관측은 수신 시각과 함께 보존합니다.')
             return
         store.account_tokens(c,'codex',buckets,time.time())
-        from .resources import account
         from .reconciliation import snapshot,number
-        owner=account(c,'codex') or {}
+        namespace=store.account_namespace(c,'codex')
         checked=time.time()
         for b in buckets:
             if not isinstance(b,dict) or not number(b.get('tokens')):continue
@@ -638,7 +643,7 @@ def record_codex_account(store,usage):
             except (ValueError,TypeError,OverflowError):continue
             snapshot(store,c,source='codex-account',scope_id='codex-day:'+b['startDate'],route='codex',provider='OpenAI',
                      model=None,start=start,end=start+86400,tokens=b['tokens'],checked=checked,
-                     account_key=owner.get('account_key'))
+                     account_key=namespace)
         store.source(c,'codex-account-usage','ok','계정 집계 범위 KST 09:00–다음 날 09:00 · 기간 합계와 날짜 미배분량 대조')
 
 
@@ -689,11 +694,12 @@ def poll_limits(store,settings,manual=False):
             # After an entitlement error the subscription is gone for a while —
             # skip the authenticated request for six hours.
             if time.time()<pause.get('next_attempt',0):continue
+        account={};data=None
         try:
             if route=='codex':
                 if not settings.get('codex_binary'):raise FileNotFoundError('codex')
-                account={'account/usage/read':None}
-                data=read_codex(settings['codex_binary'],extra=account)
+                account={'account/usage/read':None,'account/read':None}
+                data=read_codex(settings['codex_binary'],extra=account,extra_params={'account/read':{'refreshToken':False}})
             else:
                 auth=json.loads(Path(settings['opencode_auth']).read_text()).get('opencode-go',{})
                 if auth.get('type')!='api' or not auth.get('key'):raise ValueError('구독 인증 미제공')
@@ -704,12 +710,6 @@ def poll_limits(store,settings,manual=False):
                 n=(codex_limits if route=='codex' else go_limits)(store,c,data,time.time())
                 store.source(c,route,'ok' if n else 'unavailable','' if n else '원본 한도 필드 미제공')
                 if route=='opencode-go':store.save_state(c,'opencode_go_poll',{})
-            if route=='codex':
-                try:
-                    record_codex_account(store,account['account/usage/read'])
-                    poll_codex_thread(store,settings)
-                except Exception as exc:  # the limits above are already kept
-                    with store.connect() as c:store.source(c,'codex-account-usage','error',f'계정 토큰 합계 기록 실패 ({type(exc).__name__})')
         except Exception as exc:
             # Errors contain no response body, endpoint credentials or command environment.
             detail=f'한도 수집 실패 ({type(exc).__name__})';status='error'
@@ -727,3 +727,25 @@ def poll_limits(store,settings,manual=False):
                 store.source(c,route,status,detail)
                 if route=='opencode-go' and status=='ended':
                     store.save_state(c,'opencode_go_poll',dict(next_attempt=time.time()+21600))
+
+        finally:
+            if route=='codex':
+                # A quota error must neither discard a received usage response nor
+                # attach it to the previous login. Read-only account metadata comes
+                # from the same app-server and is kept only as a hashed identity.
+                try:
+                    from .resources import observe_account
+                    profile=account.get('account/read') or {}
+                    routing=profile.get('workspaceRouting') or {}
+                    ident=(data.get('accountId') if isinstance(data,dict) else None) or routing.get('chatgptAccountId')
+                    workspace=data.get('workspaceId') if isinstance(data,dict) else None
+                    native=profile.get('account') or {}
+                    from .store import identity
+                    revision=identity(native.get('type'),native.get('email')) if native else None
+                    with store.connect() as c:
+                        observe_account(c,'codex',(ident,workspace) if isinstance(ident,str) and ident else None,
+                                        time.time(),credential_revision=revision)
+                    record_codex_account(store,account.get('account/usage/read'))
+                except Exception as exc:
+                    with store.connect() as c:store.source(c,'codex-account-usage','error',f'계정 토큰 합계 기록 실패 ({type(exc).__name__})')
+                if account.get('account/usage/read') is not None:poll_codex_thread(store,settings)

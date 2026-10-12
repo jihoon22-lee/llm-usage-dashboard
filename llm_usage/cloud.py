@@ -93,9 +93,9 @@ def _numeric_entries(entries):
         yield dict(created_at=e.get('created_at'),payload=payload)
 
 
-def _batch(fetch,headers,item,cursor=None):
+def _batch(fetch,headers,item,cursor=None,endpoint='events'):
     entries=[]
-    try:entries.extend(_numeric_entries(_pages(fetch,headers,item,'events',cursor,20)))
+    try:entries.extend(_numeric_entries(_pages(fetch,headers,item,endpoint,cursor,20)))
     except IncompletePages as exc:
         if exc.cursor:return entries,exc.cursor
         raise
@@ -171,20 +171,27 @@ def collect_claude_cloud(store,settings,fetch=None):
         key='claude-cloud:'+item['id']
         with store.connect() as c:
             seen=store.state(c,key)
-        if isinstance(seen,dict) and not seen.get('cursor') and seen.get('parser')==PARSER_VERSION and seen.get('updated')==item.get('updated_at') and time.time()-seen.get('checked',0)<86400:
+        if isinstance(seen,dict) and not seen.get('cursor') and not seen.get('teleport_cursor') and seen.get('parser')==PARSER_VERSION and seen.get('updated')==item.get('updated_at') and time.time()-seen.get('checked',0)<86400:
             if seen.get('missing'):missing+=1
             # Final snapshots can arrive after updated_at. Recheck recently active sessions.
             if seen.get('missing') or time.time()-(stamp(item.get('updated_at')) or 0)>900:continue
         try:
             endpoint='teleport-events'
-            entries=list(_numeric_entries(_pages(fetch,headers,item,'teleport-events')))
+            state=seen if isinstance(seen,dict) else {}
+            scan_updated=state.get('scan_updated',item.get('updated_at')) if state.get('cursor') or state.get('teleport_cursor') else item.get('updated_at')
+            entries,teleport_cursor=_batch(fetch,headers,item,state.get('teleport_cursor'),'teleport-events')
             with store.connect() as c:
                 _ingest(store,c,fetch,headers,item,model_provider,entries=entries)
+                if teleport_cursor:
+                    store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,
+                        teleport_cursor=teleport_cursor,cursor=state.get('cursor'),parser=PARSER_VERSION,checked=time.time()))
+            if teleport_cursor:
+                backfilling+=1
+                continue
             # Preserve the established transcript path even when the supplemental
             # endpoint fails. Only commit its checkpoint after a full page walk.
             endpoint='events'
             cursor=seen.get('cursor') if isinstance(seen,dict) else None
-            scan_updated=seen.get('scan_updated',item.get('updated_at')) if cursor else item.get('updated_at')
             entries,cursor=_batch(fetch,headers,item,cursor)
             with store.connect() as c:
                 _ingest(store,c,fetch,headers,item,model_provider,'events',identity('claude-account',organization),entries)

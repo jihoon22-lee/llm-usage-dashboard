@@ -88,9 +88,9 @@ def _raw(c, row, begin, end):
 
 def supplements(c):
     rows=[dict(r) for r in c.execute('SELECT * FROM usage_evidence ORDER BY source,scope_id,model,end')]
-    owner=c.execute("SELECT account_key FROM resource_accounts WHERE route='codex'").fetchone()
-    if owner and owner[0]:
-        rows=[r for r in rows if r['source']!='codex-account' or not r['account_key'] or r['account_key']==owner[0]]
+    from .store import Store
+    namespace=Store.account_namespace(c,'codex')
+    rows=[r for r in rows if r['source']!='codex-account' or (r['account_key'] or '')==namespace]
     daily={}
     for r in rows:
         if r['source']=='codex-account':
@@ -99,12 +99,12 @@ def supplements(c):
     rows=[r for r in rows if r['source']!='codex-account']+list(daily.values())
     # Upgrade old account buckets without rewriting or attributing their history.
     existing={datetime.fromtimestamp(r['start'],timezone.utc).strftime('%Y-%m-%d') for r in rows if r['source']=='codex-account'}
-    for r in c.execute('SELECT * FROM account_tokens'):
+    for r in c.execute('SELECT * FROM account_token_buckets WHERE route=? AND namespace=?',('codex',namespace)):
         scope='codex-day:'+r['day']
         if r['day'] in existing:continue
         start=stamp(r['day']+'T00:00:00Z')
         rows.append(dict(id=scope,source='codex-account',scope_id=scope,route=r['route'],provider='OpenAI',
-                         model=None,session=None,project=None,account_key=None,start=start,end=start+86400,
+                         model=None,session=None,project=None,account_key=namespace,start=start,end=start+86400,
                          checked=r['checked'],tokens=r['tokens'],parts=None))
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
@@ -139,7 +139,7 @@ def supplements(c):
             if missing or (detail and detail.get('reasoning')):
                 out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
                                 model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
-                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key'])))
+                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:')))
             previous=r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence

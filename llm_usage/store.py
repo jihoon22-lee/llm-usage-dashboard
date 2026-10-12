@@ -171,6 +171,15 @@ class Store:
             CREATE TABLE IF NOT EXISTS account_tokens (
               route TEXT, day TEXT, tokens INTEGER NOT NULL, checked REAL NOT NULL, PRIMARY KEY(route,day));
             ''')
+            # Additive migration: old releases can still read their original table.
+            # Unbound history is retained without assigning it to the active login.
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS account_token_buckets (
+                  route TEXT, day TEXT, tokens INTEGER NOT NULL, checked REAL NOT NULL,
+                  namespace TEXT NOT NULL DEFAULT '', PRIMARY KEY(route,namespace,day));
+                INSERT OR IGNORE INTO account_token_buckets
+                  SELECT route,day,tokens,checked,'' FROM account_tokens;
+            """)
             for column in ('session','project','agent_kind'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
                     c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
@@ -588,24 +597,32 @@ class Store:
 
     def account_tokens(self,c,route,buckets,checked):
         """Store the account's daily totals; a running day's bucket keeps growing."""
+        namespace=self.account_namespace(c,route)
         changed=False
         for b in buckets:
+            if not isinstance(b,dict):continue
             day,tokens=b.get('startDate'),b.get('tokens')
             if not isinstance(day,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',day) or type(tokens) is not int or tokens<0:continue
             try:datetime.strptime(day,'%Y-%m-%d')
             except ValueError:continue
-            row=c.execute('SELECT tokens FROM account_tokens WHERE route=? AND day=?',(route,day)).fetchone()
+            row=c.execute('SELECT tokens FROM account_token_buckets WHERE route=? AND namespace=? AND day=?',(route,namespace,day)).fetchone()
             if row and row[0]==tokens:continue
-            c.execute('INSERT OR REPLACE INTO account_tokens VALUES (?,?,?,?)',(route,day,tokens,checked));changed=True
+            c.execute('INSERT OR REPLACE INTO account_token_buckets VALUES (?,?,?,?,?)',(route,day,tokens,checked,namespace));changed=True
         if changed:self.bump_data_version(c)
-        self.save_state(c,'account_tokens_checked:'+route,checked)
+        self.save_state(c,'account_tokens_checked:'+route+':'+namespace,checked)
+
+    @staticmethod
+    def account_namespace(c,route):
+        from .resources import account
+        owner=account(c,route)
+        return (owner['account_key'] or 'epoch:'+owner['epoch']) if owner else ''
 
     def account_gap(self,c,route,now,days=14):
         """Account total minus the locally recorded tokens of the same route, per UTC
         day. Computed when read, so it shrinks as local collection catches up. Only
         the plain route counts: codex:<provider> traffic is not on this account."""
         since=(datetime.fromtimestamp(now,timezone.utc)-timedelta(days=days-1)).strftime('%Y-%m-%d')
-        rows=c.execute('SELECT day,tokens FROM account_tokens WHERE route=? AND day>=? ORDER BY day',(route,since)).fetchall()
+        rows=c.execute('SELECT day,tokens FROM account_token_buckets WHERE route=? AND namespace=? AND day>=? ORDER BY day',(route,self.account_namespace(c,route),since)).fetchall()
         if not rows:return None
         local=dict(c.execute("SELECT date(ts,'unixepoch') AS day,SUM(uncached_input+cached_input+output+cache_creation) FROM usage_hourly"
                              ' WHERE route=? AND ts>=? GROUP BY day',(route,stamp(since+'T00:00:00Z'))))
@@ -613,7 +630,7 @@ class Store:
         for day,tokens in rows:
             mine=local.get(day,0)
             out.append(dict(day=day,account=tokens,local=mine,gap=max(0,tokens-mine),over=max(0,mine-tokens)))
-        return dict(route=route,days=out,total_gap=sum(d['gap'] for d in out),checked=self.state(c,'account_tokens_checked:'+route))
+        return dict(route=route,days=out,total_gap=sum(d['gap'] for d in out),checked=self.state(c,'account_tokens_checked:'+route+':'+self.account_namespace(c,route)))
 
     def bump_data_version(self,c):
         """Relabel/attribute writes keep every token sum, so they bump a version."""
