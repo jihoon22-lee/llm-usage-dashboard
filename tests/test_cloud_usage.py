@@ -256,6 +256,38 @@ class CodexAccountUsageTests(unittest.TestCase):
                     self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'ok')
                     self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex'").fetchone()[0],'error')
 
+    def test_fresh_usage_with_malformed_identity_is_unbound_from_previous_account(self):
+        from llm_usage.resources import observe_account
+        with self.store.connect() as c:
+            observe_account(c,'codex',('old',None),time.time())
+            before=self.store.account_namespace(c,'codex')
+        def fake(binary,**kw):
+            kw['extra']['account/read']={'workspaceRouting':[], 'account':'malformed'}
+            kw['extra']['account/usage/read']={'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]}
+            raise RuntimeError('quota unavailable')
+        self.poll_fake(fake)
+        with self.store.connect() as c:
+            self.assertNotEqual(self.store.account_namespace(c,'codex'),before)
+            self.assertTrue(self.store.account_namespace(c,'codex').startswith('epoch:'))
+            self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
+
+    def test_complete_poll_failure_preserves_last_account_observation(self):
+        from llm_usage.resources import observe_account
+        from llm_usage.limits import record_codex_account
+        from llm_usage.reconciliation import supplements
+        with self.store.connect() as c:observe_account(c,'codex',('known',None),time.time())
+        record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
+        with self.store.connect() as c:
+            before=self.store.account_namespace(c,'codex')
+            checked=self.store.account_gap(c,'codex',NOW)['checked']
+        def offline(binary,**kw):raise OSError('offline')
+        self.poll_fake(offline)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.account_namespace(c,'codex'),before)
+            self.assertEqual(self.store.account_gap(c,'codex',NOW)['checked'],checked)
+            self.assertEqual(sum(e['tokens'] for e in supplements(c)[0]),50)
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'error')
+
     def test_empty_and_sparse_new_account_do_not_reuse_old_totals(self):
         from llm_usage.resources import observe_account
         from llm_usage.limits import record_codex_account

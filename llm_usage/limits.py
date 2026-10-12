@@ -694,7 +694,7 @@ def poll_limits(store,settings,manual=False):
             # After an entitlement error the subscription is gone for a while —
             # skip the authenticated request for six hours.
             if time.time()<pause.get('next_attempt',0):continue
-        account={};data=None
+        account={};data=None;poll_error=None
         try:
             if route=='codex':
                 if not settings.get('codex_binary'):raise FileNotFoundError('codex')
@@ -712,6 +712,7 @@ def poll_limits(store,settings,manual=False):
                 if route=='opencode-go':store.save_state(c,'opencode_go_poll',{})
         except Exception as exc:
             # Errors contain no response body, endpoint credentials or command environment.
+            poll_error=type(exc).__name__
             detail=f'한도 수집 실패 ({type(exc).__name__})';status='error'
             if route=='codex' and isinstance(exc,FileNotFoundError):
                 detail='Codex 실행 파일을 찾지 못했습니다 · 설정의 codex_binary 경로를 확인하세요.'
@@ -735,17 +736,27 @@ def poll_limits(store,settings,manual=False):
                 # from the same app-server and is kept only as a hashed identity.
                 try:
                     from .resources import observe_account
-                    profile=account.get('account/read') or {}
-                    routing=profile.get('workspaceRouting') or {}
+                    profile=account.get('account/read')
+                    profile=profile if isinstance(profile,dict) else {}
+                    routing=profile.get('workspaceRouting')
+                    routing=routing if isinstance(routing,dict) else {}
                     ident=(data.get('accountId') if isinstance(data,dict) else None) or routing.get('chatgptAccountId')
                     workspace=data.get('workspaceId') if isinstance(data,dict) else None
-                    native=profile.get('account') or {}
+                    native=profile.get('account')
+                    native=native if isinstance(native,dict) else {}
                     from .store import identity
                     revision=identity(native.get('type'),native.get('email')) if native else None
-                    with store.connect() as c:
-                        observe_account(c,'codex',(ident,workspace) if isinstance(ident,str) and ident else None,
-                                        time.time(),credential_revision=revision)
+                    # Silence is not a new login. Preserve the last account and
+                    # receipt time on a complete failure; fresh unbound usage still
+                    # gets an unknown epoch rather than the previous account.
+                    if isinstance(data,dict) or profile or account.get('account/usage/read') is not None:
+                        with store.connect() as c:
+                            observe_account(c,'codex',(ident,workspace) if isinstance(ident,str) and ident else None,
+                                            time.time(),credential_revision=revision)
                     record_codex_account(store,account.get('account/usage/read'))
+                    if poll_error and data is None and not profile and account.get('account/usage/read') is None:
+                        with store.connect() as c:
+                            store.source(c,'codex-account-usage','error',f'계정 토큰 조회 실패 ({poll_error}) · 이전 수신값·시각 유지')
                 except Exception as exc:
                     with store.connect() as c:store.source(c,'codex-account-usage','error',f'계정 토큰 합계 기록 실패 ({type(exc).__name__})')
                 if account.get('account/usage/read') is not None:poll_codex_thread(store,settings)
