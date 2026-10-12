@@ -625,26 +625,43 @@ def poll_antigravity_app(store,settings,servers=None,reader=None,quota_reader=No
             store.source(c,'antigravity-app','error',f'데스크톱 앱 한도 조회 실패 ({exc if isinstance(exc,ConnectionError) else type(exc).__name__})',checked)
 
 
+def codex_usage_buckets(usage):
+    """None means no usable response; an explicitly empty list is valid."""
+    from .reconciliation import number
+    raw=usage.get('dailyUsageBuckets') if isinstance(usage,dict) else None
+    if not isinstance(raw,list):return None
+    buckets=[]
+    for b in raw:
+        if not isinstance(b,dict) or not number(b.get('tokens')):continue
+        day=b.get('startDate')
+        if not isinstance(day,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',day):continue
+        try:datetime.strptime(day,'%Y-%m-%d')
+        except ValueError:continue
+        buckets.append(b)
+    return buckets if buckets or not raw else None
+
+
 def record_codex_account(store,usage):
     """Daily token totals of the whole ChatGPT account, every surface included: the
     only trace of agents that run on OpenAI's side (ChatGPT dot, Codex cloud)."""
     with store.connect() as c:
-        buckets=(usage or {}).get('dailyUsageBuckets')
-        if not isinstance(buckets,list):
+        buckets=codex_usage_buckets(usage)
+        if buckets is None:
             store.source(c,'codex-account-usage','unavailable','계정 일별 토큰 합계 미제공 · 이전 관측은 수신 시각과 함께 보존합니다.')
             return
         store.account_tokens(c,'codex',buckets,time.time())
-        from .reconciliation import snapshot,number
+        from .reconciliation import snapshot
         namespace=store.account_namespace(c,'codex')
         checked=time.time()
         for b in buckets:
-            if not isinstance(b,dict) or not number(b.get('tokens')):continue
-            try:start=stamp(b.get('startDate')+'T00:00:00Z')
-            except (ValueError,TypeError,OverflowError):continue
+            start=stamp(b['startDate']+'T00:00:00Z')
             snapshot(store,c,source='codex-account',scope_id='codex-day:'+b['startDate'],route='codex',provider='OpenAI',
                      model=None,start=start,end=start+86400,tokens=b['tokens'],checked=checked,
                      account_key=namespace)
-        store.source(c,'codex-account-usage','ok','계정 집계 범위 KST 09:00–다음 날 09:00 · 기간 합계와 날짜 미배분량 대조')
+        skipped=len(usage['dailyUsageBuckets'])-len(buckets)
+        store.source(c,'codex-account-usage','partial' if skipped else 'ok',
+                     '계정 집계 범위 KST 09:00–다음 날 09:00 · 기간 합계와 날짜 미배분량 대조'
+                     +(f' · 잘못된 일별 구간 {skipped}개 제외' if skipped else ''))
 
 
 def poll_codex_thread(store,settings):
@@ -740,21 +757,26 @@ def poll_limits(store,settings,manual=False):
                     profile=profile if isinstance(profile,dict) else {}
                     routing=profile.get('workspaceRouting')
                     routing=routing if isinstance(routing,dict) else {}
-                    ident=(data.get('accountId') if isinstance(data,dict) else None) or routing.get('chatgptAccountId')
+                    ident=data.get('accountId') if isinstance(data,dict) else None
+                    if not isinstance(ident,str) or not ident:ident=routing.get('chatgptAccountId')
+                    known_ident=isinstance(ident,str) and bool(ident)
                     workspace=data.get('workspaceId') if isinstance(data,dict) else None
                     native=profile.get('account')
                     native=native if isinstance(native,dict) else {}
                     from .store import identity
-                    revision=identity(native.get('type'),native.get('email')) if native else None
+                    native_type,email=native.get('type'),native.get('email')
+                    revision=identity(native_type,email) if (native_type=='chatgpt' and isinstance(email,str) and email) or native_type in ('apiKey','amazonBedrock') else None
+                    usable_usage=codex_usage_buckets(account.get('account/usage/read')) is not None
+                    observed=known_ident or revision is not None or usable_usage
                     # Silence is not a new login. Preserve the last account and
                     # receipt time on a complete failure; fresh unbound usage still
                     # gets an unknown epoch rather than the previous account.
-                    if isinstance(data,dict) or profile or account.get('account/usage/read') is not None:
+                    if observed:
                         with store.connect() as c:
-                            observe_account(c,'codex',(ident,workspace) if isinstance(ident,str) and ident else None,
+                            observe_account(c,'codex',(ident,workspace) if known_ident else None,
                                             time.time(),credential_revision=revision)
                     record_codex_account(store,account.get('account/usage/read'))
-                    if poll_error and data is None and not profile and account.get('account/usage/read') is None:
+                    if poll_error and not observed:
                         with store.connect() as c:
                             store.source(c,'codex-account-usage','error',f'계정 토큰 조회 실패 ({poll_error}) · 이전 수신값·시각 유지')
                 except Exception as exc:

@@ -141,6 +141,26 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertEqual(source['status'], 'ok'); self.assertIn('기록 없음 1개', source['detail'])
 
 
+    def test_missing_optional_endpoint_keeps_transcript_checkpoint_and_separate_status(self):
+        api=FakeApi([[session('optional')]],{'optional':[[assistant('kept','2026-10-12T09:30:00Z',20)]]})
+        calls=[]
+        def fetch(url,headers):
+            calls.append(url)
+            if '/events?' in url:raise HTTPError(url,404,'Unavailable',{},None)
+            return api(url,headers)
+        self.run_collect(fetch)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0],'ok')
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0],'unavailable')
+            self.assertTrue(self.store.state(c,'claude-cloud:optional')['supplement_unavailable'])
+        self.assertEqual(len(self.rows()),1)
+        count=len([u for u in calls if '/code/sessions/' in u])
+        self.run_collect(fetch)
+        self.assertEqual(len([u for u in calls if '/code/sessions/' in u]),count)
+        api.sessions[0][0]['updated_at']='2026-10-12T11:59:00Z'
+        self.run_collect(fetch)
+        self.assertGreater(len([u for u in calls if '/code/sessions/' in u]),count)
+
     def test_transcript_beyond_100_pages_resumes_without_false_completion(self):
         from urllib.parse import parse_qs,urlparse
         calls=[]
@@ -270,6 +290,24 @@ class CodexAccountUsageTests(unittest.TestCase):
             self.assertNotEqual(self.store.account_namespace(c,'codex'),before)
             self.assertTrue(self.store.account_namespace(c,'codex').startswith('epoch:'))
             self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
+
+    def test_unusable_partial_replies_preserve_previous_account_and_report_failure(self):
+        from llm_usage.resources import observe_account
+        from llm_usage.limits import record_codex_account
+        with self.store.connect() as c:observe_account(c,'codex',('known',None),time.time())
+        record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
+        with self.store.connect() as c:before=self.store.account_namespace(c,'codex')
+        for usage in (None, {}, {'dailyUsageBuckets':[{'startDate':'invalid','tokens':10}]}):
+            with self.subTest(usage=usage):
+                def fake(binary,**kw):
+                    kw['extra']['account/read']={'workspaceRouting':[], 'account':{'type':'chatgpt'}}
+                    kw['extra']['account/usage/read']=usage
+                    raise RuntimeError('quota unavailable')
+                self.poll_fake(fake)
+                with self.store.connect() as c:
+                    self.assertEqual(self.store.account_namespace(c,'codex'),before)
+                    self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
+                    self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'error')
 
     def test_complete_poll_failure_preserves_last_account_observation(self):
         from llm_usage.resources import observe_account

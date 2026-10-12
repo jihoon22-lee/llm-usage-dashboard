@@ -683,7 +683,7 @@ class Store:
                                       compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff)
                 if len(body['series'])<=5000:self._usage_put(key,body)
             from .reconciliation import apply as reconcile_usage
-            body=reconcile_usage(c,body,group,cumulative,scope)
+            body=reconcile_usage(c,body,group,cumulative,scope,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .signals import usage_spike
             spike=usage_spike(c,now.timestamp()) if sections!='insights' else None
@@ -752,7 +752,7 @@ class Store:
                 d=daily.setdefault(row['day'],dict(day=row['day'],tokens=0,requests=0));d['tokens']+=tokens;d['requests']+=row['requests']
             sessions=[dict(session=r[0],route=r[1],tokens=r[2],requests=r[3],first_ts=r[4],last_ts=r[5]) for r in c.execute(
                 'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),COUNT(*),MIN(ts),MAX(ts) FROM events'
-                +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC LIMIT 10',(project,start.timestamp()))]
+                +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',(project,start.timestamp()))]
         from .reconciliation import supplements
         with self.connect() as c:extra,conflicts=supplements(c)
         unallocated=[]
@@ -767,8 +767,16 @@ class Store:
             if begin==finish:
                 d=daily.setdefault(begin,dict(day=begin,tokens=0,requests=0));d['tokens']+=e['tokens']
             else:unallocated.append(dict(start=e['start'],end=e['end'],tokens=e['tokens']))
-            for session in sessions:
-                if session['session']==e['session']:session['tokens']+=e['tokens']
+            if e['session']:
+                session=next((r for r in sessions if r['session']==e['session']),None)
+                if session is None:
+                    session=dict(session=e['session'],route=e['route'],tokens=0,requests=0,
+                                 first_ts=e['start'],last_ts=e['end'])
+                    sessions.append(session)
+                session['tokens']+=e['tokens']
+                session['first_ts']=min(session['first_ts'],e['start'])
+                session['last_ts']=max(session['last_ts'],e['end'])
+        sessions=sorted(sessions,key=lambda r:(-r['tokens'],r['session']))[:10]
         elapsed=now.day;days_in_month=((month_start.replace(day=28)+timedelta(days=4)).replace(day=1)-month_start).days
         cost=month['cost'] if month['priced'] else None
         projection=dict(month=month_start.strftime('%Y-%m'),days_elapsed=elapsed,days_in_month=days_in_month,

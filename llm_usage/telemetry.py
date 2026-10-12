@@ -48,6 +48,17 @@ def resolve(store,c):
                     session=old['session'],project=old['project'],agent_kind=old['agent_kind'])
         link(c,'telemetry:'+str(row['session']),old['id'],'telemetry','final')
         c.execute('DELETE FROM telemetry_pending WHERE id=?',(row['id'],));resolved+=1
+    if resolved:
+        receipt=store.state(c,'telemetry:received')
+        if receipt:
+            receipt['pending']=c.execute('SELECT COUNT(*) FROM telemetry_pending').fetchone()[0]
+            status='partial' if receipt['pending'] or receipt.get('invalid') else 'ok'
+            receipt['status']=status
+            store.save_state(c,'telemetry:received',receipt)
+            # Resolving a local alias is not a fresh network receipt.
+            store.source(c,'telemetry',status,
+                         f"숫자 수신 {receipt.get('accepted',0)} · 요청 연결 대기 {receipt['pending']} · 유효하지 않은 항목 {receipt.get('invalid',0)}",
+                         receipt['checked'])
     return resolved
 
 

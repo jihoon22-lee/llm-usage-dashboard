@@ -111,17 +111,28 @@ def ensure_report(store,now,pricing=None):
     # Reconcile previously published local reports after a backfill. Do not
     # re-send notifications for a report that already existed.
     with store.connect() as c:
-        revision=store.state(c,'usage_evidence_version') or 0
-        refresh=revision!=store.state(c,'reports:usage-evidence-version',0)
+        from .reconciliation import supplements
+        from .store import identity,TOKENS
+        # Closed-week day/model totals also change when detailed records arrive,
+        # and linked records can shrink an aggregate without a new snapshot.
+        low=(monday-timedelta(weeks=KEEP)).timestamp();high=(monday+timedelta(days=7)).timestamp()
+        sums=','.join('SUM('+k+')' for k in TOKENS)
+        records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,SUM(requests),"+sums+
+            ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
+        additions,_=supplements(c)
+        additions=[e for e in additions if e['start']<high and e['end']>low]
+        revision=identity(json.dumps([records,additions,pricing],sort_keys=True))
+        refresh=revision!=store.state(c,'reports:usage-revision')
         old_weeks=[r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%'")] if refresh else []
     for key in old_weeks:
         week=datetime.strptime(key[7:],'%Y-%m-%d').replace(tzinfo=KST)
-        rebuilt=build(store,(week+timedelta(days=7)).timestamp(),pricing)
+        rebuilt=build(store,(week+timedelta(days=7)).timestamp(),pricing);rebuilt['built']=now
         with store.connect() as c:store.save_state(c,key,rebuilt)
     if refresh:
-        with store.connect() as c:store.save_state(c,'reports:usage-evidence-version',revision)
+        with store.connect() as c:store.save_state(c,'reports:usage-revision',revision)
     with store.connect() as c:
         first=c.execute('SELECT MIN(ts) FROM events').fetchone()[0]
+        if additions:first=min([first]+[e['start'] for e in additions]) if first is not None else min(e['start'] for e in additions)
         missing=[]
         for back in range(KEEP):
             week=monday-timedelta(days=7*back)

@@ -163,10 +163,82 @@ class ReconciliationTests(unittest.TestCase):
             parse_line(self.store,c,'claude-code',dict(type='assistant',timestamp=self.now-10,requestId='req1',sessionId='s',
                 message=dict(id='m1',model='claude-test',usage=dict(input_tokens=2,output_tokens=1,cache_read_input_tokens=3,cache_creation_input_tokens=4))),{})
             self.assertEqual(resolve(self.store,c),1)
+            receipt=self.store.state(c,'telemetry:received')
+            self.assertEqual((receipt['pending'],receipt['checked'],receipt['status']),(0,self.now,'ok'))
+            source=c.execute("SELECT status,checked FROM sources WHERE name='telemetry'").fetchone()
+            self.assertEqual(tuple(source),('ok',self.now))
             self.assertNotIn('PRIVATE','\n'.join(c.iterdump()))
         ingest(self.store,data,self.now)
         self.assertEqual(total(self.usage(period='today')['totals']),39)
         self.assertEqual(self.usage(period='today')['totals']['requests'],1)
+
+
+    def test_reports_follow_late_records_links_and_pricing_without_reannouncing(self):
+        from llm_usage import reports
+        from unittest.mock import patch
+        start=stamp('2026-10-06T09:00:00Z');price={'claude-test':dict(input=1,cached=1,cache_write=1,output=1)}
+        with self.store.connect() as c:
+            self.store.event(c,'first',start+1,'Anthropic','claude-code','claude-test',dict(output=20_000_000),session='s')
+            link(c,'claude:s','first','local')
+            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',model='claude-test',
+                     start=start,end=start+3600,tokens=100_000_000,parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=100_000_000))
+        reports.ensure_report(self.store,self.now,price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['supplemental_tokens'],80_000_000)
+        with self.store.connect() as c:
+            self.store.event(c,'late',start+2,'Anthropic','claude-code','claude-test',dict(output=30_000_000),session='s')
+            link(c,'claude:s','late','local')
+        self.assertIsNone(reports.ensure_report(self.store,self.now+1,price))
+        totals=reports.recent(self.store)[0]['totals']
+        self.assertEqual((totals['tokens'],totals['requests'],totals['supplemental_tokens'],totals['cost']),(100_000_000,2,50_000_000,50))
+        with self.store.connect() as c:self.store.event(c,'unlinked',start+3,'Anthropic','claude-code','claude-test',dict(output=15_000_000),session='s')
+        reports.ensure_report(self.store,self.now+2,price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'],115_000_000)
+        with self.store.connect() as c:link(c,'claude:s','unlinked','local')
+        reports.ensure_report(self.store,self.now+3,price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'],100_000_000)
+        price['claude-test']['output']=2
+        reports.ensure_report(self.store,self.now+4,price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['cost'],130)
+        with self.store.connect() as c:self.store.event(c,'current-week',self.now-5,'Anthropic','claude-code','claude-test',dict(output=10))
+        with patch('llm_usage.reports.build',wraps=reports.build) as build:
+            self.assertIsNone(reports.ensure_report(self.store,self.now+5,price));build.assert_not_called()
+
+    def test_reports_include_evidence_when_there_are_no_local_requests(self):
+        from llm_usage import reports
+        self.evidence(100,start='2026-10-06T09:00:00Z',end='2026-10-06T10:00:00Z')
+        reports.ensure_report(self.store,self.now)
+        report=reports.recent(self.store)[0]
+        self.assertEqual((report['totals']['tokens'],report['totals']['requests']),(100,0))
+
+    def test_project_ranks_sessions_after_supplements_including_evidence_only(self):
+        begin=stamp('2026-10-12T09:00:00Z')
+        with self.store.connect() as c:
+            for i in range(11):
+                sid=f's-{i}'
+                self.store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=11-i),session=sid,project='p')
+                link(c,'claude:'+sid,sid,'local')
+            for sid,tokens in [('s-10',100),('only-evidence',200)]:
+                snapshot(self.store,c,source='claude-cloud',scope_id='claude:'+sid,route='claude-code',provider='Anthropic',model='claude-test',
+                         session=sid,project='p',start=begin,end=begin+3600,tokens=tokens,
+                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
+        sessions=self.store.project_detail('p',now=self.now)['sessions']
+        self.assertEqual(len(sessions),10)
+        self.assertEqual([(r['session'],r['tokens'],r['requests']) for r in sessions[:2]],[('only-evidence',200,0),('s-10',100,1)])
+        self.assertEqual([r['tokens'] for r in sessions],sorted([r['tokens'] for r in sessions],reverse=True))
+
+    def test_calendar_uses_the_same_history_boundary_for_evidence_and_requests(self):
+        from datetime import datetime,timedelta
+        from llm_usage.store import KST
+        cutoff=datetime.fromtimestamp(self.now,KST).replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=181)
+        self.evidence(100,start=(cutoff-timedelta(hours=23)).isoformat(),end=(cutoff-timedelta(hours=22)).isoformat())
+        old=self.usage(period='all')
+        self.assertEqual(total(old['totals']),100);self.assertEqual(old['calendar'],[])
+        with self.store.connect() as c:
+            snapshot(self.store,c,source='claude-cloud',scope_id='claude:boundary',route='claude-code',provider='Anthropic',model='claude-test',
+                     start=(cutoff+timedelta(hours=1)).timestamp(),end=(cutoff+timedelta(hours=2)).timestamp(),tokens=40,
+                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=40))
+        days=self.usage(period='all')['calendar']
+        self.assertEqual([(d['day'],d['tokens']) for d in days],[(cutoff.date().isoformat(),40)])
 
 
 if __name__=='__main__':unittest.main()

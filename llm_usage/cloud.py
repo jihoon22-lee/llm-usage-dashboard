@@ -166,15 +166,16 @@ def collect_claude_cloud(store,settings,fetch=None):
         if isinstance(exc,urllib.error.HTTPError):exc.close()
         with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 목록 조회 실패 ({type(exc).__name__})')
         return
-    failed=missing=backfilling=0;errors=[]
+    failed=missing=backfilling=unavailable=0;errors=[]
     for item in sessions:
         key='claude-cloud:'+item['id']
         with store.connect() as c:
             seen=store.state(c,key)
         if isinstance(seen,dict) and not seen.get('cursor') and not seen.get('teleport_cursor') and seen.get('parser')==PARSER_VERSION and seen.get('updated')==item.get('updated_at') and time.time()-seen.get('checked',0)<86400:
             if seen.get('missing'):missing+=1
+            if seen.get('supplement_unavailable'):unavailable+=1
             # Final snapshots can arrive after updated_at. Recheck recently active sessions.
-            if seen.get('missing') or time.time()-(stamp(item.get('updated_at')) or 0)>900:continue
+            if seen.get('missing') or seen.get('supplement_unavailable') or time.time()-(stamp(item.get('updated_at')) or 0)>900:continue
         try:
             endpoint='teleport-events'
             state=seen if isinstance(seen,dict) else {}
@@ -200,7 +201,11 @@ def collect_claude_cloud(store,settings,fetch=None):
         except urllib.error.HTTPError as exc:
             _backoff(store,exc,pause)
             exc.close()
-            if exc.code==404 and endpoint=='events':failed+=1;errors.append('supplement_unavailable');continue
+            if exc.code==404 and endpoint=='events':
+                unavailable+=1
+                with store.connect() as c:
+                    store.save_state(c,key,dict(updated=scan_updated,supplement_unavailable=True,parser=PARSER_VERSION,checked=time.time()))
+                continue
             if exc.code!=404:
                 failed+=1
                 if exc.code in (401,403,429):
@@ -217,3 +222,7 @@ def collect_claude_cloud(store,settings,fetch=None):
     with store.connect() as c:
         if not failed:store.save_state(c,'claude-cloud:retry',{})
         store.source(c,'claude-cloud','partial' if failed or backfilling else 'ok',detail)
+        store.source(c,'claude-cloud-supplement',
+                     'unavailable' if not sessions or unavailable+missing==len(sessions) else 'partial' if unavailable or missing or failed or backfilling else 'ok',
+                     f'추가 누계·상세 API · 미제공 {unavailable}세션 · 기존 transcript 수집과 별도'
+                     +(' · 세션 변경 또는 24시간 뒤 재확인' if unavailable else ''))
