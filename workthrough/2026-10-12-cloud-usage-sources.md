@@ -73,3 +73,20 @@ Claude 클라우드 세션도 사용했다. 그런데 이 사용량이 대시보
 - 2026-10-12 사용자 지시로 PR #35를 merge commit `0d59543`으로 병합했다(필수 CI 전부 통과).
 - 0.5.0 준비: pyproject·uv.lock 프로젝트 버전, CHANGELOG, README·설치·업데이트 안내를 갱신했다.
   외부 의존성은 바뀌지 않았다. 전체 단위 테스트 346개가 통과했다.
+- 버전 PR #36에서 Codex 리뷰 봇이 README 상단의 현재 릴리스 링크가 v0.4.0으로 남은 것을 짚어 수정했다. 병합 commit은 `667d5c4`다.
+- 메인 CI 첫 실행은 security 작업이 gitleaks 내려받기 504로 실패했다. 코드와 무관한 일시 오류였다.
+  이 결과를 확인하기 전에 `v0.5.0` 태그를 push한 것은 절차 위반이었다. 실패 작업만 재실행해 메인 CI가 성공했다.
+- Release 워크플로가 성공해 [v0.5.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.5.0)을
+  immutable 릴리스로 게시했다. wheel·sdist·release-manifest.json을 내려받아 SHA256SUMS와 대조했고 모두 일치했다.
+
+## 운영 배포
+
+- 사용자가 두 서비스를 정지했다. 기본 checkout을 `667d5c4`로 fast-forward한 뒤 기존 `.venv`에
+  `uv sync --locked --no-dev`를 적용했다. 프로젝트 버전만 0.4.0에서 0.5.0으로 바뀌었고 외부 패키지는 같았다.
+  단위 테스트 346개 통과 후 `packaging/deploy.py`로 릴리스를 전환하고 서비스를 시작했다.
+- 두 프로세스 모두 `releases/667d5c4…`에서 실행된다. health는 200이고 새 수집 heartbeat를 확인했다.
+- 운영 DB 첫 수집 결과: `claude-cloud`와 `codex-account-usage`가 모두 ok다.
+  - 10-12 클라우드 세션 114건(출력 176,796)이 집계됐다.
+  - 계정 일별 합계는 68일치가 들어왔다.
+- 사설 주소의 index와 웹 자산에 새 상태 표(`account-gap`, `renderAccountGap`)가 포함된 것을 확인했다.
+- 복구 기준: 이전 릴리스 `86ea63d`(0.4.0, 외부 의존성 동일)와 2026-10-12 11:11 DB 백업.
