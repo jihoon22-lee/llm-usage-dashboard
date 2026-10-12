@@ -23,12 +23,12 @@ sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release
 --prepare는 읽기 전용 명령이 아닙니다. 코드를 `~/.local/lib/llm-usage/releases/<commit>`으로 내보내고 current 링크로 선택합니다.
 아래 기존 배포기는 코드만 전환합니다. uv 의존성 변경을 포함한 업데이트에는 사용하지 마세요. 운영 `.venv`에 `uv sync`를 실행하면 실행 중인 패키지가 바뀝니다. 임시 환경의 사전 검증과 실제 배포 시 코드·환경의 동시 전환이 필요합니다.
 
-아래 명령은 운영 환경이 프로젝트 버전 메타데이터를 포함해 대상 v0.6.0의 lock과 이미 일치하는 경우에만 사용합니다. 환경 동기화가 필요하면 먼저 아래의 **0.6.0 업데이트** 절차를 따르세요.
+아래 명령은 운영 환경이 프로젝트 버전 메타데이터를 포함해 대상 v0.6.1의 lock과 이미 일치하는 경우에만 사용합니다. 환경 동기화가 필요하면 먼저 아래의 **0.6.1 업데이트** 절차를 따르세요.
 
 ```bash
 git fetch origin --tags
 git switch main
-git merge --ff-only v0.6.0
+git merge --ff-only v0.6.1
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python packaging/deploy.py
 ```
@@ -46,6 +46,11 @@ git merge --ff-only v0.6.0
 실제 브라우저 검사는 `--smoke --smoke-origin HTTPS_ORIGIN`을 함께 지정해야 합니다. 생략한 기본 브라우저 스크립트는 합성 데이터 검사입니다.
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
+
+## 0.6.1 업데이트
+
+0.6.1은 사용량 대조 표시를 접는 UI 수정입니다. 외부 의존성·DB 구조·집계 로직은 0.6.0과 같습니다.
+프로젝트 버전 메타데이터 갱신에는 아래와 동일하게 두 서비스 정지 후 환경 동기화·릴리스 전환을 수행합니다.
 
 ## 0.6.0 업데이트
 

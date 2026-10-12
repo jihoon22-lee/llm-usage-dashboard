@@ -337,10 +337,6 @@ tr[data-scope]:hover{background:var(--raised)}
 @media(max-width:600px){.alerts.collapsible:not(.expanded) .alert-chip{display:none}}
 .collector-banner{background:var(--error-bg);color:var(--error-ink);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:var(--fs-small);font-weight:600}
 .collector-banner[hidden]{display:none}
-#usage-reconciliation{display:grid;gap:7px;background:var(--soft);color:var(--ink);font-weight:400;line-height:1.6}
-#usage-reconciliation[hidden]{display:none}
-#usage-reconciliation>strong{color:var(--accent)}
-#usage-reconciliation>span{display:block;overflow-wrap:anywhere}
 /* The insights banner belongs to the tabs that show insight panels. */
 body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #insights-status{display:none}
 .quota-note{font-size:11px;color:var(--muted);margin-top:4px}
@@ -624,3 +620,23 @@ body:has(dialog[open]){overflow:hidden}
  .stat-value{font-size:20px;margin:3px 0}
  .stat small{font-size:var(--fs-meta);line-height:1.5}
 }
+
+.reconciliation-banner{margin:0 0 12px;border:1px solid var(--border);border-radius:8px;background:var(--soft);font-size:var(--fs-small);color:var(--muted);line-height:1.6}
+.reconciliation-banner[hidden]{display:none}
+.reconciliation-banner summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;padding:10px 14px;cursor:pointer;list-style:none}
+.reconciliation-banner summary::-webkit-details-marker{display:none}
+.reconciliation-banner summary strong,.reconciliation-banner summary b{color:var(--ink)}
+.reconciliation-banner summary small{margin-left:4px;font-size:var(--fs-meta);font-weight:400;color:var(--muted)}
+.reconciliation-banner summary>span{white-space:nowrap}
+.reconciliation-tag,.reconciliation-warning{font-size:var(--fs-meta)}
+.reconciliation-warning{color:var(--warning-ink)}
+.reconciliation-toggle{margin-left:auto;color:var(--accent);font-size:var(--fs-meta)}
+.reconciliation-toggle::after{content:' ＋'}
+.reconciliation-banner details[open] .reconciliation-toggle::after{content:' −'}
+.reconciliation-detail{padding:0 14px 12px;border-top:1px solid var(--line);line-height:1.65}
+.reconciliation-detail p{margin:10px 0 0}
+.reconciliation-detail h4{margin:12px 0 4px;font-size:var(--fs-small);color:var(--ink)}
+.reconciliation-intervals{list-style:none;margin:0;padding:0;max-height:240px;overflow:auto}
+.reconciliation-intervals li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
+.reconciliation-intervals b{font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(max-width:600px){.reconciliation-banner summary{gap:5px 10px;padding:9px 10px}.reconciliation-detail{padding:0 10px 10px}}

@@ -12,6 +12,21 @@ with sync_playwright() as p:
         expect(page.locator('#usage-reconciliation')).to_be_visible()
         expect(page.locator('#usage-reconciliation')).to_contain_text('날짜 미배분')
         expect(page.locator('#usage-reconciliation')).to_contain_text('KST')
+        details=page.locator('#usage-reconciliation details')
+        summary=details.locator('summary')
+        expect(details).not_to_have_attribute('open','')
+        expect(details.locator('.reconciliation-detail')).not_to_be_visible()
+        assert page.locator('#usage-reconciliation').bounding_box()['height']<116
+        summary.focus();page.keyboard.press('Enter')
+        expect(details.locator('.reconciliation-detail')).to_be_visible()
+        expect(details.locator('.reconciliation-intervals li').first).to_be_visible()
+        page.evaluate('renderReconciliation(lastUsage.reconciliation)')
+        expect(details).to_have_attribute('open','')
+        summary.press('Enter')
+        expect(details.locator('.reconciliation-detail')).not_to_be_visible()
+        # Warnings remain visible while long interval lists and explanations fold.
+        page.evaluate('renderReconciliation({...lastUsage.reconciliation,conflicts:[{}]})')
+        expect(summary).to_contain_text('충돌 1건')
         assert page.evaluate('lastUsage.totals.total_tokens===lastUsage.reconciliation.recorded_tokens+lastUsage.reconciliation.supplemental_tokens')
         assert page.evaluate('lastUsage.series.reduce((n,p)=>n+Object.values(p.values).reduce((s,v)=>s+total(v),0),0)+lastUsage.reconciliation.unallocated_tokens===total(lastUsage.totals)')
         assert page.evaluate('lastUsage.rows.reduce((n,r)=>n+total(r),0)===total(lastUsage.totals)')
@@ -21,4 +36,4 @@ with sync_playwright() as p:
         assert not errors,errors
         page.close()
     browser.close()
-print('Reconciled totals, unallocated intervals and KST labels passed at 1440/390/320px.')
+print('Reconciled totals, compact disclosure, keyboard, refresh state and KST labels passed at 1440/390/320px.')
