@@ -8,6 +8,7 @@ sessions run on this PC and are already read from ~/.claude/projects.
 """
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -87,15 +88,25 @@ def collect_claude_cloud(store,settings,fetch=None):
         # Errors carry no response body or credentials.
         with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 목록 조회 실패 ({type(exc).__name__})')
         return
-    failed=0
+    failed=missing=0
     for item in sessions:
         key='claude-cloud:'+item['id']
         with store.connect() as c:
-            if store.state(c,key)==item.get('updated_at'):continue
+            seen=store.state(c,key)
+        if isinstance(seen,dict) and seen.get('updated')==item.get('updated_at'):
+            missing+=1;continue
+        if seen==item.get('updated_at'):continue
         try:
             with store.connect() as c:
                 _ingest(store,c,fetch,headers,item,model_provider)
                 store.save_state(c,key,item.get('updated_at'))
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            if exc.code!=404:failed+=1;continue
+            # Like `claude --teleport`: a session without a transcript is not retried until it changes.
+            missing+=1
+            with store.connect() as c:store.save_state(c,key,dict(updated=item.get('updated_at'),missing=True))
         except Exception:failed+=1
-    detail=f'클라우드 세션 {len(sessions)}개 확인 · 원격 기록 API(읽기 전용)'+(f' · 읽기 실패 {failed}개, 다음 수집에서 재시도' if failed else '')
+    detail=(f'클라우드 세션 {len(sessions)}개 확인 · 원격 기록 API(읽기 전용)'+(f' · 기록 없음 {missing}개' if missing else '')
+            +(f' · 읽기 실패 {failed}개, 다음 수집에서 재시도' if failed else ''))
     with store.connect() as c:store.source(c,'claude-cloud','partial' if failed else 'ok',detail)

@@ -8,6 +8,7 @@ import textwrap
 import time
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from llm_usage.cloud import collect_claude_cloud
 from llm_usage.limits import poll_limits, read_codex
@@ -31,7 +32,7 @@ def assistant(mid, ts, output, sidechain=False, model='claude-opus-5-5'):
 
 class FakeApi:
     def __init__(self, sessions, events):
-        self.sessions, self.events, self.calls = sessions, events, []
+        self.sessions, self.events, self.calls, self.gone = sessions, events, [], set()
 
     def __call__(self, url, headers):
         self.calls.append((url, headers))
@@ -41,6 +42,8 @@ class FakeApi:
             index = 1 if 'after_id=' in url else 0
             return {'data': pages[index], 'has_more': index + 1 < len(pages), 'last_id': pages[index][-1]['id']}
         sid = url.split('/v1/code/sessions/')[1].split('/')[0]
+        if sid in self.gone:
+            raise HTTPError(url, 404, 'Not Found', {}, None)
         pages = self.events[sid]
         index = 1 if 'cursor=' in url else 0
         return {'data': pages[index], 'next_cursor': 'next' if index + 1 < len(pages) else None}
@@ -126,6 +129,16 @@ class ClaudeCloudTests(unittest.TestCase):
         api.events['session_a'] = [[assistant('msg_a1', '2026-10-12T09:30:00Z', 3)]]
         self.run_collect(api)
         self.assertEqual(len(self.rows()), 2)
+
+    def test_a_session_without_a_transcript_is_not_read_every_cycle(self):
+        api = FakeApi([[session('session_gone')]], {})
+        api.gone.add('session_gone')
+        self.run_collect(api)
+        self.run_collect(api)
+        self.assertEqual(len([u for u, _ in api.calls if '/teleport-events' in u]), 1)
+        with self.store.connect() as c:
+            source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
+        self.assertEqual(source['status'], 'ok'); self.assertIn('기록 없음 1개', source['detail'])
 
 
 def utc(day, hour=12):
