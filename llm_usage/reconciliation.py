@@ -171,7 +171,7 @@ def add(row, evidence):
     else:row['unclassified_tokens']=row.get('unclassified_tokens',0)+evidence['tokens']
 
 
-def apply(c, body, group='route', cumulative=False, scope=None):
+def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
     entries,conflicts=supplements(c)
@@ -225,7 +225,7 @@ def apply(c, body, group='route', cumulative=False, scope=None):
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)
         finish=datetime.fromtimestamp(e['end']-0.000001,KST)
-        if begin.date()==finish.date() and 'calendar' in data:
+        if begin.date()==finish.date() and 'calendar' in data and begin.date().isoformat()>=calendar_start:
             day=begin.date().isoformat()
             cell=next((x for x in data['calendar'] if x['day']==day),None)
             if cell is None:
