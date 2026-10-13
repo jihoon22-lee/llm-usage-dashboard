@@ -87,7 +87,7 @@ def account(c, route):
     return dict(row) if row else None
 
 
-def observe_account(c, route, identity, checked, credential_revision=None, plan_revision=None):
+def observe_account(c, route, identity, checked, credential_revision=None, plan_revision=None, retain_matching_identity=False):
     """Unknown identity remains unknown; credential changes only break its epoch."""
     if not number(checked) or checked > time.time() + SKEW:
         return account(c, route)
@@ -95,6 +95,11 @@ def observe_account(c, route, identity, checked, credential_revision=None, plan_
     if current and checked < current['checked']:
         return current
     ident = key(route, identity) if identity else None
+    # Only a caller with freshly received matching metadata may retain a known
+    # identity. A missing revision must never bind new usage to an old account.
+    if (retain_matching_identity and ident is None and current and credential_revision is not None
+            and str(credential_revision) == current['credential_revision']):
+        ident = current['account_key']
     changed = not current or ident != current['account_key']
     if current and ident is None and credential_revision is not None:
         changed |= str(credential_revision) != current['credential_revision']

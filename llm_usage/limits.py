@@ -30,17 +30,33 @@ def number(value):
     return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
 
 
-def codex_limits(store,c,data,checked,source='codex'):
+def _codex_account_metadata(data,profile):
+    from .store import identity
+    profile=profile if isinstance(profile,dict) else {}
+    routing=profile.get('workspaceRouting')
+    routing=routing if isinstance(routing,dict) else {}
+    ident=data.get('accountId') if isinstance(data,dict) else None
+    if not isinstance(ident,str) or not ident:ident=routing.get('chatgptAccountId')
+    workspace=data.get('workspaceId') if isinstance(data,dict) else None
+    native=profile.get('account')
+    native=native if isinstance(native,dict) else {}
+    native_type,email=native.get('type'),native.get('email')
+    revision=identity(native_type,email) if (native_type=='chatgpt' and isinstance(email,str) and email) or native_type in ('apiKey','amazonBedrock') else None
+    return ((ident,workspace) if isinstance(ident,str) and ident else None),revision
+
+
+def codex_limits(store,c,data,checked,source='codex',account_profile=None):
     from .resources import observe_account, account, codex_resources, SKEW, timestamp
     if not isinstance(data,dict):raise ValueError('한도 응답 형식')
     if not number(checked) or checked>time.time()+SKEW:return 0
     resource_count=0
     if source=='codex':
-        ident=data.get('accountId')
+        ident,revision=_codex_account_metadata(data,account_profile)
         groups_for_policy=data.get('rateLimitsByLimitId') or {'codex':data.get('rateLimits') or {}}
         plans=sorted({str(row['planType']) for row in groups_for_policy.values() if isinstance(row,dict) and row.get('planType')})
-        owner=observe_account(c,'codex',(ident,data.get('workspaceId')) if isinstance(ident,str) and ident else None,checked,plan_revision=plans or None,
-                              credential_revision=(account(c,'codex') or {}).get('credential_revision'))
+        owner=observe_account(c,'codex',ident,checked,plan_revision=plans or None,
+                              credential_revision=revision if account_profile is not None else (account(c,'codex') or {}).get('credential_revision'),
+                              retain_matching_identity=account_profile is not None)
         if owner and owner['checked']>checked:return 0
         resource_count=codex_resources(c,data,checked)
         store.save_state(c,'quota_policy:codex',dict(checked=checked,
@@ -724,7 +740,8 @@ def poll_limits(store,settings,manual=False):
                 # Like the Claude/Devin reads, credentials never follow a redirect.
                 with urllib.request.build_opener(NoRedirect).open(req,timeout=20) as response:data=json.load(response)
             with store.connect() as c:
-                n=(codex_limits if route=='codex' else go_limits)(store,c,data,time.time())
+                n=(codex_limits(store,c,data,time.time(),account_profile=account.get('account/read'))
+                   if route=='codex' else go_limits(store,c,data,time.time()))
                 store.source(c,route,'ok' if n else 'unavailable','' if n else '원본 한도 필드 미제공')
                 if route=='opencode-go':store.save_state(c,'opencode_go_poll',{})
         except Exception as exc:
@@ -753,28 +770,16 @@ def poll_limits(store,settings,manual=False):
                 # from the same app-server and is kept only as a hashed identity.
                 try:
                     from .resources import observe_account
-                    profile=account.get('account/read')
-                    profile=profile if isinstance(profile,dict) else {}
-                    routing=profile.get('workspaceRouting')
-                    routing=routing if isinstance(routing,dict) else {}
-                    ident=data.get('accountId') if isinstance(data,dict) else None
-                    if not isinstance(ident,str) or not ident:ident=routing.get('chatgptAccountId')
-                    known_ident=isinstance(ident,str) and bool(ident)
-                    workspace=data.get('workspaceId') if isinstance(data,dict) else None
-                    native=profile.get('account')
-                    native=native if isinstance(native,dict) else {}
-                    from .store import identity
-                    native_type,email=native.get('type'),native.get('email')
-                    revision=identity(native_type,email) if (native_type=='chatgpt' and isinstance(email,str) and email) or native_type in ('apiKey','amazonBedrock') else None
+                    ident,revision=_codex_account_metadata(data,account.get('account/read'))
                     usable_usage=codex_usage_buckets(account.get('account/usage/read')) is not None
-                    observed=known_ident or revision is not None or usable_usage
+                    observed=ident is not None or revision is not None or usable_usage
                     # Silence is not a new login. Preserve the last account and
                     # receipt time on a complete failure; fresh unbound usage still
                     # gets an unknown epoch rather than the previous account.
                     if observed:
                         with store.connect() as c:
-                            observe_account(c,'codex',(ident,workspace) if known_ident else None,
-                                            time.time(),credential_revision=revision)
+                            observe_account(c,'codex',ident,time.time(),credential_revision=revision,
+                                            retain_matching_identity=True)
                     record_codex_account(store,account.get('account/usage/read'))
                     if poll_error and not observed:
                         with store.connect() as c:

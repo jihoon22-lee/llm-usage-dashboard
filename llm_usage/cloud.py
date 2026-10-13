@@ -171,23 +171,35 @@ def collect_claude_cloud(store,settings,fetch=None):
         key='claude-cloud:'+item['id']
         with store.connect() as c:
             seen=store.state(c,key)
+        state=seen if isinstance(seen,dict) else {}
+        supplement_retry=state.get('supplement_retry_at',state.get('checked',0)+86400)
+        supplement_paused=bool(state.get('supplement_unavailable') and state.get('updated')==item.get('updated_at')
+                               and state.get('parser')==PARSER_VERSION and time.time()<supplement_retry)
+        supplement_due=state.get('supplement_unavailable') and not supplement_paused
         if isinstance(seen,dict) and not seen.get('cursor') and not seen.get('teleport_cursor') and seen.get('parser')==PARSER_VERSION and seen.get('updated')==item.get('updated_at') and time.time()-seen.get('checked',0)<86400:
-            if seen.get('missing'):missing+=1
-            if seen.get('supplement_unavailable'):unavailable+=1
             # Final snapshots can arrive after updated_at. Recheck recently active sessions.
-            if seen.get('missing') or seen.get('supplement_unavailable') or time.time()-(stamp(item.get('updated_at')) or 0)>900:continue
+            if seen.get('missing') or (not supplement_due and time.time()-(stamp(item.get('updated_at')) or 0)>900):
+                if seen.get('missing'):missing+=1
+                if supplement_paused:unavailable+=1
+                continue
         try:
             endpoint='teleport-events'
-            state=seen if isinstance(seen,dict) else {}
+            supplement_state=dict(supplement_unavailable=True,supplement_retry_at=supplement_retry) if supplement_paused else {}
             scan_updated=state.get('scan_updated',item.get('updated_at')) if state.get('cursor') or state.get('teleport_cursor') else item.get('updated_at')
             entries,teleport_cursor=_batch(fetch,headers,item,state.get('teleport_cursor'),'teleport-events')
             with store.connect() as c:
                 _ingest(store,c,fetch,headers,item,model_provider,entries=entries)
                 if teleport_cursor:
                     store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,
-                        teleport_cursor=teleport_cursor,cursor=state.get('cursor'),parser=PARSER_VERSION,checked=time.time()))
+                        teleport_cursor=teleport_cursor,cursor=state.get('cursor'),parser=PARSER_VERSION,checked=time.time(),**supplement_state))
             if teleport_cursor:
+                if supplement_paused:unavailable+=1
                 backfilling+=1
+                continue
+            if supplement_paused:
+                unavailable+=1
+                with store.connect() as c:
+                    store.save_state(c,key,dict(updated=scan_updated,parser=PARSER_VERSION,checked=time.time(),**supplement_state))
                 continue
             # Preserve the established transcript path even when the supplemental
             # endpoint fails. Only commit its checkpoint after a full page walk.
@@ -204,7 +216,8 @@ def collect_claude_cloud(store,settings,fetch=None):
             if exc.code==404 and endpoint=='events':
                 unavailable+=1
                 with store.connect() as c:
-                    store.save_state(c,key,dict(updated=scan_updated,supplement_unavailable=True,parser=PARSER_VERSION,checked=time.time()))
+                    store.save_state(c,key,dict(updated=scan_updated,supplement_unavailable=True,
+                        supplement_retry_at=time.time()+86400,parser=PARSER_VERSION,checked=time.time()))
                 continue
             if exc.code!=404:
                 failed+=1
