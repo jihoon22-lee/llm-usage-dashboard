@@ -38,3 +38,12 @@
 - 배포 시 두 서비스를 정지하고 uv 0.12.23 `sync --locked --no-dev` → 기존 배포기 → 두 프로세스 릴리스·health·새 heartbeat·사설 인증 화면을 확인한다. 실제 적용 결과는 확인 후 이 문서에 추가한다.
 
 - 독립 환경의 uv 0.12.23 `sync --locked`와 설치 메타데이터 0.6.2 일치, lock의 프로젝트 버전 외 변경 없음, 공개 파일·문서 링크·diff 검사를 확인했다.
+
+## v0.6.2 게시·운영 검증
+
+- 버전 PR #44는 필수 CI 및 코드·보안 리뷰를 통과했고 `a67c54e`로 병합했다. [main CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/38333889248) 성공 후 같은 commit에 v0.6.2 태그를 게시했다.
+- 배포 전 기존 웹·수집기 프로세스는 모두 v0.6.1의 `e4c0de9`에서 실행됐고 health·heartbeat가 정상이었다. 서비스 설정의 DB 일치와 기존 주기 백업의 시각도 확인했다. 최근 백업은 확인 시점 약 24시간 전이며 배포 직전 스냅샷으로 간주하지 않는다.
+
+- [Release 워크플로](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/38334122360)의 모든 검사와 게시가 성공했다. 공개 v0.6.2의 wheel·sdist·release-manifest.json·SHA256SUMS를 직접 내려받아 commit·tag·run ID와 모든 파일 해시를 대조했다. immutable 릴리스임을 확인하고 변경 사항·업데이트 주의사항·CI 출처를 릴리스 노트에 남겼다.
+
+- 현재 운영 배포는 관리자 서비스 정지 대기 상태다. v0.6.2 게시와 파일 검증은 완료됐지만 운영 가상환경·릴리스 링크·두 서비스는 아직 변경하지 않았다. 관리자 터미널에서 두 서비스를 정지한 뒤 환경 갱신·배포·운영 검증을 이어서 수행해야 한다.
