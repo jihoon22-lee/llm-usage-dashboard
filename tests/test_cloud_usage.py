@@ -141,6 +141,50 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertEqual(source['status'], 'ok'); self.assertIn('기록 없음 1개', source['detail'])
 
 
+    def test_optional_404_does_not_delay_active_transcript_or_extend_retry(self):
+        api=FakeApi([[session('active',updated='2026-10-12T10:59:00Z')]],
+                    {'active':[[assistant('late','2026-10-12T10:59:00Z',20)]]})
+        optional=[]
+        def fetch(url,headers):
+            if '/events?' in url:
+                optional.append(url)
+                raise HTTPError(url,404,'Unavailable',{},None)
+            return api(url,headers)
+        self.run_collect(fetch)
+        api.events['active'][0]=[assistant('late','2026-10-12T10:59:00Z',40)]
+        self.run_collect(fetch)
+        self.assertEqual(self.rows()[0]['output'],40)
+        self.assertEqual(len(optional),1)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c,'claude-cloud:active')['supplement_retry_at'],NOW+86400)
+        # Successful transcript polling must not postpone the supplemental retry.
+        self.auth.write_text(json.dumps({'claudeAiOauth':{'accessToken':'TEST-ONLY-PRIVATE'}}))
+        with patch('llm_usage.cloud.time.time',return_value=NOW+600):
+            collect_claude_cloud(self.store,self.config,fetch=fetch)
+        with patch('llm_usage.cloud.time.time',return_value=NOW+86400):
+            collect_claude_cloud(self.store,self.config,fetch=fetch)
+        self.assertEqual(len(optional),2)
+        # Session changes allow early supplement recovery and clear its status.
+        api.sessions[0][0]['updated_at']='2026-10-13T11:01:00Z'
+        with patch('llm_usage.cloud.time.time',return_value=NOW+86460):
+            collect_claude_cloud(self.store,self.config,fetch=api)
+        with self.store.connect() as c:
+            self.assertFalse(self.store.state(c,'claude-cloud:active').get('supplement_unavailable'))
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0],'ok')
+
+    def test_legacy_optional_404_checkpoint_rechecks_active_transcript(self):
+        item=session('legacy',updated='2026-10-12T10:59:00Z')
+        from llm_usage.cloud import PARSER_VERSION
+        with self.store.connect() as c:
+            self.store.save_state(c,'claude-cloud:legacy',dict(updated=item['updated_at'],
+                supplement_unavailable=True,parser=PARSER_VERSION,checked=NOW-60))
+        api=FakeApi([[item]],{'legacy':[[assistant('late','2026-10-12T10:59:00Z',40)]]})
+        self.run_collect(api)
+        self.assertEqual(self.rows()[0]['output'],40)
+        self.assertFalse(any('/events?' in url for url,_ in api.calls))
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c,'claude-cloud:legacy')['supplement_retry_at'],NOW-60+86400)
+
     def test_missing_optional_endpoint_keeps_transcript_checkpoint_and_separate_status(self):
         api=FakeApi([[session('optional')]],{'optional':[[assistant('kept','2026-10-12T09:30:00Z',20)]]})
         calls=[]
@@ -308,6 +352,47 @@ class CodexAccountUsageTests(unittest.TestCase):
                     self.assertEqual(self.store.account_namespace(c,'codex'),before)
                     self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
                     self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'error')
+
+    def test_matching_profile_without_account_id_preserves_known_totals(self):
+        from llm_usage.resources import observe_account
+        from llm_usage.limits import record_codex_account
+        for reply in ('failure','quota','fresh_usage'):
+            with self.subTest(reply=reply):
+                with self.store.connect() as c:
+                    observe_account(c,'codex',('known',None),time.time(),
+                                    credential_revision=identity('chatgpt','same@example.test'))
+                    before=self.store.account_namespace(c,'codex')
+                record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
+                with self.store.connect() as c:checked=self.store.account_gap(c,'codex',NOW)['checked']
+                def fake(binary,**kw):
+                    kw['extra']['account/read']={'account':{'type':'chatgpt','email':'same@example.test'}}
+                    if reply=='failure':raise RuntimeError('quota unavailable')
+                    if reply=='fresh_usage':
+                        kw['extra']['account/usage/read']={'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=70)]}
+                    return {'rateLimits':{}}
+                self.poll_fake(fake)
+                with self.store.connect() as c:
+                    self.assertEqual(self.store.account_namespace(c,'codex'),before)
+                    gap=self.store.account_gap(c,'codex',NOW)
+                    expected=70 if reply=='fresh_usage' else 50
+                    self.assertEqual(gap['total_gap'],expected)
+                    if reply!='fresh_usage':self.assertEqual(gap['checked'],checked)
+                    self.assertEqual(self.store.usage(period='7d',now=NOW)['account_gap']['total_gap'],expected)
+
+    def test_changed_profile_without_account_id_does_not_reuse_known_totals(self):
+        from llm_usage.resources import observe_account
+        with self.store.connect() as c:
+            observe_account(c,'codex',('known',None),time.time(),
+                            credential_revision=identity('chatgpt','old@example.test'))
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-12',tokens=50)],NOW)
+        def fake(binary,**kw):
+            kw['extra']['account/read']={'account':{'type':'chatgpt','email':'new@example.test'}}
+            raise RuntimeError('quota unavailable')
+        self.poll_fake(fake)
+        with self.store.connect() as c:
+            self.assertTrue(self.store.account_namespace(c,'codex').startswith('epoch:'))
+            self.assertIsNone(self.store.account_gap(c,'codex',NOW))
+            self.assertEqual(c.execute('SELECT SUM(tokens) FROM account_token_buckets').fetchone()[0],50)
 
     def test_complete_poll_failure_preserves_last_account_observation(self):
         from llm_usage.resources import observe_account
