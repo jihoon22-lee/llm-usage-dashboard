@@ -71,7 +71,7 @@ Claude Code는 계정마다 설정 홈(`CLAUDE_CONFIG_DIR`, 기본 `~/.claude`)�
 | GET /api/usage | 기간·간격·분류·scope 통계 |
 | GET /api/limits, /api/collection | 한도·자원 관측 / 수집 상태 |
 | GET /api/session, /api/project | 세션·프로젝트 상세 |
-| GET /api/reports, /api/notify/log | 저장된 주간 리포트와 이번 주 현황·비밀 제외 알림 결과 |
+| GET /api/reports, /api/notify/log | 저장된 주간 리포트·월간 구독 결산과 이번 주 현황·비밀 제외 알림 결과 |
 | GET /api/bootstrap, /api/config | CSRF 초기화·마스킹 설정 |
 | POST /api/refresh | 202 수집 요청, collection의 완료 ID 확인 |
 | POST /api/config/*, /api/notify/test | 허용 설정 저장·알림 시험 |

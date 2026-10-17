@@ -79,7 +79,9 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
     subs=[dict(route=s['route'],monthly_usd=s['monthly_usd'],value=s['period_cost'],tokens=s['period_tokens'],
                ratio=s['period_cost']/s['monthly_usd'] if s['monthly_usd'] and s['period_cost'] is not None else None,
                **({'label':names[s['route']]} if s['route'] in names else {}))
-          for s in usage.get('subscriptions') or [] if (s['monthly_usd'] is not None or s['period_tokens']) and s['route'] not in later]
+          for s in usage.get('subscriptions') or [] if (s['monthly_usd'] is not None or s['period_tokens']) and s['route'] not in later
+          # A rebuild settles the same subscriptions as the first time.
+          and (stored is None or s['route'] in prices)]
     top=sorted((r for r in models['rows'] if r['model']!=RESIDUAL),key=lambda r:-token_total(r))[:5]
     projects=sorted((p for p in insight.get('projects') or [] if p['project']!=RESIDUAL),key=lambda p:-token_total(p))[:5]
     partial=first is not None and first>start.timestamp()

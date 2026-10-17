@@ -507,6 +507,19 @@ class AccountTests(unittest.TestCase):
         # The second account was first seen this month: last month has nothing to settle for it.
         self.assertEqual([(s['route'], s.get('label'), s['value']) for s in settled['subscriptions']], [(FAMILY, 'Pro', 1.0)])
 
+    def test_monthly_rebuild_settles_the_same_accounts_as_the_first_time(self):
+        from llm_usage import monthly
+        accounts(self.store, self.cfg, NOW)
+        last = monthly.shift(monthly.month_start(NOW), -1)
+        with self.store.connect() as c:
+            self.store.event(c, 'm1', last.timestamp() + 86400, 'Anthropic', 'claude-code', 'claude-test',
+                             dict(uncached_input=1_000_000), account=FAMILY)
+        # The original account's subscription was ended before last month began.
+        first = monthly.build(self.store, last, NOW, None, {'claude-code': 20}, {FAMILY: {'since': last.timestamp() - 1}})
+        self.assertEqual(first['subscriptions'], [])
+        # A rebuild has no end dates to go by; it settles what the first settlement did.
+        self.assertEqual(monthly.build(self.store, last, NOW + 60, None, stored=first)['subscriptions'], [])
+
     def test_hook_installer_merges_with_existing_hooks_once(self):
         settings_file = self.h.default / 'settings.json'
         existing = {'statusLine': {'type': 'command', 'command': 'echo x'},
