@@ -3,6 +3,12 @@
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>Number(v||0).toLocaleString('ko-KR');
 const compact=v=>Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:2}).format(v||0);
+// Balances keep at most two decimals: none for counts, won/yen or 100+ credits.
+const amountText=(v,unit)=>{const n=Number(v);if(v==null||!Number.isFinite(n))return '—';
+ const digits=unit==='count'||unit==='KRW'||unit==='JPY'||(unit==='credit'&&Math.abs(n)>=100)?0:2;
+ return n.toLocaleString('ko-KR',{maximumFractionDigits:digits});};
+// IDs that share a prefix (time-ordered UUIDs of one minute) stay distinguishable.
+const shortId=id=>{const s=String(id??'');return s.length>12?s.slice(0,8)+'…'+s.slice(-4):s;};
 const when=t=>t?new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'확인 기록 없음';
 const left=s=>s==null?'초기화 정보 미제공':s<=0?'초기화 경과 · 재확인 대기':`${Math.floor(s/86400)?Math.floor(s/86400)+'일 ':''}${Math.floor(s%86400/3600)}시간 ${Math.floor(s%3600/60)}분 남음`;
 // Dense rows (overview, reset schedule): the two largest units, without "남음".
@@ -63,12 +69,20 @@ function budgetState(usage,budget){
 const shortService={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'};
 // 'Claude(Max 5x)' for a Claude account when several exist, 'Claude' otherwise.
 const serviceShort=(route,label)=>{const base=shortService[familyOf(route)]||route,name=label??accountLabel(route);return familyOf(route)==='claude-code'&&name?`${base}(${name})`:base;};
-// Antigravity buckets are '<family>-<window>[-n]'; anything else keeps its own name.
-const agyBucket=bucket=>{const m=/^(gemini|3p)-(5h|weekly)(?:-(\d+))?$/.exec(bucket);return m&&{family:m[1]==='3p'?'3rd party':'Gemini',window:m[2]==='5h'?'5시간':'주간',suffix:m[3]||''};};
+// Antigravity buckets are '<family>[-<pool>]-<window>[-n]' ('gemini-argon-wtu-weekly' names
+// its pool); anything else keeps its own name.
+const agyBucket=bucket=>{const m=/^(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?$/.exec(bucket);
+ return m&&{family:m[1]==='3p'?'3rd party':'Gemini',window:m[3]==='5h'?'5시간':'주간',suffix:[m[2],m[4]].filter(Boolean).join(' ')};};
+const BUCKET_NAMES={five_hour:'5시간',seven_day:'주간',seven_day_opus:'Opus 주간',seven_day_sonnet:'Sonnet 주간',seven_day_oauth_apps:'앱 주간',
+ seven_day_cowork:'Cowork 주간',seven_day_omelette:'추가 주간 한도',seven_day_overage_included:'추가 포함량 주간',rolling:'5시간',daily:'일간',weekly:'주간',monthly:'월간'};
 const bucketName=r=>{
  const agy=r.route==='antigravity'&&agyBucket(r.bucket);
  if(agy)return agy.family+(agy.suffix?' '+agy.suffix:'');
- return ({five_hour:'5시간',seven_day:'주간',seven_day_opus:'Opus 주간',seven_day_sonnet:'Sonnet 주간',seven_day_oauth_apps:'앱 주간',rolling:'5시간',daily:'일간',weekly:'주간',monthly:'월간'})[r.bucket]||r.display_name||r.bucket;
+ if(BUCKET_NAMES[r.bucket])return BUCKET_NAMES[r.bucket];
+ if(r.display_name&&r.display_name!==r.bucket)return r.display_name;
+ // A per-model weekly window without a stored label ('seven_day_fable' → 'Fable 주간').
+ const model=/^seven_day_([a-z0-9]+(?:_[a-z0-9]+)*)$/.exec(r.bucket||'');
+ return model?model[1].split('_').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ')+' 주간':r.display_name||r.bucket;
 };
 // Antigravity lists the 5h window before the weekly one, Gemini first in each.
 function agyWindows(rows){
@@ -99,6 +113,8 @@ const scopeText=scope=>{const i=scope.indexOf(':');if(i<0)return scope;
  return (SCOPE_LABELS[kind]||kind)+': '+name;};
 // Per-account source names ('claude-oauth:<hash>') read as 'claude-oauth · Max 5x'.
 const sourceName=name=>{const m=/^(.*):([0-9a-f]{12})$/.exec(name||'');if(!m)return name;const label=accountLabel('claude-code:'+m[2]);return label?`${m[1]} · ${label}`:name;};
+// The source kind without the account suffix: 'claude-oauth:<hash>' → 'claude-oauth'.
+const sourceBase=name=>String(name||'').replace(/:[0-9a-f]{12}$/,'');
 const SOURCE_GROUPS=[['Claude',/claude/i],['Codex',/codex/i],['Antigravity',/antigravity/i],['Devin',/devin/i],['OpenCode',/opencode/i],
  ['운영',/^(수집기|일일 백업|원본 대조|외부 알림|데이터베이스)$/],['내부 작업',/^(normalization|session-backfill)$/]];
 const SOURCE_RANK={error:0,unavailable:1,partial:2,stale:3,ok:4,fresh:4,idle:5,ended:5};

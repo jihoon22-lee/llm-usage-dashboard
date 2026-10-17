@@ -512,6 +512,7 @@ details.source-group>summary{cursor:pointer;margin-bottom:0}
 .budget-bar.level-mid i{background:var(--warning-ink)}.budget-bar.level-low i{background:var(--error-ink)}
 .report-head{font-size:var(--fs-small);margin-bottom:8px}
 .report-table td,.report-table th{padding:6px 8px;font-size:var(--fs-small)}
+@media(max-width:600px){.report-table .col-req{display:none}.report-table td,.report-table th{padding:6px 5px}}
 .report-older{margin-top:10px;font-size:var(--fs-small)}
 .report-older details{margin:6px 0 0 10px}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */

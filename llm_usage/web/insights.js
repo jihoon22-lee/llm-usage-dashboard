@@ -25,7 +25,9 @@ function renderInsights(data){
   const ratio=s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null;
   const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
   const result=s.monthly_usd==null?(s.monthly_equiv!=null?`월 환산 ${usd(s.monthly_equiv)} · 설정에서 구독료 입력`:'설정에서 구독료 입력'):s.monthly_usd===0?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—';
-  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:'기간 내 미산정'} · ${price}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
+  // No tokens in the period is stated as such; tokens without a list price stay 미산정.
+  const period=s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:s.period_tokens===0?'기간 내 사용 기록 없음':'기간 내 미산정';
+  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${period} · ${price}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
  }).join(''):month?'':'<p class="hint">구독료가 설정되지 않았습니다.</p>');
  applyGeometry($('subvalue'));
  renderCalendar(data);renderSessions(data);renderProjects(data);
@@ -83,13 +85,13 @@ function renderSessions(data){
   const span=when(s.first_ts)+(s.last_ts>s.first_ts+60?' ~ '+when(s.last_ts):'');
   // A Claude session names the accounts it used once there are several.
   const accounts=multiClaude()&&familyOf(s.route)==='claude-code'&&(s.accounts||[]).length?`<small class="session-accounts">${esc(s.accounts.map(a=>accountLabel(a)||a).join(' · '))}</small>`:'';
-  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span>${accounts}</td><td><code>${esc(String(s.session).slice(0,8))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(total(s))}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
+  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span>${accounts}</td><td><code data-tip="${esc(String(s.session))}">${esc(shortId(s.session))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(total(s))}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
  }).join('')||'<tr><td colspan="8" class="empty">선택 기간에 세션 귀속된 기록이 없습니다.</td></tr>';
  const sessTotal=data.sessions_total??sorted.length;
  $('sess-page').textContent=sorted.length?`${sessPage+1}/${pages} · ${sessTotal>100?`전체 ${fmt(sessTotal)}개 중 상위 100개`:`${fmt(sessTotal)}개`}`:'';
  $('sess-prev').disabled=sessPage<=0;$('sess-next').disabled=sessPage>=pages-1;
  $('sessions-note').textContent=(data.sessionless_requests?`세션 미귀속 요청 ${fmt(data.sessionless_requests)}건(세션 정보가 없는 기록). `:'')+'Antigravity는 대화 파일 단위로 묶은 해시 ID이며 프로젝트는 기록되지 않습니다. '
-  +'세션 ID는 앞 8자만 표시하고 복사 버튼으로 전체를 가져올 수 있습니다. 상세는 모델별 사용량과 시간대별 흐름입니다. 대화 내용은 저장하지 않습니다.';
+  +'세션 ID는 앞 8자와 끝 4자만 표시하고 복사 버튼으로 전체를 가져올 수 있습니다. 상세는 모델별 사용량과 시간대별 흐름입니다. 대화 내용은 저장하지 않습니다.';
  // A refresh redraws the table; keep an opened session's detail under its row.
  const opened=openSession&&$('sessions').querySelector(`.sess-open[data-id="${CSS.escape(openSession)}"]`);
  if(opened&&sessionDetails.has(openSession))opened.closest('tr').insertAdjacentHTML('afterend',sessionDetails.get(openSession));
@@ -103,7 +105,7 @@ async function loadReports(){
 }
 function reportHtml(r){
  return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${fmt(r.totals.requests)}회 · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
-  +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th>요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td>${esc(routeNames[x.route]||x.route)}</td><td>${compact(x.tokens)}</td><td>${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
+  +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th class="col-req">요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td><span class="svc-full">${esc(routeNames[x.route]||x.route)}</span><span class="svc-short">${esc(shortService[x.route]||x.route)}</span></td><td data-tip="${fmt(x.tokens)}">${compact(x.tokens)}</td><td class="col-req">${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
   +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
   +`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:e.account_label}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`;
 }
@@ -151,7 +153,7 @@ function projectDetailHtml(d){
  return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''} → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}${budget}</p>`
   +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽</p>`
   +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(x=>`<tr><td>${esc(x.model)}</td><td>${esc(shortService[x.route]||x.route)}</td><td>${fmt(x.requests)}</td><td>${fmt(x.tokens)}</td><td>${usd(x.cost)}</td></tr>`).join('')}</tbody></table>`
-  +(d.sessions.length?`<p class="hint">많이 쓴 세션: ${d.sessions.map(x=>`<code>${esc(String(x.session).slice(0,8))}</code> ${compact(x.tokens)}`).join(' · ')}</p>`:'')+'</div></td></tr>';
+  +(d.sessions.length?`<p class="hint">많이 쓴 세션: ${d.sessions.map(x=>`<code data-tip="${esc(String(x.session))}">${esc(shortId(x.session))}</code> ${compact(x.tokens)}`).join(' · ')}</p>`:'')+'</div></td></tr>';
 }
 $('projects').addEventListener('click',async event=>{
  const button=event.target.closest('.proj-open');if(!button)return;
@@ -192,11 +194,11 @@ function calStats(rows,weeks){
   run=prev!=null&&t-prev===864e5?run+1:1;prev=t;streak=Math.max(streak,run);
  }
  const peak=active.reduce((a,r)=>a&&a.v>=r.v?a:r,null);
- const items=[[weeks+'주 합계',metricFmt(sum)+metricUnit()],
+ const items=[[weeks+'주 합계',metricShort(sum)+metricUnit()],
   ['활동일',fmt(active.length)+'일'],
   ['최장 연속 활동',fmt(streak)+'일'],
-  ['활동일 평균',active.length?metricFmt(costMode?sum/active.length:Math.round(sum/active.length))+metricUnit():'—'],
-  ['최대일',peak?peak.day.slice(5)+' · '+metricFmt(peak.v)+metricUnit():'—']];
+  ['활동일 평균',active.length?metricShort(costMode?sum/active.length:Math.round(sum/active.length))+metricUnit():'—'],
+  ['최대일',peak?peak.day.slice(5)+' · '+metricShort(peak.v)+metricUnit():'—']];
  if(costMode&&vals.length>rated.length)items.push(['미산정',fmt(vals.length-rated.length)+'일']);
  return '<dl class="cal-stats">'+items.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')+'</dl>';
 }

@@ -40,7 +40,9 @@ def limits_fixture():
 
 def sources(collector_age):
     now = time.time()
+    # A failure that began minutes after a success stays in 수집 상태, not in the alert chips.
     return [dict(name='수집기', status='ok' if collector_age < 600 else 'stale', checked=now-collector_age, detail='idle'),
+            dict(name='codex-account-usage', status='error', checked=now-60, last_success=now-300, detail='HTTP 503'),
             dict(name='claude-code', status='idle', checked=now-3*86400,
                  detail='최근 24시간 상태줄 수신 없음 · 터미널(TUI) 실행 중에만 수신 · 한도는 계정/앱 조회로 표시')]
 

@@ -12,7 +12,7 @@ function renderHeatmap(cells){
  for(let d=0;d<7;d++)for(let h=0;h<24;h++){const v=grid[d][h];if(v==null)continue;if(d===0||d===6)we+=v;else wd+=v;if(v>peak.v)peak={d,h,v};}
  // Five weekdays against two weekend days: compare per-day averages, not raw shares.
  const days=lastUsage?dayKinds(lastUsage.start,lastUsage.end_exclusive,Date.now()/1000):{weekday:0,weekend:0};
- const perDay=(v,n)=>n?metricFmt($('metric').value==='cost'?v/n:Math.round(v/n))+metricUnit():'—';
+ const perDay=(v,n)=>n?metricShort($('metric').value==='cost'?v/n:Math.round(v/n))+metricUnit():'—';
  const ratio=days.weekday&&days.weekend&&wd?` (주말이 평일의 ${((we/days.weekend)/(wd/days.weekday)).toFixed(1)}배)`:'';
  const summary=peak.v?`<p class="hint heat-summary">하루 평균 평일 ${perDay(wd,days.weekday)} · 주말 ${perDay(we,days.weekend)}${ratio} · 가장 몰린 시간 ${dows[peak.d]}요일 ${peak.h}시</p>`:'';
  $('heatmap').innerHTML=html+'</div></div>'+(max?`<p class="hint heat-legend">시간당 최대 ${compact(max)} ${metricName()} 기준</p>`:'<p class="hint">선택 기간에 집계할 사용 기록이 없습니다.</p>')+summary;
@@ -293,11 +293,15 @@ function renderAlerts(limits,usage){
  if((usage.unpriced_models||[]).length)items.push({text:`단가 미등록 모델 ${usage.unpriced_models.length}개 · ${usage.unpriced_models.slice(0,3).join(', ')}${usage.unpriced_models.length>3?' 외':''}`,view:'settings'});
  // Only states the owner can act on become chips: an 'unavailable' source (an app that is
  // closed, a status line not in use, a path that does not exist) stays in 수집 상태.
- (usage.sources||[]).filter(s=>s.status==='error').forEach(s=>items.push({text:`${s.name} ${statuses[s.status]||s.status}`,sources:true}));
- (usage.sources||[]).filter(s=>['수집기','일일 백업','원본 대조'].includes(s.name)&&(s.status==='stale'||s.status==='error'))
+ // A failed poll the next cycle usually repairs also stays there: the chip appears once the
+ // source has not succeeded for 30 minutes, when the external notification is sent too.
+ const ops=['수집기','일일 백업','원본 대조'],now=limits.now??Date.now()/1000;
+ const lasting=s=>s.status==='error'&&!ops.includes(s.name)&&(!s.last_success||now-s.last_success>=1800);
+ (usage.sources||[]).filter(lasting).forEach(s=>items.push({text:`${sourceName(s.name)} ${statuses[s.status]||s.status}`,sources:true}));
+ (usage.sources||[]).filter(s=>ops.includes(s.name)&&(s.status==='stale'||s.status==='error'))
   .forEach(s=>items.push({text:`${s.name} ${statuses[s.status]||s.status}`,sources:true}));
- const activeStale=s=>s.status==='stale'&&(s.name.endsWith('-records')||s.name.endsWith('-oauth')||s.name.startsWith('WSL ')||s.name.startsWith('Windows '));
- (usage.sources||[]).filter(activeStale).forEach(s=>items.push({text:`${s.name} 수집 지연`,sources:true}));
+ const activeStale=s=>{const base=sourceBase(s.name);return s.status==='stale'&&(base.endsWith('-records')||base.endsWith('-oauth')||base.startsWith('WSL ')||base.startsWith('Windows '));};
+ (usage.sources||[]).filter(activeStale).forEach(s=>items.push({text:`${sourceName(s.name)} 수집 지연`,sources:true}));
  // A stopped collector freezes every number on the page, so it is stated above all.
  const collector=(usage.sources||[]).find(s=>s.name==='수집기');
  const banner=$('collector-banner');

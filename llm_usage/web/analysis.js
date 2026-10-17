@@ -337,6 +337,8 @@ function bucketLabel(point,short=false){
 const metricValue=v=>{const m=$('metric').value;return m==='requests'?(v.requests||0):m==='cost'?(v.cost||0):total(v||{});};
 const metricName=()=>({requests:'요청 수',cost:'비용 추정'})[$('metric').value]||'토큰';
 const metricFmt=v=>$('metric').value==='cost'?usd(v):fmt(v);
+// Summary lines shorten large counts (HTML); the exact count stays in the tooltip.
+const metricShort=v=>$('metric').value==='cost'?usd(v):`<span data-tip="${fmt(v)}${metricUnit()}">${compact(v)}</span>`;
 // Cost buckets with tokens of unpriced models say so instead of reading as $0.
 const costNote=v=>$('metric').value==='cost'&&v&&v.unpriced?` <small>+미산정 ${compact(v.unpriced)} 토큰</small>`:'';
 const metricUnit=()=>({tokens:' 토큰',requests:'회'})[$('metric').value]||'';

@@ -140,6 +140,23 @@ class NotifyTests(unittest.TestCase):
             sent=notify.collector_started(self.store,{'ntfy_url':CHANNELS['ntfy_url']},NOW)
         self.assertIn('약 25분',sent[0][2])
 
+    def test_account_source_failure_names_the_account(self):
+        self.sent=[]
+        limits=dict(low_percent=15,limits=[dict(route='claude-code:abababababab',bucket='five_hour',remaining=50,resets=NOW+3600,
+                                                status='fresh',account_label='Max 5x')])
+        failing=[dict(name='claude-oauth:abababababab',status='error',detail='HTTP 500'),
+                 dict(name='claude-credits:cdcdcdcdcdcd',status='error',detail='HTTP 500')]
+        self.run_eval(limits,sources=failing)
+        sent=self.run_eval(limits,now=NOW+31*60,sources=failing)
+        # An account without a known label keeps its source name.
+        self.assertEqual(sorted(m[1] for m in sent),['claude-credits:cdcdcdcdcdcd 수집 실패 지속','claude-oauth · Max 5x 수집 실패 지속'])
+
+    def test_labels_name_pool_and_optional_buckets(self):
+        self.assertEqual(notify._label(dict(route='antigravity',bucket='gemini-argon-wtu-weekly')),'Antigravity 주간 Gemini argon-wtu')
+        self.assertEqual(notify._label(dict(route='antigravity',bucket='3p-5h-2')),'Antigravity 5시간 3rd party 2')
+        self.assertEqual(notify._label(dict(route='antigravity',bucket='gemini-weekly')),'Antigravity 주간 Gemini')
+        self.assertEqual(notify._label(dict(route='claude-code',bucket='seven_day_overage_included')),'Claude 추가 포함량 주간')
+
     def test_spike_is_sent_once_per_hour(self):
         self.sent=[]
         spike=dict(hour_start=NOW-NOW%3600,tokens=60e6,ratio=3.2)

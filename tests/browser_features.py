@@ -123,6 +123,9 @@ with sync_playwright() as p:
     assert first_total.inner_text() != exact and first_total.locator('[data-tip]').count() == 1
     page.locator('#num-compact').click()
     expect(first_total).to_have_text(exact)
+    # Long session IDs keep their last characters so neighbours stay distinguishable.
+    expect(page.locator('#sessions code').first).to_have_text('fixture-…sion')
+    expect(page.locator('#sessions code').first).to_have_attribute('data-tip', 'fixture-session')
     # A session opens its detail and closes again; project budgets show in the projects table.
     page.locator('.sess-open').first.click()
     detail = page.locator('.sess-detail-row')
@@ -180,6 +183,11 @@ with sync_playwright() as p:
     assert abs(box['y']+box['height']-844) <= 1, box
     mobile.locator('#tabs [data-view="reports"]').click()
     expect(mobile.locator('#view-reports')).to_be_visible()
+    # The weekly report table fits a phone: short service names, no request column.
+    table = mobile.locator('#reports .report-table')
+    assert table.locator('tbody td').first.inner_text() == 'Codex', table.locator('tbody td').first.inner_text()
+    expect(table.locator('th.col-req')).to_be_hidden()
+    assert mobile.evaluate("(()=>{const w=document.querySelector('#reports .table-wrap');return w.scrollWidth<=w.clientWidth;})()")
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
     mobile.screenshot(path=str(output/'features-mobile.png'), full_page=True)
     assert not [p for p in posts if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')], posts
