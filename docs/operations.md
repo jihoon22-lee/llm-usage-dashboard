@@ -47,6 +47,12 @@ git merge --ff-only v0.6.2
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
 
+## Claude 다중 계정 업데이트 (main, 0.6.2 이후)
+
+외부 의존성과 프로젝트 버전은 0.6.2와 같습니다. 운영 `.venv` 동기화 없이 main을 fast-forward한 뒤 기존 배포기로 전환합니다.
+시작 시 events에 account 열과 claude_accounts·claude_evidence·claude_dirty 테이블을 추가하고 시간별 집계를 한 번 다시 만듭니다. 이후 수집기가 기존 Claude 요청을 계정에 배정합니다. 이전 릴리스로 되돌려도 추가 열·테이블은 무시되고 시간별 집계는 각 릴리스가 다시 만듭니다.
+배포 후 `.venv/bin/llm-usage install-hooks`를 명시적으로 실행해야 계정 구분 훅이 연결됩니다. 이미 실행 중인 Claude Code 프로세스는 훅 없이 프로세스 기록으로만 구분하며, 두 번째 계정 연결 뒤 근거 없이 끝난 세션은 ‘계정 미확인’으로 남습니다. 상태 탭의 `claude-accounts`에서 훅 기록 수와 미확인 요청 수를 확인합니다.
+
 ## 0.6.2 업데이트
 
 0.6.2는 Codex의 동일 계정 revision 부분 응답에서 기존 합계를 보존하고, Claude 보조 API의 404가
