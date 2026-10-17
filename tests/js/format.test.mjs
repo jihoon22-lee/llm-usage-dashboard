@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -332,4 +332,55 @@ test('the Codex account residual shows under its configured name',()=>{
     f.setResidualName(empty);
     assert.equal(f.residualText(f.RESIDUAL),'로컬 미기록');
   }
+});
+
+test('series colors: the first five slots differ in hue in every theme',()=>{
+  const css=readFileSync(new URL('../../llm_usage/web/style.css',import.meta.url),'utf8');
+  const themes={};
+  for(const line of css.split('\n')){
+    const m=line.match(/^:root(?:\[data-theme="(\w+)"\])?\s*\{/);
+    if(!m||!line.includes('--chart-0'))continue;
+    themes[m[1]||'forest']=Array.from({length:8},(_,i)=>line.match(new RegExp(`--chart-${i}:(#[0-9a-f]{6})`))[1]);
+  }
+  assert.deepEqual(Object.keys(themes).sort(),['amber','blue','charcoal','forest','midnight','ocean','paper','rose','violet']);
+  const hue=hex=>{const [r,g,b]=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255),max=Math.max(r,g,b),d=max-Math.min(r,g,b);
+    return ((max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4)*60+360)%360;};
+  const gap=(a,b)=>{const d=Math.abs(a-b);return Math.min(d,360-d);};
+  // Codex, Claude, Antigravity, Devin and OpenCode Go (slots 0-4) never share a hue family.
+  const closest=order=>palette=>{const hues=order.slice(0,5).map(i=>hue(palette[i]));
+    return Math.min(...hues.flatMap((a,i)=>hues.slice(i+1).map(b=>gap(a,b))));};
+  for(const [theme,palette] of Object.entries(themes)){
+    const order=f.chartOrder(theme);
+    assert.deepEqual([...order].sort(),[0,1,2,3,4,5,6,7],theme);
+    assert.ok(closest(order)(palette)>=25,`${theme}: ${closest(order)(palette)}`);
+  }
+  // The stored order alone puts an accent and its pale tint side by side in light themes.
+  assert.ok(closest([0,1,2,3,4,5,6,7])(themes.paper)<10);
+});
+
+test('services keep their series slot; further Claude accounts follow in name order',()=>{
+  assert.deepEqual({...f.groupSlots('model',['codex','gpt-test'])},{});
+  const routes=f.groupSlots('route',['claude-code','codex']);
+  assert.deepEqual([routes.codex,routes['claude-code'],routes.antigravity,routes.devin,routes['opencode-go']],[0,1,2,3,4]);
+  const accounts=f.groupSlots('account',['claude-code:unknown','codex','claude-code:abababababab','claude-code']);
+  assert.deepEqual([accounts.codex,accounts['claude-code'],accounts['claude-code:abababababab'],accounts['claude-code:unknown']],[0,1,6,7]);
+  // The shown names decide the order, not the account IDs behind them.
+  f.setClaudeAccounts([{route:'claude-code:abababababab',label:'Zeta'},{route:'claude-code:cdcdcdcdcdcd',label:'Alpha'}]);
+  const named=f.groupSlots('account',['claude-code:abababababab','claude-code:cdcdcdcdcdcd']);
+  assert.deepEqual([named['claude-code:cdcdcdcdcdcd'],named['claude-code:abababababab']],[6,7]);
+  // A known account keeps its slot in a period where an earlier-named one has no use,
+  // and an unknown-account label comes after every known account.
+  const alone=f.groupSlots('account',['claude-code:abababababab','claude-code:unknown']);
+  assert.deepEqual([alone['claude-code:abababababab'],alone['claude-code:unknown']],[7,8]);
+  f.setClaudeAccounts([]);
+  assert.deepEqual({...f.groupSlots('provider',['Anthropic'])},{OpenAI:0,Anthropic:1,Google:2,Cognition:3});
+});
+
+test('calendar steps follow the rank among the shown days',()=>{
+  // One very large day no longer leaves every other day in the first step.
+  const level=f.rankLevels([0,10,20,30,40,50,60,70,80,90,1_000_000]);
+  assert.deepEqual([0,null,10,20,30,90,1_000_000].map(level),[0,0,1,1,2,5,5]);
+  assert.deepEqual([5,5,5].map(f.rankLevels([5,5,5])),[5,5,5]);
+  assert.equal(f.rankLevels([7])(7),5);
+  assert.equal(f.rankLevels([])(3),5);
 });

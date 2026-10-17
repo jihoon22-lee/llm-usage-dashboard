@@ -17,7 +17,7 @@ const tableCells=(row,denom)=>fields.map(k=>{
  return k==='total'?cell+`<td class="share-cell">${denom?percent(modelTotal(row)/denom*100):'—'}</td>`:cell;
 }).join('');
 let colors=[],mutedColor='#888';
-function updateColors(){const style=getComputedStyle(document.documentElement);colors=Array.from({length:8},(_,i)=>style.getPropertyValue('--chart-'+i).trim());mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;}
+function updateColors(){const style=getComputedStyle(document.documentElement);colors=chartOrder(document.documentElement.dataset.theme).map(i=>style.getPropertyValue('--chart-'+i).trim());mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;}
 // The browser chrome color follows the active theme's page background.
 // theme.js fires llm-theme-change before this deferred script registers its
 // listener, so sync once at startup too.

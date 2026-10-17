@@ -74,6 +74,43 @@ const RESIDUAL='/account-residual',RESIDUAL_DEFAULT='로컬 미기록';
 let residualName=RESIDUAL_DEFAULT;
 const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
 const residualText=v=>v===RESIDUAL?residualName:v;
+// Series colors. Light themes keep a pale tint of the accent in --chart-1, which beside
+// --chart-0 reads as one color, so series take it last; the dark themes' palettes are
+// already spread. In ocean, sand comes before blue (blue is close to the teal accent).
+const CHART_ORDER={charcoal:[0,1,2,3,4,5,6,7],midnight:[0,1,2,3,4,5,6,7],ocean:[0,3,2,4,5,6,7,1]};
+const chartOrder=theme=>CHART_ORDER[theme]||[0,2,3,4,5,6,7,1];
+// Each service keeps one series slot in every period, by service or by maker. Further
+// Claude accounts take the next free slots in name order: every known account first,
+// shown in the period or not, so one account keeps its color; then any other Claude
+// label of the period (계정 미확인). Other groupings have none.
+const ROUTE_SLOTS={codex:0,'claude-code':1,antigravity:2,devin:3,'opencode-go':4,opencode:5};
+const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Google:2,Cognition:3};
+function groupSlots(group,labels){
+ if(group==='provider')return {...PROVIDER_SLOTS};
+ if(group!=='route'&&group!=='account')return {};
+ const out={...ROUTE_SLOTS},used=new Set(Object.values(out));let next=0;
+ const name=l=>accountLabel(l)||l,byName=(a,b)=>name(a).localeCompare(name(b))||a.localeCompare(b);
+ const extra=list=>[...new Set(list)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort(byName);
+ const known=group==='account'?extra(claudeAccounts.list.map(a=>a.route)):[];
+ for(const label of [...known,...extra(labels)]){
+  if(out[label]!=null)continue;
+  while(used.has(next))next++;
+  out[label]=next;used.add(next);
+ }
+ return out;
+}
+// Calendar steps 1-5 by rank among the shown days with use (five equal groups; ties share
+// a step), so one very large day does not leave every other day in the first step.
+function rankLevels(values){
+ const sorted=values.filter(v=>v>0).sort((a,b)=>a-b);
+ return v=>{
+  if(!(v>0))return 0;
+  if(!sorted.length)return 5;
+  let lo=0,hi=sorted.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(sorted[mid]<=v)lo=mid+1;else hi=mid;}
+  return Math.max(1,Math.ceil(lo/sorted.length*5));
+ };
+}
 // 'Claude(Max 5x)' for a Claude account when several exist, 'Claude' otherwise.
 const serviceShort=(route,label)=>{const base=shortService[familyOf(route)]||route,name=label??accountLabel(route);return familyOf(route)==='claude-code'&&name?`${base}(${name})`:base;};
 // Antigravity buckets are '<family>[-<pool>]-<window>[-n]' ('gemini-argon-wtu-weekly' names

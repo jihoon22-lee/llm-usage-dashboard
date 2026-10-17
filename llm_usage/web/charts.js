@@ -8,7 +8,7 @@ function chart(data){
  if(!$('chart').clientWidth)return;
  const grouped=chartSeries(data),allLabels=grouped.labels;
  const labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
- const colorOf=paletteFor(allLabels);
+ const colorOf=paletteFor(allLabels,groupSlots($('group').value,allLabels));
  $('legend').innerHTML=allLabels.map(label=>`<button data-label="${esc(label)}" aria-pressed="${!hiddenLabels.has(label)}">${esc(seriesLabel(label))}</button>`).join('');
  $('legend').insertAdjacentHTML('beforeend',missingRoutes(data).map(row=>`<span class="unavailable-series">${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span>`).join(''));
  $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);chart(data);};});
@@ -65,7 +65,7 @@ function chart(data){
 }
 function bindChartTooltip(data,grouped,geometry,comparisonTotals){
  const root=$('chart'),svg=root.querySelector('svg'),tooltip=$('chart-tooltip'),cursor=root.querySelector('.chart-cursor');
- const colorOf=paletteFor(grouped.labels);
+ const colorOf=paletteFor(grouped.labels,groupSlots($('group').value,grouped.labels));
  // Long lists sit below the plot so scrolling never intercepts a bucket tap.
  const scrollable=grouped.labels.length>8;
  tooltip.classList.toggle('scrollable',scrollable);
@@ -207,8 +207,10 @@ function ranking(data){
   const v=metric==='tokens'?modelTotal(r):null,label=routeNames[r.route]||r.route,all=denom+(v||0);
   const note=v==null?`${metricName()} 없음`:`전체의 ${all?percent(v/all*100):'—'} · 순위 제외`;
   return `<div class="rank rank-residual"><div class="rank-label"><strong>${esc(residualName)} <small>${esc(label)} · 모델 구분 없음</small></strong><span>${v==null?'—':metricFmt(v)} <small>${note}</small></span></div>`
-   +(v?`<svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(residualName)} ${metricFmt(v)} · ${note}"><rect width="${Math.min(1,v/max)*1000}" height="13" fill="${mutedColor}" data-tip="${esc(residualName)} · ${esc(label)} · ${metricFmt(v)} · ${note}"/></svg>`:'')+'</div>';
+   // Hatched rather than colored: it is not one of the ranked models.
+   +(v?`<span class="rank-bar rank-hatch" role="img" aria-label="${esc(residualName)} ${metricFmt(v)} · ${note}"><i data-w="${(Math.min(1,v/max)*100).toFixed(2)}" data-tip="${esc(residualName)} · ${esc(label)} · ${metricFmt(v)} · ${note}"></i></span>`:'')+'</div>';
  }).join('');
  $('ranking').innerHTML=(rows.map(r=>{const v=rowValue(r),label=routeNames[r.route]||r.route;
   return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.model)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
+ applyGeometry($('ranking'));
 }
