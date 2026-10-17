@@ -36,7 +36,8 @@ def exhaustions(c,start,end):
         streams.setdefault((route,bucket),[]).append((source,n))
     chosen=[]
     for (route,bucket),items in streams.items():
-        account='claude-oauth' if route=='claude-code' else route
+        from .claude_accounts import account_source
+        account=account_source(route)
         source=account if any(s==account for s,_ in items) else max(items,key=lambda item:(item[1],item[0]))[0]
         chosen.append((route,bucket,source))
     for route,bucket,source in chosen:
@@ -52,7 +53,12 @@ def exhaustions(c,start,end):
     def label(route,bucket):
         row=c.execute('SELECT data FROM state WHERE key=?',('label:'+route+':'+bucket,)).fetchone()
         return json.loads(row[0]) if row else None
-    return [dict(route=r,bucket=b,count=n,display_name=label(r,b)) for (r,b),n in sorted(counts.items())]
+    # Several Claude accounts: each entry names its account ('Claude(Max 5x) 5시간').
+    from .claude_accounts import describe
+    accounts=describe(c)
+    names={a['route']:a['label'] for a in accounts} if len(accounts)>1 else {}
+    return [dict(route=r,bucket=b,count=n,display_name=label(r,b),**({'account_label':names[r]} if r in names else {}))
+            for (r,b),n in sorted(counts.items())]
 
 
 def build(store,now,pricing=None):

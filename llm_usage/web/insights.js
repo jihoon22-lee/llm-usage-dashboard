@@ -17,9 +17,15 @@ function renderInsights(data){
  const bar=ratio=>{const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
   const ticks=[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join('');
   return `<span class="value-bar${ratio<1?' under':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;};
- $('subvalue').innerHTML=monthLine+monthAlert+(subs.length?subs.map(s=>{
+ // Claude accounts sit together under their one service, the original account first.
+ const order=claudeAccounts.list.map(a=>a.route);
+ const rank=s=>[routeNames[familyOf(s.route)]||s.route,order.includes(s.route)?order.indexOf(s.route):-1];
+ const ordered=[...subs].sort((a,b)=>{const x=rank(a),y=rank(b);return compareText.compare(x[0],y[0])||x[1]-y[1];});
+ $('subvalue').innerHTML=monthLine+monthAlert+(ordered.length?ordered.map(s=>{
   const ratio=s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null;
-  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(routeNames[s.route]||s.route)}</strong><span>${s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:'기간 내 미산정'} · 월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}</span><strong>${s.monthly_usd===0?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—'}</strong>${ratio!=null?bar(ratio):''}</div>`;
+  const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
+  const result=s.monthly_usd==null?(s.monthly_equiv!=null?`월 환산 ${usd(s.monthly_equiv)} · 설정에서 구독료 입력`:'설정에서 구독료 입력'):s.monthly_usd===0?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—';
+  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:'기간 내 미산정'} · ${price}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
  }).join(''):month?'':'<p class="hint">구독료가 설정되지 않았습니다.</p>');
  applyGeometry($('subvalue'));
  renderCalendar(data);renderSessions(data);renderProjects(data);
@@ -75,7 +81,9 @@ function renderSessions(data){
  const pages=Math.max(1,Math.ceil(sorted.length/20));sessPage=Math.min(sessPage,pages-1);
  $('sessions').innerHTML=sorted.slice(sessPage*20,sessPage*20+20).map(s=>{
   const span=when(s.first_ts)+(s.last_ts>s.first_ts+60?' ~ '+when(s.last_ts):'');
-  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span></td><td><code>${esc(String(s.session).slice(0,8))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(total(s))}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
+  // A Claude session names the accounts it used once there are several.
+  const accounts=multiClaude()&&familyOf(s.route)==='claude-code'&&(s.accounts||[]).length?`<small class="session-accounts">${esc(s.accounts.map(a=>accountLabel(a)||a).join(' · '))}</small>`:'';
+  return `<tr><td><span class="svc-full">${esc(routeNames[s.route]||s.route)}</span><span class="svc-short">${esc(shortService[s.route]||s.route)}</span>${accounts}</td><td><code>${esc(String(s.session).slice(0,8))}</code> <button type="button" class="sess-copy mini-btn" data-id="${esc(String(s.session))}">복사</button> <button type="button" class="sess-open mini-btn" data-id="${esc(String(s.session))}" aria-expanded="${openSession===String(s.session)}">상세</button></td><td class="col-detail">${esc(s.project||'—')}</td><td class="col-detail">${esc(KIND_NAMES[s.kind]||s.kind||'—')}</td><td class="col-detail">${esc(span)}</td><td class="col-detail">${fmt(s.requests)}</td><td>${fmt(total(s))}</td><td>${s.cost!=null?usd(s.cost):'—'}</td></tr>`;
  }).join('')||'<tr><td colspan="8" class="empty">선택 기간에 세션 귀속된 기록이 없습니다.</td></tr>';
  const sessTotal=data.sessions_total??sorted.length;
  $('sess-page').textContent=sorted.length?`${sessPage+1}/${pages} · ${sessTotal>100?`전체 ${fmt(sessTotal)}개 중 상위 100개`:`${fmt(sessTotal)}개`}`:'';
@@ -97,7 +105,7 @@ function reportHtml(r){
  return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${fmt(r.totals.requests)}회 · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
   +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th>요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td>${esc(routeNames[x.route]||x.route)}</td><td>${compact(x.tokens)}</td><td>${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
   +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
-  +`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`;
+  +`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:e.account_label}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`;
 }
 function renderReports(list){
  $('reports').innerHTML=list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')

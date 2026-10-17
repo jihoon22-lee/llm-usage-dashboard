@@ -3,7 +3,7 @@
 const $=id=>document.getElementById(id);
 // Scrolling animates only when the system does not ask for reduced motion.
 const motion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';
-const seriesLabel=label=>$('group').value==='route'?(routeNames[label]||label):$('group').value==='agent'?(KIND_NAMES[label]||label):(['Unknown','Other'].includes(label)?'제작사 미확인':label);
+const seriesLabel=label=>$('group').value==='route'?(routeNames[label]||label):$('group').value==='account'?serviceFull(label):$('group').value==='agent'?(KIND_NAMES[label]||label):(['Unknown','Other'].includes(label)?'제작사 미확인':label);
 const missingRoutes=data=>$('group').value==='route'?(data.unavailable_routes||[]).filter(r=>!data.labels.includes(r.route)):[];
 const gapLabel=row=>row.observed?(row.observation_stale?'토큰 관측 있음 · 합계 검증 대기':'토큰 수신 중 · 합계 검증 대기'):'토큰 상세 미수집';
 // Short numbers (1.2M) are a per-browser reading preference; exact values stay in the tooltip.

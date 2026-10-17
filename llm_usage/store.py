@@ -14,12 +14,16 @@ import sqlite3
 import threading
 import time
 
+from .claude_accounts import account_source, family, is_claude
+
 KST = ZoneInfo('Asia/Seoul')
 TOKENS = ('uncached_input', 'cached_input', 'output', 'cache_creation', 'reasoning')
 SERIES_KEYS = (*TOKENS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+# Source detail written while a subscription is marked ended in the settings.
+USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
 SUPPORTED_ROUTES = ('codex','claude-code','antigravity','opencode-go','devin')
 # (route, shorter-window bucket) -> the longer window that also gates usage.
 QUOTA_PARENTS = {('claude-code', 'five_hour'): 'seven_day', ('devin', 'daily'): 'weekly',
@@ -30,6 +34,14 @@ BUCKET_SQL = {
     'week':"CAST((ts+32400)/86400 AS INTEGER)*86400-32400-((CAST(strftime('%w',ts,'unixepoch','+9 hours') AS INTEGER)+6)%7)*86400",
     'month':"CAST(strftime('%s',ts,'unixepoch','+9 hours','start of month') AS INTEGER)-32400",
 }
+
+
+def route_events(route):
+    """SQL filter for the usage events of a quota route. Claude accounts share route
+    'claude-code'; pending (unresolved) events count for the original account."""
+    if route=='claude-code':return "route='claude-code' AND (account IS NULL OR account='claude-code')",()
+    if is_claude(route):return "route='claude-code' AND account=?",(route,)
+    return 'route=?',(route,)
 
 
 def calendar_buckets(start,end,granularity):
@@ -180,14 +192,24 @@ class Store:
                 INSERT OR IGNORE INTO account_token_buckets
                   SELECT route,day,tokens,checked,'' FROM account_tokens;
             """)
-            for column in ('session','project','agent_kind'):
+            for column in ('session','project','agent_kind','account'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
-                    c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
+                    # The web and the collector start together after a deploy; the
+                    # other process may add the column between the check and here.
+                    try:c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
+                    except sqlite3.OperationalError as exc:
+                        if 'duplicate column' not in str(exc):raise
+            # Claude events whose account is not resolved yet (see claude_attribution).
+            c.execute("CREATE INDEX IF NOT EXISTS events_claude_pending ON events(session) WHERE route='claude-code' AND account IS NULL")
             c.execute('CREATE INDEX IF NOT EXISTS events_session ON events(session)')
             # Quota windows and per-route scopes filter one route over a time range.
             c.execute('CREATE INDEX IF NOT EXISTS events_route_ts ON events(route,ts)')
             from .resources import initialize
             initialize(c)
+            from .claude_accounts import initialize as initialize_accounts
+            initialize_accounts(c)
+            from .claude_attribution import initialize as initialize_attribution
+            initialize_attribution(c)
             from .reconciliation import initialize as initialize_usage
             initialize_usage(c)
         self._ensure_rollup()
@@ -200,33 +222,35 @@ class Store:
 
         ts is the hour start (KST is a whole-hour offset, so hours, days, weeks and
         months group exactly as on events); requests is the event count."""
-        key=",".join(['ts','provider','route','model',"IFNULL(project,char(0))","IFNULL(agent_kind,char(0))"])
+        key=",".join(['ts','provider','route','model',"IFNULL(project,char(0))","IFNULL(agent_kind,char(0))","IFNULL(account,char(0))"])
         match=' AND '.join(['ts=CAST(OLD.ts/3600 AS INTEGER)*3600','provider=OLD.provider','route=OLD.route','model=OLD.model',
-                            'project IS OLD.project','agent_kind IS OLD.agent_kind'])
+                            'project IS OLD.project','agent_kind IS OLD.agent_kind','account IS OLD.account'])
         add=f"""INSERT INTO usage_hourly VALUES (CAST(NEW.ts/3600 AS INTEGER)*3600,NEW.provider,NEW.route,NEW.model,NEW.project,NEW.agent_kind,
-              {','.join('NEW.'+k for k in TOKENS)},1) ON CONFLICT({key}) DO UPDATE SET
+              {','.join('NEW.'+k for k in TOKENS)},1,NEW.account) ON CONFLICT({key}) DO UPDATE SET
               {','.join(f'{k}={k}+excluded.{k}' for k in TOKENS)},requests=requests+1;"""
         remove=f"""UPDATE usage_hourly SET {','.join(f'{k}={k}-OLD.{k}' for k in TOKENS)},requests=requests-1 WHERE {match};
               DELETE FROM usage_hourly WHERE {match} AND requests<=0;"""
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')  # the web and the collector may start together
-            if self.state(c,'rollup_version')==1:return
+            # Version 2 adds the Claude account. An older release finds a different
+            # version and rebuilds its own table; this one does the same in return.
+            if self.state(c,'rollup_version')==2:return
             for statement in ['DROP TABLE IF EXISTS usage_hourly',
                 f"""CREATE TABLE usage_hourly (ts INTEGER NOT NULL, provider TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL,
-                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in TOKENS)}, requests INTEGER NOT NULL)""",
+                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in TOKENS)}, requests INTEGER NOT NULL, account TEXT)""",
                 f'CREATE UNIQUE INDEX usage_hourly_key ON usage_hourly({key})',
                 'CREATE INDEX usage_hourly_route_ts ON usage_hourly(route,ts)',
                 'DROP TRIGGER IF EXISTS events_rollup_insert','DROP TRIGGER IF EXISTS events_rollup_delete','DROP TRIGGER IF EXISTS events_rollup_update',
                 f'CREATE TRIGGER events_rollup_insert AFTER INSERT ON events BEGIN {add} END',
                 f'CREATE TRIGGER events_rollup_delete AFTER DELETE ON events BEGIN {remove} END',
                 f'CREATE TRIGGER events_rollup_update AFTER UPDATE ON events BEGIN {remove} {add} END',
-                f"""INSERT INTO usage_hourly SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,
-                    {','.join(f'SUM({k})' for k in TOKENS)},COUNT(*) FROM events GROUP BY 1,2,3,4,5,6"""]:
+                self.ROLLUP_INSERT]:
                 c.execute(statement)
-            self.save_state(c,'rollup_version',1)
+            self.save_state(c,'rollup_version',2)
 
     ROLLUP_SELECT=('SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-                   +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*) FROM events GROUP BY 1,2,3,4,5,6')
+                   +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*),account FROM events GROUP BY 1,2,3,4,5,6,account')
+    ROLLUP_INSERT='INSERT INTO usage_hourly '+ROLLUP_SELECT
 
     def rebuild_rollup(self):
         """Recompute usage_hourly from events in one transaction. The collector does this
@@ -235,7 +259,7 @@ class Store:
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             c.execute('DELETE FROM usage_hourly')
-            c.execute('INSERT INTO usage_hourly '+self.ROLLUP_SELECT)
+            c.execute(self.ROLLUP_INSERT)
 
     def rollup_matches(self):
         """True when usage_hourly equals a fresh aggregation of events (daily self-check)."""
@@ -259,18 +283,20 @@ class Store:
         finally:
             c.close()
 
-    def event(self, c, key, ts, provider, route, model, values, session=None, project=None, agent_kind=None):
+    def event(self, c, key, ts, provider, route, model, values, session=None, project=None, agent_kind=None, account=None):
         # Streaming snapshots are monotonic maxima per globally stable request ID.
         numbers = [max(0, int(values.get(k) or 0)) for k in TOKENS]
         if not any(numbers):return
-        c.execute('INSERT INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,project,agent_kind)'
-                  ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+        # A copy read without an account (local replay, telemetry) keeps a resolved one.
+        c.execute('INSERT INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,project,agent_kind,account)'
+                  ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
                   + ','.join(f'{k}=MAX(events.{k},excluded.{k})' for k in TOKENS)
                   + ',provider=excluded.provider,model=excluded.model,route=excluded.route'
                   + ',session=COALESCE(excluded.session,events.session)'
                   + ',project=COALESCE(excluded.project,events.project)'
-                  + ',agent_kind=COALESCE(excluded.agent_kind,events.agent_kind)',
-                  (key, ts, provider, route, model or 'unknown', *numbers, session, project, agent_kind))
+                  + ',agent_kind=COALESCE(excluded.agent_kind,events.agent_kind)'
+                  + ',account=COALESCE(excluded.account,events.account)',
+                  (key, ts, provider, route, model or 'unknown', *numbers, session, project, agent_kind, account))
 
     def codex_point(self,c,session,ts,provider,route,model,usage,last):
         keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
@@ -358,7 +384,8 @@ class Store:
         if status=='ok':
             c.execute('''INSERT INTO source_health VALUES (?,?) ON CONFLICT(name)
               DO UPDATE SET last_success=MAX(last_success,excluded.last_success)''',(name,checked or time.time()))
-        if name in ('codex','claude-code','claude-oauth','antigravity','antigravity-app','opencode-go','devin') and status in ('error','unavailable'):
+        quota_source=name in ('codex','claude-code','claude-oauth','antigravity','antigravity-app','opencode-go','devin') or name.startswith(('claude-oauth:','claude-code:'))
+        if quota_source and status in ('error','unavailable'):
             c.execute('INSERT OR REPLACE INTO quota_interruptions VALUES (?,?,?)',(name,checked or time.time(),status))
 
     def source_changed(self,c,name,status,detail='',checked=None):
@@ -388,7 +415,7 @@ class Store:
         owner=account(c,route)
         previous=c.execute('SELECT * FROM limits WHERE route=? AND bucket=?',(route,bucket)).fetchone()
         # Unidentified terminal replays do not replace a current account response.
-        canonical='claude-oauth' if route=='claude-code' else 'codex' if route=='codex' else None
+        canonical=account_source(route) if is_claude(route) else 'codex' if route=='codex' else None
         prefer_account=bool(owner and owner['account_key'] and canonical and source!=canonical and previous
                             and previous['source']==canonical and 0<=checked-previous['checked']<=self.thresholds['stale_seconds'])
         changed=False
@@ -410,9 +437,12 @@ class Store:
         self.prune_history(c)
         return changed
 
-    def limits(self, now=None):
+    def limits(self, now=None, ended=None, names=None):
+        """Quota rows; `ended` holds the subscriptions the user marked as ended and
+        `names` the user's names for Claude accounts."""
         from .insights import quota_history,quota_pace,quota_plan,quota_trends,quota_decreases,quota_forecast,pace_lookback,window_seconds,token_total
         now = now or time.time()
+        ended = set(ended or ())
         with self.connect() as c:
             c.execute('BEGIN')
             rows = [dict(r) for r in c.execute('SELECT * FROM limits ORDER BY route,bucket')]
@@ -422,12 +452,17 @@ class Store:
             from .resources import inventory, SKEW
             accounts={r['route']:dict(r) for r in c.execute('SELECT * FROM resource_accounts')}
             contexts={(r['route'],r['bucket']):dict(r) for r in c.execute('SELECT * FROM quota_context')}
-            policies={route:self.state(c,'quota_policy:'+route,{}) for route in SUPPORTED_ROUTES}
-            snapshots={route:self.state(c,'quota_snapshot:'+route,{}) for route in SUPPORTED_ROUTES}
+            from .claude_accounts import describe
+            claude=describe(c,names,ended)
+            # Other Claude accounts are quota routes of their own beside the original one.
+            routes=list(dict.fromkeys([*SUPPORTED_ROUTES,*(a['route'] for a in claude),*(r['route'] for r in rows if is_claude(r['route']))]))
+            policies={route:self.state(c,'quota_policy:'+route,{}) for route in routes}
+            snapshots={route:self.state(c,'quota_snapshot:'+route,{}) for route in routes}
             resources=inventory(c,now,sources)
             history=quota_history(c,now,selected_sources={(r['route'],r['bucket']):r['source'] for r in rows},
                                   since_by_route={route:a['since'] for route,a in accounts.items()})
-        routes = SUPPORTED_ROUTES
+        # Account labels appear only once a second Claude account is known.
+        labels={a['route']:a['label'] for a in claude} if len(claude)>1 else {}
         for route in routes:
             if not any(r['route']==route for r in rows):
                 rows.append(dict(route=route,bucket='미제공',remaining=None,resets=None,checked=None,source=route))
@@ -444,14 +479,19 @@ class Store:
             omitted=bool(snapshot.get('source')==row['source'] and snapshot.get('checked',0)>=(checked or 0) and row['bucket'] not in snapshot.get('buckets',[]))
             row['omitted_latest']=omitted
             row['not_applicable']=omitted and row['bucket'] in snapshot.get('absent',[])
-            account=sources.get('claude-oauth',{}) if row['route']=='claude-code' else {}
+            row['family']=family(row['route']);row['account_label']=labels.get(row['route'])
+            account=sources.get(account_source(row['route']),{}) if is_claude(row['route']) else {}
             if account.get('checked',0)>=(row['checked'] or 0) and account.get('status') in ('error','unavailable'):
                 src=account
+            user_ended=row['route'] in ended
+            if not user_ended and src.get('status')=='ended' and str(src.get('detail','')).startswith(USER_ENDED_DETAIL):
+                # Tracking was switched back on; the next poll replaces this marker.
+                src={**src,'status':'unavailable','detail':'구독 추적 재개 · 다음 수집에서 한도를 다시 확인합니다.'}
             stale = bool(previous_account or (checked and (checked>now+SKEW or now-checked > self.thresholds['stale_seconds'] or (resets and resets <= now) or src.get('status')=='unavailable')))
-            row.update(status='error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if omitted or row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
-                       stale=stale, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
+            row.update(status='ended' if user_ended else 'error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if omitted or row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
+                       stale=stale or user_ended, user_ended=user_ended, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
                        seconds_to_reset=max(0,int(resets-now)) if resets else None,
-                       detail=src.get('detail',''),last_attempt=src.get('checked'))
+                       detail=USER_ENDED_DETAIL if user_ended else src.get('detail',''),last_attempt=src.get('checked'))
             row['history']=history.get((row['route'],row['bucket']),[])
             if previous_account:row['history']=[]
             pace=quota_pace(row['history'],now,row['status'],pace_lookback(row['bucket'])[0])
@@ -471,7 +511,7 @@ class Store:
         # is not carried onto another bucket, and the lower bucket's value is kept.
         by_key={(r['route'],r['bucket']):r for r in rows}
         for row in rows:
-            parent_bucket=QUOTA_PARENTS.get((row['route'],row['bucket']))
+            parent_bucket=QUOTA_PARENTS.get((family(row['route']),row['bucket']))
             if row['route']=='codex' and row['bucket'].endswith(' · 300분'):
                 parent_bucket=row['bucket'].removesuffix('300분')+'10080분'
             parent=by_key.get((row['route'],parent_bucket))
@@ -481,7 +521,8 @@ class Store:
             # so the other window keeps its last observation; say why it is not current.
             agy=re.fullmatch(r'(gemini|3p)-(5h|weekly)',row['bucket']) if row['route']=='antigravity' else None
             other=agy and by_key.get(('antigravity',f"{agy[1]}-{'weekly' if agy[2]=='5h' else '5h'}"))
-            row['note']=(f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
+            row['note']=('설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.' if row.get('user_ended') else
+                         f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
                          if other and row['status']!='fresh' and other['status']=='fresh' and other['source']=='antigravity-app' else
                          '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.' if row.get('omitted_latest') else
                          '계정·구독 조건 변경 전 관측입니다.' if row.get('previous_account') else
@@ -494,7 +535,8 @@ class Store:
                 if not row['resets'] or not span:continue
                 start,end=row['resets']-span,min(now,row['resets'])
                 if end<=start:continue
-                r=c.execute('SELECT '+sums+' FROM events WHERE route=? AND ts>=? AND ts<?',(row['route'],start,end)).fetchone()
+                where,args=route_events(row['route'])
+                r=c.execute('SELECT '+sums+' FROM events WHERE '+where+' AND ts>=? AND ts<?',(*args,start,end)).fetchone()
                 row['window']=dict(start=start,end=end,open=end<row['resets'],requests=r['requests'],
                                    tokens=token_total(dict(r)))
             from .signals import capacity,quota_events
@@ -505,7 +547,7 @@ class Store:
                 row['capacity_history']=[] if row['route'] in accounts else self.capacity_history(c,row,now)
         from .planning import enrich
         enrich(rows,now)
-        return dict(limits=rows, sources=list(sources.values()), now=now,history_days=1,
+        return dict(limits=rows, sources=list(sources.values()), now=now,history_days=1,claude_accounts=claude,
                     resources=resources,quota_policies=policies,stale_seconds=self.thresholds['stale_seconds'],
                     retention_days=self.thresholds['retention_days'],low_percent=self.thresholds['low_percent'],
                     quota_hide_days=self.thresholds['quota_hide_days'])
@@ -534,16 +576,19 @@ class Store:
             if used<min_used:continue
             key=(row['route'],row['bucket'],int(resets//60),round(used,3))
             if key not in memo:
+                where,args=route_events(row['route'])
                 r=c.execute('SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COUNT(*) FROM events '
-                            'WHERE route=? AND ts>=? AND ts<?',(row['route'],resets-span,resets)).fetchone()
+                            'WHERE '+where+' AND ts>=? AND ts<?',(*args,resets-span,resets)).fetchone()
                 memo[key]=dict(resets=resets,used_points=used,tokens=r[0],requests=r[1],tokens_per_point=r[0]/used if r[0] else None)
             if memo[key]['tokens_per_point']:result.append(memo[key])
         return result
 
+    # Subscription accounts: one per route, Claude Code split by account (pending = original).
+    ACCOUNT_SQL="CASE WHEN route='claude-code' THEN COALESCE(account,'claude-code') ELSE route END"
     GROUPS={'provider':'provider','route':'route','model':'model',
-            'project':"COALESCE(project,'미분류')",'agent':"COALESCE(agent_kind,'미분류')"}
+            'project':"COALESCE(project,'미분류')",'agent':"COALESCE(agent_kind,'미분류')",'account':ACCOUNT_SQL}
     SCOPE_KINDS={'route':'route','provider':'provider','model':'model',
-                 'project':"COALESCE(project,'미분류')"}
+                 'project':"COALESCE(project,'미분류')",'account':ACCOUNT_SQL}
     COMPARE_SHIFTS={'week':7,'month':28}
     COMPARE_LABELS={'previous':'직전 동일 기간','week':'7일 전 동일 구간','month':'28일 전 동일 구간'}
 
@@ -647,7 +692,7 @@ class Store:
             cache=self._usage_cache;cache[key]=body
             while len(cache)>12:cache.popitem(last=False)
 
-    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None):
+    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None):
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all','core','insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql,scope_args='',()
@@ -676,20 +721,23 @@ class Store:
                  tuple(lifetime.values()),collected_at,self.state(c,'data_version') or 0,
                  midnight.date().isoformat(),cutoff,
                  json.dumps(pricing,sort_keys=True) if pricing else None,
-                 json.dumps(subscriptions,sort_keys=True) if subscriptions else None)
+                 json.dumps(subscriptions,sort_keys=True) if subscriptions else None,tuple(sorted(ended or ())))
             body=self._usage_get(key)
             if body is None:
                 body=self._usage_body(c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff)
+                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,set(ended or ()))
                 if len(body['series'])<=5000:self._usage_put(key,body)
             from .reconciliation import apply as reconcile_usage
             body=reconcile_usage(c,body,group,cumulative,scope,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
+            from .claude_accounts import describe
+            claude=describe(c,names)
             from .signals import usage_spike
             spike=usage_spike(c,now.timestamp()) if sections!='insights' else None
             month=self.project_month(c,now,pricing) if sections!='insights' else None
             gap=self.account_gap(c,'codex',now.timestamp()) if sections!='insights' else None
-        data={**body,'sources':sources,'unavailable_routes':unavailable_routes,'collected_at':collected_at,'spike':spike,'project_month':month,'account_gap':gap}
+        data={**body,'sources':sources,'unavailable_routes':unavailable_routes,'collected_at':collected_at,'spike':spike,'project_month':month,'account_gap':gap,
+              'claude_accounts':claude}
         if sections=='all':return data
         insight_keys={'insights','sessions','sessions_total','sessionless_requests','projects','calendar'}
         if sections=='core':return {k:v for k,v in data.items() if k not in insight_keys}
@@ -850,7 +898,7 @@ class Store:
         return data
 
     def _usage_body(self,c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff):
+                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,ended=frozenset()):
         first = c.execute('SELECT MIN(ts) FROM events WHERE 1=1'+scope_sql,scope_args).fetchone()[0]
         if period=='all':
             from .reconciliation import supplements,matches
@@ -946,13 +994,15 @@ class Store:
         session_list=[];sessionless=0;project_list=[];sessions_total=0
         if sections!='core':
             sessions={}
-            for r in c.execute('''SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,MAX(route) AS route,MAX(project) AS project,
+            for r in c.execute('''SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,'''+self.ACCOUNT_SQL+''' AS account,MAX(route) AS route,MAX(project) AS project,
                 MAX(agent_kind) AS kind,MIN(ts) AS first_ts,MAX(ts) AS last_ts,'''+count+','+sums+'''
-                FROM events WHERE ts>=? AND ts<? AND session IS NOT NULL'''+scope_sql+' GROUP BY session,model,day''',
+                FROM events WHERE ts>=? AND ts<? AND session IS NOT NULL'''+scope_sql+' GROUP BY session,model,day,4''',
                 (a.timestamp(),b.timestamp(),*scope_args)):
                 e=sessions.setdefault(r['session'],dict(session=r['session'],route=r['route'],project=r['project'],
-                    kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
+                    kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,accounts=[],
                     **dict.fromkeys(TOKENS,0)))
+                # A Claude session can move between accounts; every account it used is listed.
+                if r['route']=='claude-code' and r['account'] not in e['accounts']:e['accounts']=sorted([*e['accounts'],r['account']])
                 e['first_ts']=min(e['first_ts'],r['first_ts']);e['last_ts']=max(e['last_ts'],r['last_ts'])
                 e['requests']+=r['requests']
                 for k in TOKENS: e[k]+=r[k]
@@ -985,6 +1035,8 @@ class Store:
         if sections!='insights':
             scope_options={kind:[r[0] for r in c.execute('SELECT '+expr+' AS v,'+rcount.replace(' AS requests','')+' AS n FROM '+R+' GROUP BY v ORDER BY n DESC,v LIMIT 50')]
                            for kind,expr in self.SCOPE_KINDS.items()}
+            scope_options['account']=[v for v in scope_options['account'] if is_claude(v)]
+            if len(scope_options['account'])<2:scope_options.pop('account')
         from .insights import usage_insights,token_total
         insights=None
         if sections!='core':
@@ -1013,15 +1065,30 @@ class Store:
                 cost['lifetime']=lifetime_cost
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
         subs=[]
-        if subscriptions and period!='1h':
+        claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
+        if (subscriptions or len(claude_routes)>1) and period!='1h':
             by_route={}
             for row in rows:
                 if row.get('est_cost') is not None:
                     by_route[row['route']]=by_route.get(row['route'],0)+row['est_cost']
+            if len(claude_routes)>1:
+                # Each Claude subscription is valued with its own account's requests.
+                by_route={k:v for k,v in by_route.items() if k!='claude-code'}
+                if pricing:
+                    for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+
+                                       ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
+                                       (a.timestamp(),b.timestamp(),*scope_args)):
+                        rate=rate_for(r['model'],pricing,r['day'])
+                        if rate:by_route[r['account']]=by_route.get(r['account'],0)+estimate(dict(r),rate)
             # Scale by the elapsed part of the period: a running week is not seven days yet.
             days=max(1,(min(b,now)-a).total_seconds()/86400)
-            for route,monthly in subscriptions.items():
-                if not isinstance(monthly,(int,float)) or monthly<0:continue
+            prices=dict(subscriptions or {})
+            # Several Claude accounts: list each one, priced or not, so a missing price is visible.
+            if len(claude_routes)>1:
+                for route in claude_routes:
+                    if route not in ended:prices.setdefault(route,None)
+            for route,monthly in prices.items():
+                if monthly is not None and (not isinstance(monthly,(int,float)) or monthly<0):continue
                 est=by_route.get(route)
                 subs.append(dict(route=route,monthly_usd=monthly,period_cost=est,
                                  monthly_equiv=est*30.44/days if est is not None else None))
@@ -1092,14 +1159,15 @@ class Store:
         for source in sources:
             # Ops pseudo-rows carry daily cadences; they compute staleness themselves.
             if source['name'] in ops_rows:continue
-            source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
+            # Resource reads run every 15 minutes, for every Claude account ('claude-credits:<id>').
+            source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'].split(':')[0] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
             if source['status']=='ok' and now.timestamp()-source['checked']>source_stale:
                 source['status']='stale'
         # A status line reports only while a terminal UI runs it (not the desktop apps
         # or headless workers). After a day without a receipt it is shown as unused,
         # not as a failing source; the quota stays visible through account/app polling.
         for source in sources:
-            if (source['name'] in STATUS_LINE_SOURCES and source['status']=='stale' and source.get('checked')
+            if ((source['name'] in STATUS_LINE_SOURCES or source['name'].startswith('claude-code:')) and source['status']=='stale' and source.get('checked')
                     and now.timestamp()-source['checked']>86400):
                 source.update(status='idle',detail=' · '.join(filter(None,[source.get('detail'),
                     '최근 24시간 상태줄 수신 없음 · 터미널(TUI) 실행 중에만 수신 · 한도는 계정/앱 조회로 표시'])))

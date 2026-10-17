@@ -285,6 +285,7 @@ class CodexAccountUsageTests(unittest.TestCase):
             extra['account/usage/read'] = {'summary': {}, 'dailyUsageBuckets': [{'startDate': '2026-10-12', 'tokens': 50}]}
             return {'rateLimits': {}}
         with patch('llm_usage.limits.poll_claude'), patch('llm_usage.limits.poll_claude_resources'), patch('llm_usage.limits.poll_devin'), patch('llm_usage.limits.collect_claude_cloud'), \
+             patch('llm_usage.limits.claude_contexts', return_value=[]), \
              patch('llm_usage.limits.poll_antigravity_app'), patch('llm_usage.limits.read_codex', side_effect=fake), \
              patch('llm_usage.limits.OPENCODE_GO_USAGE_URL', 'http://127.0.0.1:9/none'):
             poll_limits(self.store, {'codex_binary': 'codex', 'opencode_auth': str(self.root / 'missing.json')})
@@ -296,7 +297,7 @@ class CodexAccountUsageTests(unittest.TestCase):
     def poll_fake(self, fake):
         from contextlib import ExitStack
         with ExitStack() as stack:
-            for name in ('poll_claude','poll_claude_resources','poll_devin','collect_claude_cloud','poll_antigravity_app','poll_codex_thread'):
+            for name in ('poll_claude','poll_claude_resources','poll_devin','collect_claude_cloud','poll_antigravity_app','poll_codex_thread','claude_contexts'):
                 stack.enter_context(patch('llm_usage.limits.'+name))
             stack.enter_context(patch('llm_usage.limits.read_codex',side_effect=fake))
             poll_limits(self.store,{'codex_binary':'fixture','opencode_auth':str(self.root/'absent')})

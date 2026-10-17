@@ -14,7 +14,7 @@ PRICING={'m1':dict(input=1,cached=0.1,output=10,cache_write=1),
 def fresh_rollup(c):
     return sorted((tuple(r) for r in c.execute(
         'SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-        +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*) FROM events GROUP BY 1,2,3,4,5,6')),key=repr)
+        +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*),account FROM events GROUP BY 1,2,3,4,5,6,account')),key=repr)
 
 
 class RollupTests(unittest.TestCase):
@@ -30,12 +30,16 @@ class RollupTests(unittest.TestCase):
                 self.store.event(c,f'e{i}',ts,rng.choice(['OpenAI','Anthropic']),route,rng.choice(['m1','m2','m3']),
                                  {k:rng.randint(0,5000) for k in TOKENS},
                                  session=rng.choice([None,'s1','s2','s3']),project=rng.choice([None,'p1','p2']),
-                                 agent_kind=rng.choice([None,'main','sub']))
+                                 agent_kind=rng.choice([None,'main','sub']),
+                                 account=rng.choice([None,'claude-code','claude-code:0123456789ab']) if route=='claude-code' else None)
             # Streaming maxima (update), attribution backfill (update), removals (delete).
             for i in range(0,1500,7):
                 self.store.event(c,f'e{i}',0,'OpenAI','codex','m1',{k:9000 for k in TOKENS})
             c.execute("UPDATE events SET project='p9',session='s9' WHERE project IS NULL AND id LIKE 'e1%'")
             c.execute("DELETE FROM events WHERE id LIKE 'e2%'")
+            # Account attribution moves events between accounts (update).
+            c.execute("UPDATE events SET account='claude-code:unknown' WHERE route='claude-code' AND account IS NULL AND id LIKE 'e4%'")
+            c.execute("UPDATE events SET account=NULL WHERE route='claude-code' AND account='claude-code' AND id LIKE 'e5%'")
             # Antigravity merges replace whole rows.
             c.execute("INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning) "
                       "SELECT id,ts+7200,provider,'antigravity',model,1,2,3,4,0 FROM events WHERE id LIKE 'e3%'")
@@ -77,3 +81,30 @@ class RollupTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class ConcurrentMigrationTests(unittest.TestCase):
+    def test_a_column_added_by_the_other_process_is_harmless(self):
+        """The web and the collector open the store together after a deploy."""
+        import sqlite3
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'usage.db'
+            from contextlib import closing
+            with closing(sqlite3.connect(path)) as c, c:
+                c.execute('CREATE TABLE events (id TEXT PRIMARY KEY, ts REAL NOT NULL, provider TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL, '
+                          'uncached_input INTEGER NOT NULL, cached_input INTEGER NOT NULL, output INTEGER NOT NULL, cache_creation INTEGER NOT NULL, '
+                          'reasoning INTEGER NOT NULL, session TEXT, project TEXT, agent_kind TEXT)')
+            class Racing(sqlite3.Connection):
+                def execute(self,sql,*args):
+                    # The other process wins the race between the column check and ALTER.
+                    if sql.startswith('ALTER TABLE events ADD COLUMN account'):
+                        super().execute(sql,*args)
+                        raise sqlite3.OperationalError('duplicate column name: account')
+                    return super().execute(sql,*args)
+            real=sqlite3.connect
+            with patch.object(sqlite3,'connect',lambda *a,**k:real(*a,factory=Racing,**k)):
+                store=Store(path)
+            with store.connect() as c:
+                self.assertIn('account',{r['name'] for r in c.execute('PRAGMA table_info(events)')})
+            Store(path)  # reopening is a no-op
