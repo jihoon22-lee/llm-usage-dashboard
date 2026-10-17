@@ -194,7 +194,11 @@ class Store:
             """)
             for column in ('session','project','agent_kind','account'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
-                    c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
+                    # The web and the collector start together after a deploy; the
+                    # other process may add the column between the check and here.
+                    try:c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
+                    except sqlite3.OperationalError as exc:
+                        if 'duplicate column' not in str(exc):raise
             # Claude events whose account is not resolved yet (see claude_attribution).
             c.execute("CREATE INDEX IF NOT EXISTS events_claude_pending ON events(session) WHERE route='claude-code' AND account IS NULL")
             c.execute('CREATE INDEX IF NOT EXISTS events_session ON events(session)')
