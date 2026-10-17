@@ -10,7 +10,8 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups})`,
+  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -250,4 +251,33 @@ test('owned resources omit spending caps, sort confirmed expiry and preserve fai
  assert.equal(groups.current.at(-1).amount,5);
  assert.equal(items[0].id,'unknown-expiry'); // sorting must not mutate API observations
  assert.equal(f.resourceGroups(undefined,now).current.length,0);
+});
+
+test('several Claude accounts stay one service with account labels',()=>{
+ f.setClaudeAccounts([{route:'claude-code',label:'Pro'}]);
+ assert.equal(f.multiClaude(),false);
+ // A single account looks exactly as before.
+ assert.equal(f.quotaLabel({route:'claude-code',bucket:'five_hour'}),'Claude 5시간');
+ assert.equal(f.serviceFull('claude-code'),'Anthropic / Claude Code');
+ assert.equal(f.accountLabel('claude-code'),null);
+ f.setClaudeAccounts([{route:'claude-code',label:'Pro',homes:[{kind:'default',name:'~/.claude'}]},
+  {route:'claude-code:abababababab',label:'Max 5x',homes:[{kind:'zerosub',name:'claude-0123abcd4567'}]}]);
+ assert.equal(f.multiClaude(),true);
+ assert.equal(f.familyOf('claude-code:abababababab'),'claude-code');
+ assert.equal(f.familyOf('codex'),'codex');
+ assert.equal(f.serviceFull('claude-code:abababababab'),'Anthropic / Claude Code · Max 5x');
+ assert.equal(f.serviceFull('claude-code:unknown'),'Anthropic / Claude Code · 계정 미확인');
+ assert.equal(f.serviceFull('codex'),'OpenAI / Codex');
+ assert.equal(f.serviceShort('claude-code'),'Claude(Pro)');
+ assert.equal(f.serviceShort('codex'),'Codex');
+ assert.equal(f.quotaLabel({route:'claude-code:abababababab',bucket:'seven_day',account_label:'Max 5x'}),'Claude(Max 5x) 주간');
+ assert.equal(f.quotaLabel({route:'claude-code',bucket:'five_hour'}),'Claude(Pro) 5시간');
+ assert.equal(f.modelQuota({route:'claude-code:abababababab',bucket:'seven_day_opus',scope:{}}),true);
+ assert.equal(f.scopeText('account:claude-code:abababababab'),'Claude 계정: Max 5x');
+ assert.equal(f.sourceName('claude-oauth:abababababab'),'claude-oauth · Max 5x');
+ assert.equal(f.sourceName('claude-oauth'),'claude-oauth');
+ assert.equal(f.sourceName('claude-oauth:000000000000'),'claude-oauth:000000000000');
+ assert.equal(f.accountWhere({homes:[{kind:'zerosub',name:'claude-0123abcd4567'},{kind:'windows',name:'Windows'}]}),'zerosub 관리 홈 claude-0123abcd4567');
+ f.setClaudeAccounts(undefined);
+ assert.equal(f.multiClaude(),false);
 });
