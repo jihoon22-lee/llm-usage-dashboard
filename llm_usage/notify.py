@@ -188,8 +188,10 @@ def quota_messages(rows,previous,low_percent,unused=None,now=None):
         if (unused and resets and not model_quota(row) and not same_window(told,resets,row['bucket'])
                 and (window_seconds(row['bucket']) or 0)>86400 and remaining>=unused[0] and 0<resets-now<=unused[1]*3600):
             now_state['unused']=resets
+            # Model windows as long as this one that reset with it (not a 5-hour one near it).
             models=[f"{_window(r)} {r['remaining']:.0f}%" for r in rows
-                    if r['route']==row['route'] and model_quota(r) and r.get('status')=='fresh' and r.get('remaining') is not None
+                    if r['route']==row['route'] and model_quota(r) and window_seconds(r['bucket'])==window_seconds(row['bucket'])
+                    and r.get('status')=='fresh' and r.get('remaining') is not None
                     and not (r.get('scope') or {}).get('identity_unverified') and same_window(r.get('resets'),resets,r['bucket'])]
             messages.append(('unused',f'{label} {remaining:.0f}% 남음 · {_until(resets-now)} 후 초기화',
                              f"초기화 {_when(resets)}"+(f" · 모델별 추가 한도 {', '.join(models)}" if models else '')

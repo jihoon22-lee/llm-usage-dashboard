@@ -165,6 +165,18 @@ class NotifyTests(unittest.TestCase):
         self.store=Store(Path(self.tmp.name)/'capped.db')
         self.run_eval(both(30,100),on,now=NOW-60)
         self.assertEqual(self.run_eval(both(30,100),on),[])
+        # Only model windows as long as the shared one: a 5-hour one resetting near it is not named.
+        self.store=Store(Path(self.tmp.name)/'codex.db')
+        codex=lambda bucket,name,role,reset:dict(route='codex',bucket=bucket,display_name=name,remaining=100 if role=='model' else 90,
+                                                 resets=reset,status='fresh',scope=dict(role=role))
+        codex_rows=dict(low_percent=15,unused_percent=50,unused_hours=48,limits=[
+            codex('codex · 10080분','Codex 공통 · 주간','common',resets),codex('gpt_x · 10080분','GPT-X · 주간','model',resets),
+            codex('gpt_x · 300분','GPT-X · 5시간','model',resets-3600)])
+        self.run_eval(codex_rows,on,now=NOW-60)
+        (told,)=self.run_eval(codex_rows,on)
+        self.assertEqual(told[1],'Codex 공통 · 주간 90% 남음 · 27시간 후 초기화')
+        self.assertIn('모델별 추가 한도 GPT-X · 주간 100%',told[2])
+        self.assertNotIn('5시간',told[2])
         # Independent pools of one service are each a shared window.
         pool=lambda bucket:dict(route='antigravity',bucket=bucket,remaining=100,resets=resets,status='fresh',scope=dict(role='family'))
         pools=dict(low_percent=15,unused_percent=50,unused_hours=48,limits=[pool('gemini-weekly'),pool('3p-weekly')])
