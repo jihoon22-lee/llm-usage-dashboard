@@ -332,6 +332,7 @@ def status_route(store,c,path,route,data):
 
 def collect_status(store,settings):
     from .config import ended_routes
+    from .store import USER_ENDED_DETAIL
     collect_antigravity_tokens(store,settings)
     ended=ended_routes(settings)
     for folder in settings.get('status_inboxes',[]):
@@ -341,15 +342,20 @@ def collect_status(store,settings):
                 data=json.loads(path.read_text())
                 with store.connect() as c:
                     route=status_route(store,c,path,base,data)
-                    if route is None or route in ended:continue
+                    if route is None:continue
+                    if route in ended:
+                        # Like the polled sources: an old ok/error must not stay live.
+                        store.source_changed(c,route,'ended',USER_ENDED_DETAIL);continue
                     checked=data['checked']
                     if checked<=store.state(c,'status:'+str(path),0):continue
                     count=status_limits(store,c,route,data['data'],checked)
                     store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
                     store.save_state(c,'status:'+str(path),checked)
             except (OSError,ValueError,KeyError,TypeError,AttributeError):
-                if route is None or route in ended:continue
-                with store.connect() as c:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
+                if route is None:continue
+                with store.connect() as c:
+                    if route in ended:store.source_changed(c,route,'ended',USER_ENDED_DETAIL)
+                    else:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
 
 
 def prepare_normalization(store,settings):

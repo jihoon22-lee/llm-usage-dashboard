@@ -1159,7 +1159,8 @@ class Store:
         for source in sources:
             # Ops pseudo-rows carry daily cadences; they compute staleness themselves.
             if source['name'] in ops_rows:continue
-            source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
+            # Resource reads run every 15 minutes, for every Claude account ('claude-credits:<id>').
+            source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'].split(':')[0] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
             if source['status']=='ok' and now.timestamp()-source['checked']>source_stale:
                 source['status']='stale'
         # A status line reports only while a terminal UI runs it (not the desktop apps

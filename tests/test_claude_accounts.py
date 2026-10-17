@@ -237,6 +237,16 @@ class AccountTests(unittest.TestCase):
             claude_limits(self.store, c, {k: v for k, v in data.items() if k != 'limits'}, NOW + 1, R_SECOND)
         self.assertTrue(next(r for r in self.store.limits(NOW + 2)['limits'] if r['bucket'] == 'seven_day_fable')['omitted_latest'])
 
+    def test_resource_sources_of_every_account_keep_their_fifteen_minute_cadence(self):
+        with self.store.connect() as c:
+            for name in ('claude-credits', 'claude-credits:' + K_SECOND[:12], 'claude-resets:' + K_SECOND[:12], 'claude-oauth:' + K_SECOND[:12]):
+                self.store.source(c, name, 'ok', '', NOW - 700)
+        sources = {s['name']: s['status'] for s in self.store.usage(period='7d', now=NOW)['sources']}
+        self.assertEqual(sources['claude-credits'], 'ok')
+        self.assertEqual(sources['claude-credits:' + K_SECOND[:12]], 'ok')
+        self.assertEqual(sources['claude-resets:' + K_SECOND[:12]], 'ok')
+        self.assertEqual(sources['claude-oauth:' + K_SECOND[:12]], 'stale')
+
     def test_ended_account_is_not_polled(self):
         seen = []
         with ExitStack() as stack:

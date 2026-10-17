@@ -81,9 +81,13 @@ class EndedSubscriptionTests(unittest.TestCase):
         inbox = self.root/'status'; inbox.mkdir()
         (inbox/'antigravity.json').write_text(json.dumps(dict(route='antigravity', checked=NOW,
                                                               data={'quota': {'gemini-5h': {'remaining_fraction': .5}}})))
+        with self.store.connect() as c:
+            self.store.source(c, 'antigravity', 'error', '상태줄 이벤트를 읽지 못했습니다.', NOW-100)
         collect.collect_status(self.store, dict(status_inboxes=[str(inbox)], ended_subscriptions={'antigravity': {}}))
         with self.store.connect() as c:
             self.assertIsNone(c.execute("SELECT 1 FROM limits WHERE route='antigravity'").fetchone())
+            # An earlier failure of the skipped status line no longer counts as live.
+            self.assertEqual(c.execute("SELECT status,detail FROM sources WHERE name='antigravity'").fetchone()[:], ('ended', USER_ENDED_DETAIL))
         collect.collect_status(self.store, dict(status_inboxes=[str(inbox)]))
         with self.store.connect() as c:
             self.assertIsNotNone(c.execute("SELECT 1 FROM limits WHERE route='antigravity'").fetchone())
