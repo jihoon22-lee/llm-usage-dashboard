@@ -77,7 +77,8 @@ def quota_history(c,now,window=86400,selected_sources=None,since_by_route=None):
         # Account polling and local notifications are separate observation streams.
         # Prefer recent account polling, without alternating between their samples.
         latest=observations[-1]['checked']
-        account_source='claude-oauth' if key[0]=='claude-code' else key[0]
+        from .claude_accounts import account_source as canonical
+        account_source=canonical(key[0])
         preferred=[p for p in observations if p['source']==account_source and latest-p['checked']<=600]
         source=(selected_sources or {}).get(key) or (preferred[-1]['source'] if preferred else observations[-1]['source'])
         points=[];epoch_reset=None

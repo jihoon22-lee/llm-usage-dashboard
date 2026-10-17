@@ -1,6 +1,7 @@
 """Conditional resource decisions, separate from observations and billing actions."""
 import math
 
+from .claude_accounts import is_claude
 from .insights import quota_pace, window_seconds
 
 ROUTE_NAMES = {'codex': 'Codex', 'claude-code': 'Claude', 'antigravity': 'Antigravity',
@@ -21,7 +22,7 @@ def scope_for(row):
         group = bucket.split(' · ')[0]
         return dict(role='common' if group == 'codex' else 'model', group='common' if group == 'codex' else group,
                     label='공통 한도' if group == 'codex' else group)
-    if route == 'claude-code':
+    if is_claude(route):
         if bucket in ('five_hour', 'seven_day'):
             return dict(role='common', group='common', label='공통 한도')
         if bucket in ('seven_day_opus', 'seven_day_sonnet'):
@@ -63,7 +64,7 @@ def choices(data):
         groups.setdefault(row['route'], {})[scope['group']] = scope
     result = []
     for route, scopes in groups.items():
-        if route == 'claude-code':
+        if is_claude(route):
             # Null per-model limits mean no such additional window was reported;
             # both families still share five_hour and seven_day.
             scopes.update({k: dict(role='model', group=k, label=k.title()) for k in ('opus', 'sonnet')})
@@ -154,7 +155,7 @@ def decide(data, route, model='common', hours=2, pace='recent', now=None):
         result['reason'] = '필요한 한도 일부가 오래되거나 미제공입니다.'
     else:
         # Known providers gate ordinary use on both the session and weekly window.
-        required = ('five_hour', 'seven_day') if route == 'claude-code' else ('codex · 300분', 'codex · 10080분') if route == 'codex' else ()
+        required = ('five_hour', 'seven_day') if is_claude(route) else ('codex · 300분', 'codex · 10080분') if route == 'codex' else ()
         missing = [b for b in required if not any(r['bucket'] == b for r in rows)]
         if missing:
             result['reason'] = '필수 한도 미확인: ' + ', '.join(map(window_label,missing))
