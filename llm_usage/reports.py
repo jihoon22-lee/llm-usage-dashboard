@@ -196,6 +196,12 @@ def streaks(store,c,monday,exhausted):
 
 
 def build(store,now,pricing=None):
+    # Every usage view of the week and the residual share read the same supplements.
+    from .reconciliation import held
+    with held():return _build(store,now,pricing)
+
+
+def _build(store,now,pricing=None):
     monday,next_monday=last_week(now)
     day=lambda d:d.strftime('%Y-%m-%d')
     span=dict(period='custom',granularity='day',pricing=pricing,sections='core')
@@ -268,6 +274,13 @@ def ensure_report(store,now,pricing=None):
 
     Weeks missed while the collector was stopped are filled in, within the kept
     count and never before the first recorded event."""
+    # The change check and every rebuilt week read the same supplements; only reports
+    # are written meanwhile.
+    from .reconciliation import held
+    with held():return _ensure_report(store,now,pricing)
+
+
+def _ensure_report(store,now,pricing=None):
     monday,_=last_week(now)
     recount_exhaustions(store,now)
     # Reconcile previously published local reports after a backfill. Do not
@@ -319,9 +332,11 @@ def this_week(store,now,pricing=None):
     """This week so far (KST Monday 00:00 to now) against last week cut at the same time:
     the period cards' comparison (`prior`), with this week's services and Claude accounts."""
     from .insights import token_total
+    from .reconciliation import held
     monday,_=last_week(now);monday+=timedelta(days=7)
     day=lambda d:d.strftime('%Y-%m-%d')
-    usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now)
+    with held():
+        usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now)
     routes={}
     for row in usage['rows']:routes[row['route']]=routes.get(row['route'],0)+token_total(row)
     with store.connect() as c:accounts=_accounts(c,usage)

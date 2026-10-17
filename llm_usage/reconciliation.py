@@ -3,9 +3,11 @@
 Only an interval wholly inside a selected range contributes to its total. It
 enters a chart bucket only when the whole interval fits there as well.
 """
+from contextlib import contextmanager
 import copy
 import json
 import math
+import threading
 from datetime import datetime, timezone
 
 from .store import TOKENS, KST, identity, stamp
@@ -124,10 +126,35 @@ def account_days(c):
     return [r for r in _evidence(c) if r['source']=='codex-account']
 
 
+_held=threading.local()
+
+
+@contextmanager
+def held():
+    """Within the block (this thread), supplements() is worked out once per database and
+    handed back as copies. Only for reading work during which nothing it reads changes,
+    such as building the weekly reports; a later block works it out again."""
+    outer=getattr(_held,'memo',None)
+    _held.memo={} if outer is None else outer
+    try:yield
+    finally:_held.memo=outer
+
+
 def supplements(c, received=None):
     """(supplement entries, conflicts). `received`, when given, is extended with every
     aggregate received (its source, start and the fields a scope matches), whether or not
     it left anything beyond the local records."""
+    memo=getattr(_held,'memo',None)
+    if memo is None:return _supplements(c,received)
+    database=c.execute('PRAGMA database_list').fetchone()[2]
+    if database not in memo:
+        seen=[];memo[database]=(*_supplements(c,seen),seen)
+    entries,conflicts,seen=memo[database]
+    if received is not None:received.extend(copy.deepcopy(seen))
+    return copy.deepcopy(entries),copy.deepcopy(conflicts)
+
+
+def _supplements(c, received=None):
     rows=_evidence(c)
     if received is not None:
         received.extend(dict(source=r['source'],start=r['start'],route=r['route'],provider=r['provider'],model=r['model'],
