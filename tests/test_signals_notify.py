@@ -139,6 +139,53 @@ class NotifyTests(unittest.TestCase):
             self.assertEqual(self.run_eval(self.week(100,NOW+hour*3600+7*86400,'seven_day_sonnet'),on,now=NOW+hour*3600),[])
         self.assertEqual(self.sent,[])
 
+    def test_unused_quota_is_told_once_while_the_reported_reset_moves(self):
+        self.sent=[];on={'ntfy_url':CHANNELS['ntfy_url'],'events':{'unused':True}}
+        resets=NOW+27*3600
+        self.run_eval(self.week(96,resets),on,now=NOW-60)
+        # Readings move the reset by seconds, and two sources can disagree by hours.
+        told=[m[0] for i,drift in enumerate((0,1,-1,3,15*3600,2)) for m in self.run_eval(self.week(96,resets+drift),on,now=NOW+i*300)]
+        self.assertEqual(told,['unused'])
+        # The next window resets at least a week later and is told again.
+        later=resets+7*86400
+        self.run_eval(self.week(100,later),on,now=resets+60)
+        self.assertEqual([m[0] for m in self.run_eval(self.week(90,later+2),on,now=later-3600)],['unused'])
+
+    def test_unused_quota_judges_the_shared_window_and_names_its_model_windows(self):
+        self.sent=[];on={'ntfy_url':CHANNELS['ntfy_url'],'events':{'unused':True}}
+        resets=NOW+27*3600
+        row=lambda bucket,remaining,**kw:dict(route='claude-code',bucket=bucket,remaining=remaining,resets=resets,status='fresh',**kw)
+        both=lambda shared,model:dict(low_percent=15,unused_percent=50,unused_hours=48,limits=[
+            row('seven_day',shared,scope=dict(role='common')),row('seven_day_fable',model,display_name='Fable 주간',scope=dict(role='model'))])
+        self.run_eval(both(90,100),on,now=NOW-60)
+        (told,)=self.run_eval(both(90,100),on)
+        self.assertEqual(told[1],'Claude 주간 90% 남음 · 27시간 후 초기화')
+        self.assertIn('모델별 추가 한도 Fable 주간 100%',told[2])
+        # A model window is capped by the shared one: it is never told on its own.
+        self.store=Store(Path(self.tmp.name)/'capped.db')
+        self.run_eval(both(30,100),on,now=NOW-60)
+        self.assertEqual(self.run_eval(both(30,100),on),[])
+        # Independent pools of one service are each a shared window.
+        pool=lambda bucket:dict(route='antigravity',bucket=bucket,remaining=100,resets=resets,status='fresh',scope=dict(role='family'))
+        pools=dict(low_percent=15,unused_percent=50,unused_hours=48,limits=[pool('gemini-weekly'),pool('3p-weekly')])
+        self.run_eval(pools,on,now=NOW-60)
+        self.assertEqual([m[1] for m in self.run_eval(pools,on)],
+                         ['Antigravity 주간 Gemini 100% 남음 · 27시간 후 초기화','Antigravity 주간 3rd party 100% 남음 · 27시간 후 초기화'])
+
+    def test_unused_quota_notice_held_past_its_reset_is_dropped(self):
+        self.sent=[];quiet={'ntfy_url':CHANNELS['ntfy_url'],'events':{'unused':True},'quiet':[17,19]}  # NOW is 18:00 KST
+        # Held for quiet hours and sent when they end, while its window is still running.
+        self.run_eval(self.week(96,NOW+3*3600),quiet,now=NOW-60)
+        self.assertEqual(self.run_eval(self.week(96,NOW+3*3600),quiet),[])
+        self.assertEqual([m[0] for m in self.run_eval(self.week(96,NOW+3*3600),quiet,now=NOW+5400)],['unused'])
+        # Quiet hours ending after the reset: the window it spoke of is gone.
+        self.sent=[];self.store=Store(Path(self.tmp.name)/'late.db')
+        self.run_eval(self.week(96,NOW+1800),quiet,now=NOW-60)
+        self.assertEqual(self.run_eval(self.week(96,NOW+1800),quiet),[])
+        self.assertEqual(self.run_eval(self.week(100,NOW+1800+7*86400),quiet,now=NOW+5400),[])
+        self.assertEqual(self.sent,[])
+        self.assertEqual([(e['kind'],e['status']) for e in notify.recent_log(self.store)][:1],[('unused','expired')])
+
     def test_channel_payloads_and_secret_free_errors(self):
         captured=[]
         def opener(request,timeout):
