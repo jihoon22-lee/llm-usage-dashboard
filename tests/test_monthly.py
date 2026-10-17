@@ -106,6 +106,18 @@ class MonthlyTests(unittest.TestCase):
         self.assertEqual(monthly.ensure_months(self.store,NOW+300,PRICING,PRICES,{}),['2026-08','2026-09'])
         self.assertEqual([p['project'] for p in self.month('2026-09')['projects']],['alpha','gamma'])
 
+    def test_a_month_is_settled_once_the_readings_past_its_end_are_in(self):
+        # Readings up to 10 minutes past the month's end close its last interval.
+        end=stamp('2026-09-30T15:00:00Z')  # 10-01 00:00 KST
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end-300,'devin')
+        self.assertEqual(monthly.ensure_months(self.store,end+120,PRICING,PRICES,{}),['2026-07','2026-08'])
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end+240,'devin')
+        self.assertEqual(monthly.ensure_months(self.store,end+600,PRICING,PRICES,{}),['2026-08','2026-09'])
+        devin=next(q for q in self.month('2026-09')['quota_use'] if q['route']=='devin')
+        self.assertEqual((devin['observed_hours'],devin['zero_hours']),(0.08,0.08))
+
     def test_quota_use_comes_from_the_history_kept_and_survives_pruning(self):
         with self.store.connect() as c:self.store.save_state(c,'history_cutoff',stamp('2026-09-05T00:00:00Z'))
         monthly.ensure_months(self.store,NOW,PRICING,PRICES,{})

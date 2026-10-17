@@ -101,8 +101,9 @@ def ensure_months(store,now,pricing=None,prices=None,ended=None):
     last two finished months rebuild those two; a format change rebuilds every month kept.
     Returns the months (re)built; nothing is announced."""
     from .reconciliation import held,supplements
+    from .reports import SETTLE_AFTER
     from .store import identity,TOKENS
-    current=month_start(now);last=shift(current,-1)
+    current=month_start(now-SETTLE_AFTER);last=shift(current,-1)
     with held():
         with store.connect() as c:
             low,high=shift(last,-1).timestamp(),current.timestamp()

@@ -13,6 +13,10 @@ KEEP=12
 # announced again). 2: the Codex account residual left the top models for its own line.
 # 3: Claude Code split by account, and the top projects.
 REPORT_FORMAT=3
+# Readings up to 10 minutes past a week's or month's end close its last interval
+# (_points), and the quota history of a finished period does not change after them: it is
+# built once they are in, rather than frozen without them.
+SETTLE_AFTER=600
 
 
 def last_week(now):
@@ -299,7 +303,7 @@ def ensure_report(store,now,pricing=None):
 
 
 def _ensure_report(store,now,pricing=None):
-    monday,_=last_week(now)
+    monday,_=last_week(now-SETTLE_AFTER)
     recount_exhaustions(store,now)
     # Reconcile previously published local reports after a backfill. Do not
     # re-send notifications for a report that already existed.
@@ -340,7 +344,7 @@ def _ensure_report(store,now,pricing=None):
             if not store.state(c,'report:'+week.strftime('%Y-%m-%d')):missing.append(back)
     report=None
     for back in reversed(missing):
-        report=build(store,now-7*86400*back,pricing);report['built']=now
+        report=build(store,now-SETTLE_AFTER-7*86400*back,pricing);report['built']=now
         with store.connect() as c:store.save_state(c,'report:'+report['week'],report)
     with store.connect() as c:
         for (old,) in c.execute("SELECT key FROM state WHERE key LIKE 'report:%' ORDER BY key DESC LIMIT -1 OFFSET ?",(KEEP,)).fetchall():
