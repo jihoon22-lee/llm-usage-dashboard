@@ -124,14 +124,22 @@ def account_days(c):
     return [r for r in _evidence(c) if r['source']=='codex-account']
 
 
-def supplements(c):
+def supplements(c, received=None):
+    """(supplement entries, conflicts). `received`, when given, is extended with every
+    aggregate received (its source, start and the fields a scope matches), whether or not
+    it left anything beyond the local records."""
     rows=_evidence(c)
+    if received is not None:
+        received.extend(dict(source=r['source'],start=r['start'],route=r['route'],provider=r['provider'],model=r['model'],
+                             project=r['project'],account=_account(c,r)) for r in rows)
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
     out=[];conflicts=[]
     for group in groups.values():
         previous=None
         for r in sorted(group,key=lambda x:x['end']):
+            # The whole interval the count belongs to (an account day stays one total).
+            whole=r['end']
             if r['source']=='codex-account':
                 # A received running-day count cannot contain future activity.
                 # This is an upper bound, not a claim that work happened at poll
@@ -160,7 +168,7 @@ def supplements(c):
                 out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
                                 model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
                                 tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
-                                account=_account(c,r)))
+                                account=_account(c,r),whole_end=whole))
             previous=r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence
@@ -215,8 +223,14 @@ def series_label(e, group):
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
-    entries,conflicts=supplements(c)
+    # Where each aggregate source's evidence of the scope begins: a comparison needs it to
+    # reach back as far as the local records (whose first record is taken in the scope too).
+    received=[]
+    entries,conflicts=supplements(c,received)
     entries=[e for e in entries if matches(e,scope)]
+    first_seen={}
+    for r in received:
+        if matches(r,scope):first_seen[r['source']]=min(first_seen.get(r['source'],math.inf),r['start'])
     a,b=stamp(data['start']),stamp(data['end_exclusive'])
     conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
     if not entries and not conflicts:return data
@@ -225,7 +239,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         if e['end']<=a or e['start']>=b:continue
         public={**e,'start':datetime.fromtimestamp(e['start'],KST).isoformat(),
                 'end_exclusive':datetime.fromtimestamp(e['end'],KST).isoformat()}
-        public.pop('end');public.pop('parts')
+        public.pop('end');public.pop('parts');public.pop('whole_end')
         # A subscription whose period usage is only supplemented (a Codex account residual,
         # Claude cloud sessions) was still used; an aggregate that crosses the period edge
         # leaves 'no usage' unknown (None) rather than 0.
@@ -273,6 +287,20 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
             if options is not None and value and value not in options:options.append(value)
+    # The card comparison: on both sides, aggregates whose whole interval ended by the same
+    # elapsed time. An account day is one total: it counts once the day is over by the cut,
+    # whenever its count was first received; a day still open at the cut counts on neither
+    # side (it is in the period total, not set against a whole one).
+    prior=data.get('prior')
+    if prior:
+        pa,pb,cut=stamp(prior['start']),stamp(prior['end_exclusive']),stamp(prior['current_end'])
+        counted=set()
+        for e in entries:
+            if pa<=e['start'] and e['whole_end']<=pb:add(prior,e);counted.add(e['source'])
+            if a<=e['start'] and e['whole_end']<=cut:prior['current_tokens']+=e['tokens'];counted.add(e['source'])
+        # A source counted on either side must already have covered the earlier window;
+        # otherwise its share is missing there, not zero.
+        if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)

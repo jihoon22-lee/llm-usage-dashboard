@@ -200,9 +200,11 @@ async def main():
             agy=page.locator('.reset-item').filter(has_text='Antigravity')
             await expect(agy).to_have_count(1)
             assert (await agy.inner_text()).count('·')>=3,await agy.inner_text()
-            # A bucket without a reset time prints the fallback once, not twice.
-            devin=await page.locator('#quota-devin').inner_text()
+            # A bucket without a reset time prints the fallback once, not twice (the
+            # desktop row shows its last word under the card's 잔여 · 초기화까지 caption).
+            devin=await page.locator('#quota-devin').text_content()
             assert devin.count('초기화 정보 미제공')==1,devin
+            assert (await page.locator('#quota-devin .bucket-reset').first.inner_text())=='미제공'
             # Trend figures stay on one line via .nowrap spans.
             assert await page.locator('#quota-codex .quota-trends .nowrap').count()>=3
             antigrav=await page.locator('#quota-antigravity .quota-forecast').count()
@@ -361,14 +363,16 @@ async def main():
             # No interactive elements remain nested inside <summary>.
             assert await page.evaluate("document.querySelectorAll('summary button').length")==0
             await view('usage')
-            # The 전체 토큰 card delta always compares token totals, whatever the metric.
-            delta_tokens=await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")
-            assert '7일 전 동일 구간 같은 경과 시간 대비' in delta_tokens,delta_tokens
+            # The 전체 토큰 card leads; its change always compares token totals, whatever the metric.
+            # Records start on 09-01, inside the week-earlier window: no change from a partial window.
+            delta_tokens=await page.evaluate("document.querySelector('#cards .stat .stat-delta').textContent")
+            assert await page.evaluate("document.querySelector('#cards .stat .stat-label').textContent")=='전체 토큰'
+            assert delta_tokens=='7일 전 같은 시점 기록 부족',delta_tokens
             # Heatmap and calendar follow the selected metric.
             await page.locator('#metric').select_option('requests')
             await expect(page.locator('#refresh')).to_be_enabled()
             await expect(page.locator('#heatmap .heat-legend')).to_contain_text('요청 수')
-            assert await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")==delta_tokens
+            assert await page.evaluate("document.querySelector('#cards .stat .stat-delta').textContent")==delta_tokens
             await view('reports')
             await expect(page.locator('#calendar .cal-grid')).to_have_attribute('aria-label',re.compile('요청 수'))
             await expect(page.locator('#calendar-caption')).to_contain_text('일별 요청 수')
@@ -399,7 +403,7 @@ async def main():
             # The summary cards sit on the usage tab, right after the filter, and carry the active period.
             assert await page.evaluate("document.querySelector('#filter-fold').compareDocumentPosition(document.querySelector('#cards')) & Node.DOCUMENT_POSITION_FOLLOWING")
             await expect(page.locator('#cards-period')).to_contain_text('최근 30일')
-            await expect(page.locator('#cards')).to_contain_text('7일 전 동일 구간 같은 경과 시간 대비')
+            await expect(page.locator('#cards')).to_contain_text('7일 전 같은 시점 기록 부족')
             assert await page.locator('#cards-edit').count()==0
             await view('quota')
             # The quota tab leads with quotas and carries no period cards.
@@ -434,12 +438,18 @@ async def main():
             # The ended OpenCode Go card folds into the dormant section.
             await expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단 1개')
             await expect(page.locator('#limits > .quota-dormant')).to_contain_text('OpenCode Go')
-            # Quota cards auto-fit a 300px-minimum grid: at 1440px all active
-            # cards share one row and the dormant fold spans the full width.
+            # Desktop quota cards take up to three equal columns with one line per
+            # window: at 1440px four services fill a row of three and start the next;
+            # the dormant fold spans the full width.
             boxes=await page.locator('#limits > .limit-card').evaluate_all('els=>els.map(e=>e.getBoundingClientRect())')
-            assert len(boxes)>=3
-            assert len({round(b['y']) for b in boxes})==1,boxes
-            assert len({round(b['width']) for b in boxes})==1,boxes
+            assert len(boxes)==4,boxes
+            assert len({round(b['y']) for b in boxes[:3]})==1 and boxes[3]['y']>boxes[0]['y'],boxes
+            assert len({round(b['width']) for b in boxes})==1 and abs(boxes[3]['x']-boxes[0]['x'])<=1,boxes
+            rows=await page.locator('#limits > .limit-card .bucket').evaluate_all('''els=>els.filter(e=>e.offsetParent).map(e=>{
+              const box=e.getBoundingClientRect(),bar=e.querySelector('.bar-wrap'),reset=e.querySelector('.bucket-reset').getBoundingClientRect();
+              return {top:box.top,reset:reset.top,bar:bar?bar.getBoundingClientRect().top:null};})''')
+            # Remaining, bar and reset share the window's line.
+            assert rows and all(r['bar'] is None or abs(r['bar']-r['reset'])<16 for r in rows),rows
             dormant=await page.locator('#limits > .quota-dormant').bounding_box()
             grid=await page.locator('#limits').bounding_box()
             assert dormant['y']>boxes[0]['y'] and abs(dormant['width']-grid['width'])<=1,(dormant,grid)
@@ -447,6 +457,42 @@ async def main():
             await page.evaluate('''data=>{const old={...data,limits:data.limits.map(r=>r.route==='antigravity'?{...r,checked:data.now-8*86400,status:'stale'}:r)};renderLimits(old);}''',limits)
             await expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단 2개')
             await expect(page.locator('.limit-card:visible')).to_have_count(3)
+            await page.evaluate('data=>renderLimits(data)',limits)
+            # Three columns hold down to 1121px (no empty column beside a long card at
+            # 1280), two below and one from 820px; nothing overflows a card or the page.
+            for width,columns in ((1280,3),(1100,2),(830,2),(640,1)):
+                await page.set_viewport_size({'width':width,'height':1050})
+                layout=await page.evaluate('''()=>{const cards=[...document.querySelectorAll('#limits > .limit-card')];
+                  return {columns:getComputedStyle(document.getElementById('limits')).gridTemplateColumns.split(' ').length,
+                    page:document.documentElement.scrollWidth<=innerWidth,cards:cards.every(c=>c.scrollWidth<=c.clientWidth),
+                    tops:cards.map(c=>Math.round(c.getBoundingClientRect().top))};}''')
+                assert layout['columns']==columns and layout['page'] and layout['cards'],(width,layout)
+                assert len(set(layout['tops'][:columns]))==1,(width,layout)
+            await page.set_viewport_size({'width':1440,'height':1050})
+            # A current value has no status badge; an older one says so. A measured
+            # decline is a line of its own, a measured zero stays in 상세, and too few
+            # observations add neither.
+            async def weekly(trend,status='fresh'):
+                await page.evaluate('''([data,trend,status])=>renderLimits({...data,limits:data.limits.map(r=>r.route==='codex'&&r.bucket.includes('10080')
+                  ?{...r,status,trends:[{window_minutes:30,available:true,start:data.now-1800,end:data.now,...trend}]}:r)})''',[limits,trend,status])
+                return page.locator('#quota-codex > .bucket').first
+            codex=await weekly({'decrease_pp':0,'observed_minutes':20})
+            await expect(codex.locator('.badge')).to_have_count(0)
+            await expect(codex.locator('.bucket-decrease')).to_have_count(0)
+            await expect(codex.locator('.bucket-detail .decrease-detail')).to_have_text('최근 20분 · 0.0%p 감소')
+            # It shows only with 상세 open (opened earlier in this run; renders keep it).
+            detail=codex.locator('.bucket-detail')
+            if await detail.get_attribute('open') is not None:await detail.locator(':scope > summary').click()
+            await expect(codex.locator('.decrease-detail')).to_be_hidden()
+            codex=await weekly({'decrease_pp':0,'observed_minutes':10})
+            await expect(codex.locator('.bucket-decrease, .decrease-detail')).to_have_count(0)
+            codex=await weekly({'decrease_pp':3.5,'observed_minutes':20})
+            await expect(codex.locator('.bucket-decrease')).to_have_text('최근 20분 · 3.5%p 감소')
+            await expect(codex.locator('.bucket-decrease')).to_be_visible()
+            await expect(codex.locator('.decrease-detail')).to_have_count(0)
+            codex=await weekly({'decrease_pp':3.5,'observed_minutes':20},'stale')
+            await expect(codex.locator('.badge.stale')).to_have_text('오래된 값')
+            await expect(codex.locator('.bucket-decrease, .decrease-detail')).to_have_count(0)
             await page.evaluate('data=>renderLimits(data)',limits)
             # Desktop shows every alert chip; the collapse toggle is mobile-only (M1).
             await page.evaluate('data=>renderAlerts({...data,low_percent:95},lastUsage)',limits)
@@ -659,10 +705,11 @@ async def main():
             assert (await pending.value).suggested_filename.startswith('llm-usage-sessions-')
             await touch.locator('#tabs [data-view="reports"]').click()
             assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
-            # The status tab's source list is a plain section — visible
-            # without unfolding anything (M4).
+            # The status tab leads with its summary and what needs action, visible
+            # without unfolding anything (M4); normal sources fold.
             await touch.locator('#tabs [data-view="status"]').click()
-            await expect(touch.locator('#sources .source').first).to_be_visible()
+            await expect(touch.locator('#sources .source-summary')).to_be_visible()
+            await expect(touch.locator('#sources .source-clear, #sources .source-action .source').first).to_be_visible()
             assert not touch_errors,touch_errors
             await touch.close()
             # Empty data: no fabricated percentages or account coverage.

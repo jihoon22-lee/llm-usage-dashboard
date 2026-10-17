@@ -106,19 +106,33 @@ with sync_playwright() as p:
     expect(alerts).to_contain_text('사용량 급증')
     expect(alerts).to_contain_text('단가 미등록 모델 1개 · brand-new-model')
     expect(alerts).to_contain_text('fixture-project 월 예산 90%')
-    # Sources: summary, problem-first groups, internal work folded, a hint per status.
+    # Sources: failures and values to check first with a hint, what is not collected
+    # listed in a neutral color, normal sources (internal work inside) folded.
     page.locator('#tabs [data-view="status"]').click()
     expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
-    expect(page.locator('.source-summary')).to_contain_text('정상 3')
-    expect(page.locator('.source-summary')).to_contain_text('확인 필요 1')
-    expect(page.locator('.source-summary')).to_contain_text('실패·미수집 1')
-    expect(page.locator('.source-summary')).to_contain_text('미사용 1')
-    expect(page.locator('#sources .source-group > h4').first).to_have_text('Codex')
-    internal = page.locator('#sources details.source-group')
-    expect(internal).to_contain_text('내부 작업')
+    assert page.locator('.source-summary > span').all_text_contents()==['실패 1','확인 필요 1','미제공 0','미사용 1','정상 3']
+    action = page.locator('#sources .source-action')
+    expect(action.locator('h4')).to_have_text('조치 필요 2개')
+    assert action.locator('.source strong').all_text_contents()==['codex','WSL .claude/projects']
+    expect(action.locator('.source').first).to_be_visible()
+    expect(action).to_contain_text('다음 주기에 다시 시도')
+    quiet = page.locator('#sources .source-quiet')
+    expect(quiet.locator('li').first).to_be_visible()
+    expect(quiet.locator('li').first).to_contain_text('claude-code · 미사용')
+    assert quiet.locator('.src-bad,.src-warn').count()==0
+    normal = page.locator('#sources details[data-fold="ok"]')
+    assert normal.get_attribute('open') is None
+    expect(normal.locator(':scope > summary')).to_contain_text('정상 3개')
+    expect(normal.locator('.source').first).to_be_hidden()
+    normal.locator(':scope > summary').click()
+    internal = normal.locator('details[data-fold="internal"]')
+    expect(internal).to_contain_text('normalization')
     assert internal.get_attribute('open') is None
-    expect(page.locator('#sources')).to_contain_text('다음 주기에 다시 시도')
-    expect(page.locator('#sources')).to_contain_text('claude-code · 미사용')
+    # An opened fold stays open through the periodic re-render.
+    page.evaluate('renderSources(lastUsage.sources)')
+    assert page.locator('#sources details[data-fold="ok"]').get_attribute('open') is not None
+    expect(page.locator('#sources-panel .coverage-fold')).to_contain_text('수집 범위 설명')
+    assert page.locator('#sources-panel .coverage-fold').get_attribute('open') is None
     # Usage: the bucket containing now is marked, and numbers can be shortened.
     page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#chart .chart-current-label')).to_have_text('진행 중')

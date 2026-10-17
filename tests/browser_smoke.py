@@ -107,6 +107,27 @@ with sync_playwright() as p:
     else:
         values=[int(cells[i].replace(',','')) for i in (5,6,7,8,10)]
         assert values[3]==values[0]+values[1]+values[2]+values[4]
+    # Period cards lead with total tokens and cost. The fixture's Codex account days begin
+    # inside this week, so that source did not cover the week before: no change is computed.
+    assert page.locator('#cards .stat-label').all_text_contents()[:2]==['전체 토큰','비용 추정']
+    prior=page.evaluate('lastUsage.prior')
+    assert prior['running'] and prior['mode']=='previous' and not prior['complete'],prior
+    delta=page.locator('#cards .stat').first.locator('.stat-delta')
+    expect(delta).to_have_text('직전 7일 같은 시점 기록 부족')
+    # Claude Code alone has local records a hundred days back: the change against the
+    # seven days before, cut at the same time, as the response gives it.
+    with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route%3Aclaude-code' in r.url and r.status==200):
+        page.locator('#scope').select_option('route:claude-code')
+    expect(page.locator('#refresh')).to_be_enabled()
+    prior=page.evaluate('lastUsage.prior')
+    assert prior['complete'],prior
+    previous=prior.get('total_tokens',sum(prior[k] for k in ('uncached_input','cached_input','output','cache_creation')))
+    ratio=prior['current_tokens']/previous
+    change=f'{ratio:.1f}배' if ratio>=2 else f"{'+' if ratio>=1 else '−'}{abs(ratio-1)*100:.1f}%"
+    expect(delta).to_have_text('직전 7일 같은 시점 대비 '+change)
+    with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route' not in r.url and r.status==200):
+        page.locator('#scope').select_option('')
+    expect(page.locator('#refresh')).to_be_enabled()
     labels=page.evaluate('lastUsage.labels')
     page.locator('#chart > svg').focus()
     expect(page.locator('#chart-tooltip .tooltip-row:not(.tooltip-missing)')).to_have_count(min(len(labels),8))
