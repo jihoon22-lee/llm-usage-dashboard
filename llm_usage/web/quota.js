@@ -183,7 +183,10 @@ function renderLimits(data){
   if(older.length)content+=`<details class="quota-older" data-history="${esc(olderKey)}"${opened.has(olderKey)?' open':''}><summary>이전 관측 ${older.length}개 <small>${older.map(r=>esc(quotaLabel(r).replace(serviceShort(r.route,r.account_label)+' ',''))+' '+(r.remaining==null?'—':percent(r.remaining))+' · '+esc(statuses[r.status]||r.status)).join(' · ')}</small></summary>${older.map(r=>bucket(r,shared,true)).join('')}</details>`
    // Why a window is not current stays readable without opening the fold.
    +[...new Set(older.map(r=>r.note).filter(Boolean))].map(note=>`<p class="quota-note">${esc(note)}</p>`).join('');
-  return meta+content+(secondary.length?`<details class="quota-secondary" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>모델별 추가 한도 <small>${secondary.filter(r=>r.bucket.includes('300분')).map(r=>'5시간 '+(r.status==='fresh'?percent(r.remaining):'수신 대기')).join(' · ')}</small></summary>${secondary.map(r=>bucket(r,shared)).join('')}</details>`:'');
+  // Codex lists its model 5-hour windows; Claude its per-model weekly limits (Fable 주간 100%).
+  const secondaryBrief=familyOf(route)==='claude-code'?secondary.map(r=>bucketName(r)+' '+(r.status==='fresh'?percent(r.remaining):'수신 대기'))
+   :secondary.filter(r=>r.bucket.includes('300분')).map(r=>'5시간 '+(r.status==='fresh'?percent(r.remaining):'수신 대기'));
+  return meta+content+(secondary.length?`<details class="quota-secondary" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>모델별 추가 한도 <small>${esc(secondaryBrief.join(' · '))}</small></summary>${secondary.map(r=>bucket(r,shared)).join('')}</details>`:'');
  };
  // Several Claude accounts stay one Claude Code card with a section per account.
  const accountSection=(route,account,rows)=>{

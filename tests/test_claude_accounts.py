@@ -3,7 +3,7 @@
 All homes, logins, transcripts and process registries are synthetic files in a
 disposable HOME; no provider is contacted and no real account file is read.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from io import BytesIO
 import json
 import os
@@ -212,6 +212,30 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(rows[(FAMILY, 'five_hour')]['account_label'], 'Pro')
         with self.store.connect() as c:
             self.assertNotIn('TEST-SECOND-TOKEN', '\n'.join(c.iterdump()))
+
+    def test_per_model_weekly_limits_from_the_limits_list(self):
+        from llm_usage.limits import claude_limits
+        data = {'five_hour': {'utilization': 46, 'resets_at': '2099-01-01T00:00:00Z'},
+                'seven_day': {'utilization': 3, 'resets_at': '2099-01-02T00:00:00Z'}, 'seven_day_opus': None,
+                'limits': [{'kind': 'session', 'percent': 46, 'scope': None},
+                           {'kind': 'weekly_scoped', 'percent': 30, 'resets_at': '2099-01-02T00:00:00+00:00',
+                            'scope': {'model': {'id': None, 'display_name': 'Fable'}, 'surface': None}},
+                           {'kind': 'weekly_scoped', 'percent': 10, 'scope': {'model': None, 'surface': {'display_name': 'Claude Code'}}},
+                           {'kind': 'weekly_scoped', 'percent': 120, 'scope': {'model': {'display_name': 'Bad'}}},
+                           {'kind': 'weekly_scoped', 'percent': 5, 'scope': {'model': {'display_name': '<script>'}}},
+                           'not a row']}
+        with self.store.connect() as c:
+            self.assertEqual(claude_limits(self.store, c, data, NOW, R_SECOND), 4)
+        rows = {r['bucket']: r for r in self.store.limits(NOW)['limits'] if r['route'] == R_SECOND}
+        self.assertEqual(set(rows), {'five_hour', 'seven_day', 'seven_day_fable', 'seven_day_claude_code'})
+        fable = rows['seven_day_fable']
+        self.assertEqual((fable['remaining'], fable['display_name'], fable['scope']['role'], fable['scope']['label']), (70, 'Fable 주간', 'model', 'Fable'))
+        self.assertEqual(fable['source'], 'claude-oauth' + R_SECOND[len(FAMILY):])
+        self.assertEqual(rows['seven_day_claude_code']['scope']['role'], 'unknown')
+        # A later response without the scoped limit marks it as not current.
+        with self.store.connect() as c:
+            claude_limits(self.store, c, {k: v for k, v in data.items() if k != 'limits'}, NOW + 1, R_SECOND)
+        self.assertTrue(next(r for r in self.store.limits(NOW + 2)['limits'] if r['bucket'] == 'seven_day_fable')['omitted_latest'])
 
     def test_ended_account_is_not_polled(self):
         seen = []
@@ -439,7 +463,7 @@ class AccountTests(unittest.TestCase):
             result = subprocess.run([sys.executable, claudehook.__file__, '--directory', str(self.h.inbox)], input=body,
                                     capture_output=True, env=env, timeout=20)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
-        with sqlite3.connect(self.h.inbox / 'claude-accounts.db') as c:
+        with closing(sqlite3.connect(self.h.inbox / 'claude-accounts.db')) as c:
             rows = c.execute('SELECT session,event,account,home FROM markers').fetchall()
             dump = '\n'.join(c.iterdump())
         self.assertEqual(rows, [('abc-1', 'UserPromptSubmit', K_SECOND, str(self.h.managed))])

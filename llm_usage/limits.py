@@ -154,6 +154,23 @@ def claude_limits(store,c,data,checked,route='claude-code'):
         if role=='unknown':store.save_state(c,'label:'+route+':'+bucket,label)
         count+=1
         observed.append(bucket)
+    # Per-model (or per-surface) weekly limits, e.g. a Max plan's Fable allowance,
+    # arrive only in the `limits` list; percent is the used share of that limit.
+    for row in data.get('limits') if isinstance(data.get('limits'),list) else []:
+        if not isinstance(row,dict) or row.get('kind')!='weekly_scoped' or not number(row.get('percent')) or not 0<=row['percent']<=100:continue
+        scope=row.get('scope') if isinstance(row.get('scope'),dict) else {}
+        model,surface=(scope.get(k) if isinstance(scope.get(k),dict) else {} for k in ('model','surface'))
+        name=model.get('display_name') or surface.get('display_name')
+        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}',name):continue
+        bucket='seven_day_'+re.sub(r'[^a-z0-9]+','_',name.lower()).strip('_')
+        if bucket in observed:continue  # the top-level field already reported this window
+        reset=timestamp(row.get('resets_at'))
+        store.limit(c,route,bucket,100-row['percent'],reset,checked,source,
+                    dict(role='model' if model.get('display_name') else 'unknown',group=bucket.removeprefix('seven_day_'),label=name,
+                         locked=False,reset_unparsed=row.get('resets_at') is not None and reset is None))
+        store.save_state(c,'label:'+route+':'+bucket,name+' 주간')
+        count+=1
+        observed.append(bucket)
     from .resources import claude_spend, claude_cloud_credits
     store.save_state(c,'quota_snapshot:'+route,dict(checked=checked,source=source,buckets=observed,
                                                    absent=[b for b in optional if b in data and data[b] is None]))

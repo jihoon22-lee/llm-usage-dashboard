@@ -90,7 +90,8 @@ class ConcurrentMigrationTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'usage.db'
-            with sqlite3.connect(path) as c:
+            from contextlib import closing
+            with closing(sqlite3.connect(path)) as c, c:
                 c.execute('CREATE TABLE events (id TEXT PRIMARY KEY, ts REAL NOT NULL, provider TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL, '
                           'uncached_input INTEGER NOT NULL, cached_input INTEGER NOT NULL, output INTEGER NOT NULL, cache_creation INTEGER NOT NULL, '
                           'reasoning INTEGER NOT NULL, session TEXT, project TEXT, agent_kind TEXT)')

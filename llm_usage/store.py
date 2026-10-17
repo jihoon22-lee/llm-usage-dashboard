@@ -455,7 +455,7 @@ class Store:
             from .claude_accounts import describe
             claude=describe(c,names,ended)
             # Other Claude accounts are quota routes of their own beside the original one.
-            routes=[*SUPPORTED_ROUTES,*(a['route'] for a in claude if a['route']!='claude-code')]
+            routes=list(dict.fromkeys([*SUPPORTED_ROUTES,*(a['route'] for a in claude),*(r['route'] for r in rows if is_claude(r['route']))]))
             policies={route:self.state(c,'quota_policy:'+route,{}) for route in routes}
             snapshots={route:self.state(c,'quota_snapshot:'+route,{}) for route in routes}
             resources=inventory(c,now,sources)
