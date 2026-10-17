@@ -511,6 +511,10 @@ details.source-group>summary{cursor:pointer;margin-bottom:0}
 .budget-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--chart-0)}
 .budget-bar.level-mid i{background:var(--warning-ink)}.budget-bar.level-low i{background:var(--error-ink)}
 .report-head{font-size:var(--fs-small);margin-bottom:8px}
+.report-sub{margin-top:14px}
+.quota-use .badge{margin-left:4px;white-space:nowrap}
+/* Phones: the quota use table wraps inside its cells instead of scrolling sideways. */
+@media(max-width:600px){.quota-use :is(td,th):is(:first-child,:nth-child(4)){white-space:normal}.quota-use td:first-child{min-width:6.5em}.quota-use .badge{display:inline-block;margin:2px 0 0}}
 .report-table td,.report-table th{padding:6px 8px;font-size:var(--fs-small)}
 @media(max-width:600px){.report-table .col-req{display:none}.report-table td,.report-table th{padding:6px 5px}}
 .report-older{margin-top:10px;font-size:var(--fs-small)}

@@ -100,7 +100,7 @@ with sync_playwright() as p:
     expect(claude.locator('.quota-account').nth(1).locator('.remaining').first).to_contain_text('92%')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')
-    expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0%')
+    expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0% · 다른 계정 Claude(Max 5x) 5시간 92.0%')
     expect(page.locator('#alerts')).to_contain_text('claude-credits · Max 5x 수집 실패')
     expect(page.locator('#alerts')).to_contain_text('claude-oauth · Max 5x 수집 지연')
     expect(page.locator('#alerts')).not_to_contain_text('claude-resets')

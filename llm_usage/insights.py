@@ -81,27 +81,37 @@ def quota_history(c,now,window=86400,selected_sources=None,since_by_route=None):
         account_source=canonical(key[0])
         preferred=[p for p in observations if p['source']==account_source and latest-p['checked']<=600]
         source=(selected_sources or {}).get(key) or (preferred[-1]['source'] if preferred else observations[-1]['source'])
-        points=[];epoch_reset=None
-        for point in (p for p in observations if p['source']==source):
-            point['break_before']=True;point['break_reason']='start'
-            if points:
-                previous=points[-1]
-                # The same original reset can jitter by 1s between responses. Compare
-                # with the epoch anchor so small changes cannot accumulate into drift.
-                reason=('gap' if point['checked']-previous['checked']>600 else
-                    'unknown' if point['resets'] is None or epoch_reset is None or point['remaining'] is None or previous['remaining'] is None else
-                    'reset' if abs(point['resets']-epoch_reset)>2 else
-                    'expired' if point['checked']>=min(point['resets'],epoch_reset) else
-                    'increase' if point['remaining']>previous['remaining'] else
-                    'error' if any(previous['checked']<checked<=point['checked'] for checked in interruptions.get(source,[])) else None)
-                point['break_before']=reason is not None;point['break_reason']=reason
-            if point['break_before']:epoch_reset=point['resets']
-            if points and int(point['checked']/300)==int(points[-1]['checked']/300) and not point['break_before']:
-                point['break_before']=points[-1]['break_before'];point['break_reason']=points[-1]['break_reason']
-                points[-1]=point
-            else:points.append(point)
-        result[key]=points
+        result[key]=segment([p for p in observations if p['source']==source],interruptions.get(source,[]))
     return result
+
+
+def segment(observations,interruptions=()):
+    """One source stream's observations (ordered by time) with break_before/break_reason.
+
+    A break starts a new epoch: the first point ('start'), a gap over 10 minutes, an
+    unknown value, a new reset time ('reset'), a point at or after the reset
+    ('expired'), a rise in remaining ('increase') or a recorded fetch failure ('error').
+    Points of one five-minute slot inside an epoch collapse to the latest one."""
+    points=[];epoch_reset=None
+    for point in observations:
+        point['break_before']=True;point['break_reason']='start'
+        if points:
+            previous=points[-1]
+            # The same original reset can jitter by 1s between responses. Compare
+            # with the epoch anchor so small changes cannot accumulate into drift.
+            reason=('gap' if point['checked']-previous['checked']>600 else
+                'unknown' if point['resets'] is None or epoch_reset is None or point['remaining'] is None or previous['remaining'] is None else
+                'reset' if abs(point['resets']-epoch_reset)>2 else
+                'expired' if point['checked']>=min(point['resets'],epoch_reset) else
+                'increase' if point['remaining']>previous['remaining'] else
+                'error' if any(previous['checked']<checked<=point['checked'] for checked in interruptions) else None)
+            point['break_before']=reason is not None;point['break_reason']=reason
+        if point['break_before']:epoch_reset=point['resets']
+        if points and int(point['checked']/300)==int(points[-1]['checked']/300) and not point['break_before']:
+            point['break_before']=points[-1]['break_before'];point['break_reason']=points[-1]['break_reason']
+            points[-1]=point
+        else:points.append(point)
+    return points
 
 
 WINDOW_SECONDS={'five_hour':18000,'rolling':18000,'daily':86400,'weekly':604800,'monthly':2592000}

@@ -32,7 +32,13 @@ REPORT = dict(week='2026-09-21', start='2026-09-21', end='2026-09-27', built=now
               totals=dict(tokens=3.2e9, requests=4100, cost=812.5), previous=dict(tokens=2.84e9, requests=3900, cost=700),
               routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
               models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
-              exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24')
+              exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24',
+              quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=150.5, zero_hours=0,
+                              resets_observed=1, before_reset=dict(avg=41.0, min=41.0, max=41.0), exhausted=0, streak=0),
+                         dict(route='claude-code', bucket='five_hour', observed_hours=120, zero_hours=3.5, resets_observed=18,
+                              before_reset=dict(avg=22.4, min=0.0, max=80.0), exhausted=2, streak=3),
+                         dict(route='claude-code', bucket='seven_day', observed_hours=0.5, zero_hours=0, resets_observed=0,
+                              before_reset=None, exhausted=0, streak=0)])
 
 
 def preview(page):
@@ -139,7 +145,24 @@ with sync_playwright() as p:
     reports = page.locator('#reports')
     expect(reports).to_contain_text('2026-09-21 ~ 2026-09-27')
     expect(reports).to_contain_text('전주 대비 +13%')
+    # Quota use: observed facts per window, the tightest first; nothing unobserved reads as 0.
+    use = reports.locator('.quota-use tbody tr')
+    expect(use).to_have_count(3)
+    expect(use.first).to_contain_text('Claude 5시간')
+    expect(use.first).to_contain_text('3주 연속 소진')
+    expect(use.first).to_contain_text('3.5시간')
+    expect(use.first).to_contain_text('평균 22.4% · 최소 0.0% · 18회')
+    expect(use.nth(1)).to_contain_text('Codex 공통 · 주간')
+    expect(use.nth(1)).to_contain_text('41.0% · 1회')
+    expect(use.nth(2)).to_contain_text('미관측')
+    expect(use.nth(2)).to_contain_text('30분')
+    # Older reports without the field keep their exhaustion line; a week whose history was
+    # pruned before it was built says so.
+    page.evaluate("renderReports([{...%s,quota_use:undefined}])" % json.dumps(REPORT))
     expect(reports).to_contain_text('한도 소진: Claude 5시간 2회')
+    page.evaluate("renderReports([{...%s,quota_use:null,exhausted:null}])" % json.dumps(REPORT))
+    expect(reports).to_contain_text('보존 기간이 지나')
+    page.evaluate("renderReports(%s)" % json.dumps([REPORT]))
     # Settings: secrets are write-only; save, clear and test go through the API only.
     page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')
@@ -183,11 +206,12 @@ with sync_playwright() as p:
     assert abs(box['y']+box['height']-844) <= 1, box
     mobile.locator('#tabs [data-view="reports"]').click()
     expect(mobile.locator('#view-reports')).to_be_visible()
-    # The weekly report table fits a phone: short service names, no request column.
-    table = mobile.locator('#reports .report-table')
+    # The weekly report tables fit a phone: short service names, no request or observed column.
+    expect(mobile.locator('#reports .quota-use th.col-req')).to_be_hidden()
+    table = mobile.locator('#reports .report-table').first
     assert table.locator('tbody td').first.inner_text() == 'Codex', table.locator('tbody td').first.inner_text()
     expect(table.locator('th.col-req')).to_be_hidden()
-    assert mobile.evaluate("(()=>{const w=document.querySelector('#reports .table-wrap');return w.scrollWidth<=w.clientWidth;})()")
+    assert mobile.evaluate("[...document.querySelectorAll('#reports .table-wrap')].every(w=>w.scrollWidth<=w.clientWidth)")
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
     mobile.screenshot(path=str(output/'features-mobile.png'), full_page=True)
     assert not [p for p in posts if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')], posts
