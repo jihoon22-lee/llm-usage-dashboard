@@ -161,6 +161,22 @@ class EndedSubscriptionApiTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root/'local.json').read_text())['ended_subscriptions'], {})
         self.assertEqual({r['status'] for r in self.get('/api/limits').json['limits'] if r['route'] == 'devin'}, {'fresh'})
 
+    def test_residual_label_is_saved_validated_and_reset(self):
+        self.assertEqual(self.get('/api/usage?period=7d').json['residual_label'], '로컬 미기록')
+        response = self.post('/api/config/subscription-prices', {'prices': {}, 'residual_label': ' 자동 리뷰 '})
+        self.assertEqual((response.status_code, response.json['residual_label']), (200, '자동 리뷰'))
+        self.assertEqual(self.get('/api/config').json['residual_label'], '자동 리뷰')
+        self.assertEqual(self.get('/api/usage?period=7d').json['residual_label'], '자동 리뷰')
+        self.assertEqual(with_local({'database': self.cfg['database']})['residual_label'], '자동 리뷰')
+        for label in ('가'*21, 'a\nb', 7):
+            self.assertEqual(self.post('/api/config/subscription-prices', {'prices': {}, 'residual_label': label}).status_code, 400, label)
+        # Omitting it keeps the name; an empty one restores the default.
+        self.post('/api/config/subscription-prices', {'prices': {}})
+        self.assertEqual(self.get('/api/config').json['residual_label'], '자동 리뷰')
+        self.post('/api/config/subscription-prices', {'prices': {}, 'residual_label': ' '})
+        self.assertIsNone(self.get('/api/config').json['residual_label'])
+        self.assertEqual(self.get('/api/usage?period=7d').json['residual_label'], '로컬 미기록')
+
     def test_invalid_ended_lists_and_account_route_prices(self):
         for body in ({'prices': {}, 'ended': 'devin'}, {'prices': {}, 'ended': ['Devin!']}, {'prices': {}, 'ended': ['devin\n']},
                      {'prices': {'codex\n': 1}}):

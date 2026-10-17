@@ -67,6 +67,13 @@ function budgetState(usage,budget){
  return {ratio,text:parts.map(p=>p.text).join(' · '),level:ratio>=1?'level-low':ratio>=.8?'level-mid':'level-ok'};
 }
 const shortService={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'};
+// The Codex account residual (account day total minus this PC's records) is one item under
+// model and project grouping: no model, project or token parts. Its name is a setting
+// (/api/usage residual_label), '로컬 미기록' until one is set.
+const RESIDUAL='(account-residual)',RESIDUAL_DEFAULT='로컬 미기록';
+let residualName=RESIDUAL_DEFAULT;
+const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
+const residualText=v=>v===RESIDUAL?residualName:v;
 // 'Claude(Max 5x)' for a Claude account when several exist, 'Claude' otherwise.
 const serviceShort=(route,label)=>{const base=shortService[familyOf(route)]||route,name=label??accountLabel(route);return familyOf(route)==='claude-code'&&name?`${base}(${name})`:base;};
 // Antigravity buckets are '<family>[-<pool>]-<window>[-n]' ('gemini-argon-wtu-weekly' names

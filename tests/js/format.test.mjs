@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -321,4 +321,15 @@ test('several Claude accounts stay one service with account labels',()=>{
  assert.deepEqual([...f.otherAccounts(rows,rows[6])],[]);
  f.setClaudeAccounts(undefined);
  assert.equal(f.multiClaude(),false);
+});
+
+test('the Codex account residual shows under its configured name',()=>{
+  assert.equal(f.residualText(f.RESIDUAL),'로컬 미기록');
+  assert.equal(f.residualText('unknown'),'unknown');
+  f.setResidualName('  자동 리뷰 ');
+  assert.equal(f.residualText(f.RESIDUAL),'자동 리뷰');
+  for(const empty of ['',' ',null,undefined,7]){
+    f.setResidualName(empty);
+    assert.equal(f.residualText(f.RESIDUAL),'로컬 미기록');
+  }
 });

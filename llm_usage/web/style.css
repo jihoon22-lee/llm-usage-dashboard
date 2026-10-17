@@ -118,6 +118,10 @@ footer{border-top:1px solid var(--border);padding:24px 0 30px;color:var(--subtle
 .rank-label strong{font-weight:500;overflow-wrap:anywhere}
 .rank small{color:var(--subtle);font-size:var(--fs-meta)}
 .rank-bar{display:block;height:13px;width:100%;border-radius:3px;background:var(--raised)}
+/* The Codex account residual: unranked, below the models and projects, without drill-down. */
+.rank-residual{padding-top:12px;border-top:1px dashed var(--border)}
+.rank-residual .rank-bar rect{opacity:.6}
+.residual-row td{border-top:1px dashed var(--border)}
 .legend button{font-size:11px;background:none;color:var(--muted);padding:4px;display:flex;align-items:center;gap:5px}
 .legend button::before{content:'●';color:var(--color)}
 .legend button[aria-pressed=false]{opacity:.35;text-decoration:line-through}

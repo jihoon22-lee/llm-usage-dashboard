@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 from .store import TOKENS, KST, identity, stamp
 
 PARTS = TOKENS[:4]
+# The Codex account residual (account day total minus this PC's records) has no model,
+# project, session or token parts. Under model and project grouping it gets this key,
+# which the dashboard shows under the user's name for it, instead of 'unknown'/'미분류';
+# every total still includes it.
+RESIDUAL = '(account-residual)'
+# Its name until the user sets one in the subscription settings (e.g. '자동 리뷰').
+RESIDUAL_LABEL = '로컬 미기록'
 
 
 def initialize(c):
@@ -86,7 +93,9 @@ def _raw(c, row, begin, end):
                           ' FROM events WHERE '+where,args).fetchone())
 
 
-def supplements(c):
+def _evidence(c):
+    """Aggregates to reconcile: other sources as stored; Codex account days of the current
+    account, the latest revision of each (UTC) day, plus older account buckets."""
     rows=[dict(r) for r in c.execute('SELECT * FROM usage_evidence ORDER BY source,scope_id,model,end')]
     from .store import Store
     namespace=Store.account_namespace(c,'codex')
@@ -106,6 +115,16 @@ def supplements(c):
         rows.append(dict(id=scope,source='codex-account',scope_id=scope,route=r['route'],provider='OpenAI',
                          model=None,session=None,project=None,account_key=namespace,start=start,end=start+86400,
                          checked=r['checked'],tokens=r['tokens'],parts=None))
+    return rows
+
+
+def account_days(c):
+    """The Codex account's day totals (09:00–09:00 KST days), as reconciled."""
+    return [r for r in _evidence(c) if r['source']=='codex-account']
+
+
+def supplements(c):
+    rows=_evidence(c)
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
     out=[];conflicts=[]
@@ -177,6 +196,17 @@ def add(row, evidence):
     if evidence['parts']:
         for k in TOKENS:row[k]=row.get(k,0)+evidence['parts'].get(k,0)
     else:row['unclassified_tokens']=row.get('unclassified_tokens',0)+evidence['tokens']
+    if evidence['source']=='codex-account':row['residual_tokens']=row.get('residual_tokens',0)+evidence['tokens']
+
+
+def residual(e):
+    return e['source']=='codex-account'
+
+
+def series_label(e, group):
+    if residual(e) and group in ('model','project'):return RESIDUAL
+    if group=='agent':return '미귀속'
+    return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
 
 
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
@@ -203,8 +233,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             continue
         if sub is not None and sub.get('period_tokens') is not None:sub['period_tokens']+=e['tokens']
         accepted.append(e);add(data['totals'],e)
-        label=e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
-        if group=='agent':label='미귀속'
+        label=series_label(e,group)
         located=False
         for p in data['series']:
             lo=stamp(p.get('range_start',p['time']));hi=stamp(p.get('range_end_exclusive',data['end_exclusive']))
@@ -218,22 +247,25 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                             add(later['values'].setdefault(label,dict.fromkeys((*TOKENS,'requests','cost','unpriced'),0)),e)
                 break
         if not located:unallocated.append(public)
-        row=next((r for r in data['rows'] if r['route']==e['route'] and r['model']==(e['model'] or 'unknown')),None)
+        model=RESIDUAL if residual(e) else e['model'] or 'unknown'
+        row=next((r for r in data['rows'] if r['route']==e['route'] and r['model']==model),None)
         if row is None:
-            row=dict(provider=e['provider'],route=e['route'],model=e['model'] or 'unknown',requests=0,
+            row=dict(provider=e['provider'],route=e['route'],model=model,requests=0,
                      est_cost=None,**dict.fromkeys(TOKENS,0));data['rows'].append(row)
         add(row,e)
-        for collection,key,value in [('sessions','session',e['session']),('projects','project',e['project'])]:
+        project=RESIDUAL if residual(e) else e['project'] or '미분류'
+        for collection,key,value in [('sessions','session',e['session']),('projects','project',project)]:
             if key=='session' and not value:continue
-            if key=='project':value=value or '미분류'
             target=next((r for r in data.get(collection,[]) if r.get(key)==value),None)
             if target is None and collection in data:
-                target={key:value,'route':e['route'],'project':e['project'] or '미분류','kind':'unattributed',
+                target={key:value,'route':e['route'],'project':project,'kind':'unattributed',
                         'requests':0,'sessions':0,'cost':None,'first_ts':e['start'],'last_ts':e['end'],**dict.fromkeys(TOKENS,0)}
                 data[collection].append(target)
                 if collection=='sessions':data['sessions_total']=data.get('sessions_total',0)+1
             if target is not None:add(target,e)
         for kind in ('route','provider','model','project','account'):
+            # The residual is not an unknown model or an unassigned project to filter by.
+            if residual(e) and kind in ('model','project'):continue
             value=e.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None)
             if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
@@ -257,9 +289,9 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     if 'calendar' in data:data['calendar'].sort(key=lambda x:x['day'])
     for name in ('totals','lifetime'):
         value=data[name];value.setdefault('total_tokens',total(value));value.setdefault('recorded_tokens',value['total_tokens'])
-        value.setdefault('supplemental_tokens',0);value.setdefault('unclassified_tokens',0)
+        value.setdefault('supplemental_tokens',0);value.setdefault('unclassified_tokens',0);value.setdefault('residual_tokens',0)
     data['reconciliation']=dict(recorded_tokens=data['totals']['recorded_tokens'],
-        supplemental_tokens=sum(e['tokens'] for e in accepted),
+        supplemental_tokens=sum(e['tokens'] for e in accepted),residual_tokens=sum(e['tokens'] for e in accepted if residual(e)),
         unallocated_tokens=sum(e['tokens'] for e in unallocated),unallocated_intervals=unallocated,
         overlapping_intervals=overlapping,conflicts=conflicts,
         cost_basis='세부 요청 기록 중 단가가 확인된 부분',requests_basis='수집한 고유 요청',
@@ -285,7 +317,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if elapsed and stamp(elapsed['start'])<=e['start'] and e['end']<=stamp(elapsed['end_exclusive']):add(elapsed,e)
             if not (ca<=e['start'] and e['end']<=cb):continue
             placed=False
-            label=e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
+            label=series_label(e,group)
             for p,grid in zip(comparison.get('series',[]),data['series']):
                 lo=stamp(grid.get('range_start',grid['time']))-shift
                 hi=stamp(grid.get('range_end_exclusive',data['end_exclusive']))-shift

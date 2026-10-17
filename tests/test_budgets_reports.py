@@ -84,6 +84,21 @@ class ReportTests(unittest.TestCase):
         self.assertIn('Codex codex · 10080분 2회',reports.summary(report))
         self.assertIn('전주 대비',reports.summary(report))
 
+    def test_codex_account_residual_share_is_its_own_line(self):
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            # Account days run 09:00-09:00 KST: 09-27 and 10-04 cross the week's edges.
+            self.store.account_tokens(c,'codex',[dict(startDate=d,tokens=t) for d,t in (('2026-09-27',700),('2026-09-29',4000),('2026-10-04',900))],NOW)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        # Only 09-29 lies wholly inside the week: its 4,000 less this PC's 2,000 records.
+        self.assertEqual(report['residual'],dict(tokens=2000,account_tokens=4000,days=1))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in report['models']])
+        self.assertIn('Codex 로컬 미기록 ',reports.summary(report))
+        self.assertIn('Codex 자동 리뷰 ',reports.summary(report,'자동 리뷰'))
+        self.assertIn('계정 합계의 50% (1일 기준)',reports.summary(report))
+        # Without account days the line is left out rather than shown as 0%.
+        self.assertIsNone(reports.build(self.store,stamp('2026-09-28T01:00:00Z'),PRICING)['residual'])
+
     def test_quota_use_counts_observed_and_zero_time(self):
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
         codex=next(q for q in report['quota_use'] if q['route']=='codex')

@@ -120,6 +120,9 @@ async function loadConfig(){
    +`<input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정" aria-label="${esc(name)} 월 구독료 (USD)">`
    +`<label class="cfg-check"><input type="checkbox" data-ended="${esc(r)}"${ended[r]?' checked':''}> 구독 종료</label></span></div>`;
  }).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
+  // The Codex account residual's name in model/project views, reports and notifications.
+  +(routes.includes('codex')?`<div class="cfg-row cfg-sub"><span>Codex 계정 합계 차이 이름<small>계정 일별 합계 − 이 PC 기록 · 모델·프로젝트 보기의 별도 항목 · 비우면 ‘${esc(RESIDUAL_DEFAULT)}’</small></span>`
+   +`<span class="cfg-sub-controls"><input type="text" maxlength="20" class="cfg-account-name" id="cfg-residual-label" value="${esc(cfg.residual_label??'')}" placeholder="${esc(RESIDUAL_DEFAULT)}" aria-label="Codex 계정 합계 차이 표시 이름"></span></div>`:'')
   +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="구독 설정 저장">저장</button>';
  $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
@@ -144,6 +147,7 @@ $('cfg-subs').addEventListener('click',async e=>{
  const body={prices,ended};
  const nameInputs=[...$('cfg-subs').querySelectorAll('input[data-account-name]')];
  if(nameInputs.length)body.names=Object.fromEntries(nameInputs.map(i=>[i.dataset.accountName,i.value.trim()]));
+ if($('cfg-residual-label'))body.residual_label=$('cfg-residual-label').value.trim();
  try{await settingsApi('/api/config/subscription-prices',body);savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다. 구독 종료 변경은 한도 화면에 바로, 수집에는 다음 갱신부터 반영됩니다.');loadConfig();refresh();}
  catch(err){cfgMsg('cfg-subs-msg',err.message);}
 });
