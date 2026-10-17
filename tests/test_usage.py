@@ -553,7 +553,9 @@ class UsageCacheTests(unittest.TestCase):
         spy,calls=self.calls();self.store._usage_body=spy
         first=self.store.usage(period='7d')
         second=self.store.usage(period='7d')
-        self.assertEqual(first,second)
+        # The card comparison is worked out per request: its cut follows the clock.
+        self.assertEqual({k:v for k,v in first.items() if k!='prior'},{k:v for k,v in second.items() if k!='prior'})
+        self.assertLessEqual(first['prior']['current_end'],second['prior']['current_end'])
         self.assertEqual(len(calls),1)
         # A different shape (scope/sections/grouping) is a different entry.
         self.store.usage(period='7d',sections='core')

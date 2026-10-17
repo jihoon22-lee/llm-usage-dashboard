@@ -139,6 +139,17 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(reports.this_week(self.store,NOW,PRICING)['prior']['complete'])
         self.assertIsNone(week['accounts'])
 
+    def test_this_week_cut_follows_the_clock_without_a_collection_pass(self):
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-14T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            # Last Saturday 18:30 KST: after the cut at 18:00, before the one at 19:00.
+            self.store.event(c,'l3',stamp('2026-09-26T09:30:00Z'),'OpenAI','codex','gpt-test',dict(output=300))
+        first=reports.this_week(self.store,NOW,PRICING)['prior']
+        # An hour later with no new record (nothing moves the usage cache key).
+        later=reports.this_week(self.store,NOW+3600,PRICING)['prior']
+        self.assertEqual((first['current_end'],later['current_end']),('2026-10-03T18:00:00+09:00','2026-10-03T19:00:00+09:00'))
+        self.assertEqual(later['output']-first['output'],300)
+
     def test_quota_use_counts_observed_and_zero_time(self):
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
         codex=next(q for q in report['quota_use'] if q['route']=='codex')
