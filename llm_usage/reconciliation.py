@@ -124,13 +124,14 @@ def account_days(c):
     return [r for r in _evidence(c) if r['source']=='codex-account']
 
 
-def supplements(c, starts=None):
-    """(supplement entries, conflicts). `starts`, when given, receives where each source's
-    evidence begins: the earliest interval received, whether or not it left anything
-    beyond the local records."""
+def supplements(c, received=None):
+    """(supplement entries, conflicts). `received`, when given, is extended with every
+    aggregate received (its source, start and the fields a scope matches), whether or not
+    it left anything beyond the local records."""
     rows=_evidence(c)
-    if starts is not None:
-        for r in rows:starts[r['source']]=min(starts.get(r['source'],math.inf),r['start'])
+    if received is not None:
+        received.extend(dict(source=r['source'],start=r['start'],route=r['route'],provider=r['provider'],model=r['model'],
+                             project=r['project'],account=_account(c,r)) for r in rows)
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
     out=[];conflicts=[]
@@ -222,11 +223,14 @@ def series_label(e, group):
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
-    # Where each aggregate source's evidence begins (any scope): a comparison needs it
-    # to reach back as far as the local records.
-    first_seen={}
-    entries,conflicts=supplements(c,first_seen)
+    # Where each aggregate source's evidence of the scope begins: a comparison needs it to
+    # reach back as far as the local records (whose first record is taken in the scope too).
+    received=[]
+    entries,conflicts=supplements(c,received)
     entries=[e for e in entries if matches(e,scope)]
+    first_seen={}
+    for r in received:
+        if matches(r,scope):first_seen[r['source']]=min(first_seen.get(r['source'],math.inf),r['start'])
     a,b=stamp(data['start']),stamp(data['end_exclusive'])
     conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
     if not entries and not conflicts:return data
@@ -296,7 +300,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if a<=e['start'] and e['whole_end']<=cut:prior['current_tokens']+=e['tokens'];counted.add(e['source'])
         # A source counted on either side must already have covered the earlier window;
         # otherwise its share is missing there, not zero.
-        if any(first_seen[source]>pa for source in counted):prior['complete']=False
+        if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)

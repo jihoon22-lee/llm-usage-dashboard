@@ -108,6 +108,21 @@ class ReconciliationTests(unittest.TestCase):
         prior=matched.usage(now=self.now,**span)['prior']
         self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,0))
 
+    def test_card_comparison_takes_evidence_coverage_within_the_scope(self):
+        # Old cloud evidence of one project does not cover another project whose evidence
+        # begins inside the current window, as with the local records of a scope.
+        with self.store.connect() as c:
+            for scope_id,project,day,tokens in (('claude:a','a','2026-09-20',50),('claude:b','b','2026-10-08',70)):
+                snapshot(self.store,c,source='claude-cloud',scope_id=scope_id,route='claude-code',provider='Anthropic',model='claude-test',
+                         session=scope_id,project=project,start=stamp(day+'T01:00:00Z'),end=stamp(day+'T02:00:00Z'),tokens=tokens,
+                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
+        span=dict(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
+        whole=self.usage(**span)['prior']
+        self.assertEqual((whole['complete'],whole['current_tokens'],total(whole)),(True,70,0))
+        self.assertFalse(self.usage(scope='project:b',**span)['prior']['complete'])
+        # Both sessions were read with the primary Claude account, whose evidence reaches back.
+        self.assertTrue(self.usage(scope='account:claude-code',**span)['prior']['complete'])
+
     def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
         # The Codex account total beyond this PC's records has no model or project. Under
         # model and project grouping it is one residual item rather than 'unknown' or
