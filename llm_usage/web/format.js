@@ -12,6 +12,22 @@ const kstYear=t=>new Date(t*1000).toLocaleString('en',{timeZone:'Asia/Seoul',yea
 const stamp=(t,now=Date.now()/1000)=>new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',...(kstYear(t)===kstYear(now)?{}:{year:'numeric'}),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const names={'codex':'OpenAI / Codex','claude-code':'Anthropic / Claude Code','antigravity':'Google / Antigravity','opencode-go':'OpenCode Go','devin':'Cognition / Devin'};
 const routeNames={...names,opencode:'OpenCode'};
+// Several Claude accounts are one Claude Code service. Each keeps an internal route
+// ('claude-code' for the original account, 'claude-code:<hash>' for another one);
+// labels come from the API and are shown only once a second account exists.
+const familyOf=route=>typeof route==='string'&&route.startsWith('claude-code')?'claude-code':route;
+const claudeAccounts={labels:{},list:[]};
+function setClaudeAccounts(list){
+ claudeAccounts.list=Array.isArray(list)?list:[];
+ claudeAccounts.labels=claudeAccounts.list.length>1?Object.fromEntries(claudeAccounts.list.map(a=>[a.route,a.label])):{};
+}
+const multiClaude=()=>claudeAccounts.list.length>1;
+const HOME_KINDS={default:'기본 Claude 홈',zerosub:'zerosub 관리 홈',configured:'설정한 홈',observed:'관측된 홈',windows:'Windows 홈'};
+// Where an account signs in, without paths: '기본 Claude 홈' or 'zerosub 관리 홈 claude-0123abcd4567'.
+const accountWhere=a=>(a?.homes||[]).filter(h=>h.kind!=='windows').map(h=>(HOME_KINDS[h.kind]||h.kind)+(h.kind==='default'?'':' '+String(h.name||'').slice(0,24))).join(' · ');
+const accountLabel=route=>route==='claude-code:unknown'?'계정 미확인':claudeAccounts.labels[route]||null;
+// 'Anthropic / Claude Code · Max 5x' for a Claude account, the service name otherwise.
+const serviceFull=route=>{const base=routeNames[familyOf(route)]||route,label=familyOf(route)==='claude-code'?accountLabel(route):null;return label?`${base} · ${label}`:base;};
 const statuses={fresh:'최근 확인',stale:'오래된 값',error:'수집 실패',unavailable:'미제공',ended:'구독 없음',ok:'수집 완료',partial:'일부 미수집',idle:'미사용'};
 const fields=['uncached_input','cached_input','output','total','cache_creation','reasoning'];
 // Every table, ranking and share uses the same total as the cards and charts (cache creation included).
@@ -45,6 +61,8 @@ function budgetState(usage,budget){
  return {ratio,text:parts.map(p=>p.text).join(' · '),level:ratio>=1?'level-low':ratio>=.8?'level-mid':'level-ok'};
 }
 const shortService={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'};
+// 'Claude(Max 5x)' for a Claude account when several exist, 'Claude' otherwise.
+const serviceShort=(route,label)=>{const base=shortService[familyOf(route)]||route,name=label??accountLabel(route);return familyOf(route)==='claude-code'&&name?`${base}(${name})`:base;};
 // Antigravity buckets are '<family>-<window>[-n]'; anything else keeps its own name.
 const agyBucket=bucket=>{const m=/^(gemini|3p)-(5h|weekly)(?:-(\d+))?$/.exec(bucket);return m&&{family:m[1]==='3p'?'3rd party':'Gemini',window:m[2]==='5h'?'5시간':'주간',suffix:m[3]||''};};
 const bucketName=r=>{
@@ -67,18 +85,20 @@ function availability(rows){
 }
 const levelOf=(v,low)=>v<=low?'level-low':v<=50?'level-mid':'level-ok';
 const ring=(row,low)=>row?`<svg class="ring ${levelOf(usable(row),low)}" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.9" class="ring-bg"/><circle cx="18" cy="18" r="15.9" class="ring-fg" pathLength="100" stroke-dasharray="${Math.max(0,Math.min(100,usable(row))).toFixed(1)} 100" transform="rotate(-90 18 18)"/></svg>`:'<span class="ring ring-empty" aria-hidden="true"></span>';
-const modelQuota=r=>['model','unknown'].includes(r.scope?.role)||(r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex')||(r.route==='claude-code'&&r.bucket.startsWith('seven_day_'));
+const modelQuota=r=>['model','unknown'].includes(r.scope?.role)||(r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex')||(familyOf(r.route)==='claude-code'&&r.bucket.startsWith('seven_day_'));
 const quotaLabel=r=>{
  const agy=r.route==='antigravity'&&agyBucket(r.bucket);
  if(agy)return `Antigravity ${agy.window} ${agy.family}${agy.suffix?' '+agy.suffix:''}`;
- const sv=shortService[r.route]||r.route,bn=bucketName(r);
- return bn.startsWith(sv)?bn:`${sv} ${bn}`;
+ const sv=shortService[familyOf(r.route)]||r.route,bn=bucketName(r);
+ return bn.startsWith(sv)?bn:`${serviceShort(r.route,r.account_label)} ${bn}`;
 };
-const SCOPE_LABELS={route:'서비스',provider:'제작사',model:'모델',project:'프로젝트'};
+const SCOPE_LABELS={route:'서비스',provider:'제작사',model:'모델',project:'프로젝트',account:'Claude 계정'};
 const scopeText=scope=>{const i=scope.indexOf(':');if(i<0)return scope;
  const kind=scope.slice(0,i),value=scope.slice(i+1);
- const name=kind==='route'?(routeNames[value]||value):value;
+ const name=kind==='route'?(routeNames[value]||value):kind==='account'?(accountLabel(value)||value):value;
  return (SCOPE_LABELS[kind]||kind)+': '+name;};
+// Per-account source names ('claude-oauth:<hash>') read as 'claude-oauth · Max 5x'.
+const sourceName=name=>{const m=/^(.*):([0-9a-f]{12})$/.exec(name||'');if(!m)return name;const label=accountLabel('claude-code:'+m[2]);return label?`${m[1]} · ${label}`:name;};
 const SOURCE_GROUPS=[['Claude',/claude/i],['Codex',/codex/i],['Antigravity',/antigravity/i],['Devin',/devin/i],['OpenCode',/opencode/i],
  ['운영',/^(수집기|일일 백업|원본 대조|외부 알림|데이터베이스)$/],['내부 작업',/^(normalization|session-backfill)$/]];
 const SOURCE_RANK={error:0,unavailable:1,partial:2,stale:3,ok:4,fresh:4,idle:5,ended:5};

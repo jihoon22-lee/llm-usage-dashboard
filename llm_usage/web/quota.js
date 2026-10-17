@@ -67,8 +67,17 @@ function briefQuota(rows,route){
  }).join('');
 }
 const lowPercent=()=>lastLimits?.low_percent??15;
+// Claude accounts of one card in the API's order (original account first).
+function accountGroups(rows){
+ const order=claudeAccounts.list.map(a=>a.route),by=new Map();
+ for(const r of rows)(by.get(r.route)||by.set(r.route,[]).get(r.route)).push(r);
+ return [...by.entries()].sort((a,b)=>{const i=order.indexOf(a[0]),j=order.indexOf(b[0]);return (i<0?1e9:i)-(j<0?1e9:j)||a[0].localeCompare(b[0]);});
+}
+const accountInfo=route=>claudeAccounts.list.find(a=>a.route===route)||{route};
+const accountEnded=rows=>rows.length>0&&rows.every(r=>r.user_ended);
 function renderLimits(data){
  lastLimits=data;
+ if('claude_accounts' in data)setClaudeAccounts(data.claude_accounts);
  const opened=new Set([...$('limits').querySelectorAll('details[open]')].map(el=>el.dataset.history));
  function bucket(r,shared,folded=false){
   const lowPct=data.low_percent??15,blocked=r.blocked_by;
@@ -80,7 +89,7 @@ function renderLimits(data){
   const key=r.route+':'+r.bucket+':detail';
   const decrease=observedDecrease(r);
   const decreaseText=decrease?`최근 ${Math.round(decrease.observed_minutes)}분 · ${decrease.decrease_pp.toFixed(1)}%p 감소`:'';
-  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges"><span class="badge ${esc(r.status)}">${esc(statuses[r.status])}</span>${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
+  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges"><span class="badge ${esc(r.status)}">${esc(r.user_ended?'구독 종료':statuses[r.status])}</span>${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
    +`<div class="bucket-summary"><div class="remaining">${r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${r.status==='fresh'?'잔여':'이전 관측'}${blocked?' · 사용 불가':''}</small></div>`
    +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress></div>`)
    +`<p class="bucket-reset">${r.resets?'초기화 '+esc(left(r.seconds_to_reset)):'초기화 정보 미제공'}${blockedNote}</p></div>`
@@ -91,7 +100,7 @@ function renderLimits(data){
    +`${events}${win}${quotaHistory(r,opened,data.now)}</details></div>`;
  }
  const groups=Object.entries(names).map(([route,name])=>{
-  const rows=data.limits.filter(r=>r.route===route);
+  const rows=data.limits.filter(r=>familyOf(r.route)===route);
   if(route==='antigravity')rows.sort((a,b)=>Number(!a.bucket.toLowerCase().includes('gemini'))-Number(!b.bucket.toLowerCase().includes('gemini')));
   return {route,name,rows};
  });
@@ -99,9 +108,11 @@ function renderLimits(data){
  if(savedQuota&&savedQuota.length)groups.sort((a,b)=>{const ai=savedQuota.indexOf(a.route),bi=savedQuota.indexOf(b.route);return(ai<0?1e9:ai)-(bi<0?1e9:bi);});
  // Routes with no fresh bucket that ended or stopped reporting fold away.
  const nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
- const dormant=g=>!g.rows.some(r=>r.status==='fresh')
-  &&(g.rows.some(r=>r.status==='ended')
-   ||(Math.max(0,...g.rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...g.rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
+ const quiet=rows=>!rows.some(r=>r.status==='fresh')
+  &&(rows.some(r=>r.status==='ended')
+   ||(Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
+ // A service with several Claude accounts folds only when every account is quiet.
+ const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
  const active=groups.filter(g=>!dormant(g)),folded=groups.filter(dormant);
  $('limits').classList.toggle('two-services',active.length===2);
  $('quota-overview').classList.toggle('editing',editingQuota);
@@ -109,11 +120,17 @@ function renderLimits(data){
   // A route with a current value is current; older buckets beside it are noted, not
   // allowed to mark the whole service as old.
   const common=rows.filter(r=>!modelQuota(r)),anyFresh=common.some(r=>r.status==='fresh');
-  const state=common.some(r=>r.status==='error')?'error':anyFresh?'fresh':['stale','unavailable'].find(s=>common.some(r=>r.status===s))||'unavailable';
-  const stateLabel=statuses[state]+(state==='fresh'&&common.some(r=>r.status!=='fresh')?' · 일부 오래됨':'');
-  const gauge=ring(availability(rows),data.low_percent??15);
-  if(editingQuota)return `<div class="quota-edit-row" data-order-route="${route}"><button type="button" data-move="${route}" data-dir="-1" aria-label="위로">↑</button><span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span><span class="overview-value">${briefQuota(rows,route)}</span><button type="button" data-move="${route}" data-dir="1" aria-label="아래로">↓</button></div>`;
-  return `<button type="button" class="quota-overview-row" data-quota="${route}" aria-controls="quota-${route}" aria-expanded="${selectedQuota===route}"><span class="overview-name">${gauge}<span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span></span><span class="overview-value">${briefQuota(rows,route)}</span><span aria-hidden="true">${selectedQuota===route?'−':'＋'}</span></button>`;
+  const accounts=route==='claude-code'&&multiClaude()?accountGroups(rows).filter(([,list])=>!accountEnded(list)):null;
+  // With several accounts, one account's failure does not hide another account's current values.
+  const state=accounts?(anyFresh?'fresh':common.some(r=>r.status==='error')?'error':['stale','unavailable'].find(s=>common.some(r=>r.status===s))||'unavailable')
+   :common.some(r=>r.status==='error')?'error':anyFresh?'fresh':['stale','unavailable'].find(s=>common.some(r=>r.status===s))||'unavailable';
+  const stateLabel=statuses[state]+(state==='fresh'&&common.some(r=>r.status!=='fresh'&&!r.user_ended)?(accounts?' · 일부 계정 확인 필요':' · 일부 오래됨'):'');
+  // The ring shows the account with the most room: zerosub switches to it when one runs out.
+  const best=accounts?accounts.map(([,list])=>availability(list)).filter(Boolean).sort((a,b)=>usable(b)-usable(a))[0]||null:availability(rows);
+  const gauge=ring(best,data.low_percent??15);
+  const value=accounts?`<span class="ov-accounts">${accounts.map(([account,list])=>`<span class="ov-account"><small>${esc(accountLabel(account)||'계정')}</small>${briefQuota(list,route)}</span>`).join('')}</span>`:briefQuota(rows,route);
+  if(editingQuota)return `<div class="quota-edit-row" data-order-route="${route}"><button type="button" data-move="${route}" data-dir="-1" aria-label="위로">↑</button><span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span><span class="overview-value">${value}</span><button type="button" data-move="${route}" data-dir="1" aria-label="아래로">↓</button></div>`;
+  return `<button type="button" class="quota-overview-row" data-quota="${route}" aria-controls="quota-${route}" aria-expanded="${selectedQuota===route}"><span class="overview-name">${gauge}<span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span></span><span class="overview-value">${value}</span><span aria-hidden="true">${selectedQuota===route?'−':'＋'}</span></button>`;
  }).join('');
  $('quota-strip').hidden=true;$('quota-strip').replaceChildren();
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
@@ -130,7 +147,7 @@ function renderLimits(data){
   if(last&&last.route===r.route&&Math.abs(last.resets-r.resets)<60&&exhausted(last.items[0])===exhausted(r))last.items.push(r);
   else merged.push({route:r.route,resets:r.resets,seconds:r.seconds_to_reset,items:[r]});
  }
- const service=route=>shortService[route]||route;
+ const service=route=>serviceShort(route);
  // A 7-day axis places each reset; later ones sit at the right edge.
  const axis=merged.length?`<div class="reset-axis" role="img" aria-label="앞으로 7일 초기화 시각">${[0,1,2,3,4,5,6,7].map(d=>`<i class="reset-tick" data-x="${(d/7*100).toFixed(2)}"><small>${d?d+'일':'지금'}</small></i>`).join('')}${merged.map(m=>`<b class="reset-dot${exhausted(m.items[0])?' low':''}" data-x="${Math.min(100,m.seconds/(7*86400)*100).toFixed(2)}" tabindex="0" data-tip="${esc((m.items.length===1?quotaLabel(m.items[0]):service(m.route)+' '+m.items.map(r=>bucketName(r)).join(' · '))+' · '+left(m.seconds)+' · '+when(m.resets)+' KST')}"></b>`).join('')}</div>`:'';
  $('reset-timeline').innerHTML=merged.length?`<h3>다음 초기화</h3>${axis}<div class="reset-list">${merged.map(m=>{
@@ -141,27 +158,46 @@ function renderLimits(data){
   return `<div class="reset-item${exhausted(first)?' low':''}"><strong>${esc(label)}${tag}</strong><span><b>${esc(soon(m.seconds))}</b> · <time datetime="${new Date(m.resets*1000).toISOString()}">${esc(when(m.resets))}</time></span></div>`;
  }).join('')}</div>`:'';
  applyGeometry($('reset-timeline'));
- const cardHtml=({route,name,rows})=>{
-  const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=route+':secondary';
+ // One quota body: its current windows, older observations and model windows. `prefix`
+ // keeps each Claude account's folds apart (the service route alone otherwise).
+ const cardBody=(route,rows,prefix)=>{
+  // A subscription marked ended: one note, its last observations folded below.
+  if(rows.length&&rows.every(r=>r.user_ended)){
+   const endedKey=prefix+':ended';
+   return `<p class="quota-note">설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.</p>`
+    +`<details class="quota-older" data-history="${esc(endedKey)}"${opened.has(endedKey)?' open':''}><summary>마지막 관측 ${rows.filter(r=>r.remaining!=null).length}개</summary>${rows.map(r=>bucket(r,false,true)).join('')}</details>`;
+  }
+  const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=prefix+':secondary';
   const checks=[...new Set(rows.map(r=>r.checked??null))],details=[...new Set(rows.map(r=>r.detail).filter(Boolean))];
   const shared=checks.length<=1&&details.length<=1;
   const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${details[0]?(checks[0]!=null?' · ':'')+esc(details[0]):''}</p>`:'';
   // Beside a current value, older observations fold into one line so cards stay short.
   const current=primary.some(r=>r.status==='fresh')?primary.filter(r=>r.status==='fresh'||r.remaining==null):primary;
-  const older=primary.filter(r=>!current.includes(r)),olderKey=route+':older';
+  const older=primary.filter(r=>!current.includes(r)),olderKey=prefix+':older';
   let content=current.map(r=>bucket(r,shared)).join('');
   if(route==='antigravity'){
    const {h5,wk,other}=agyWindows(current);
    content=[['5시간',h5],['주간',wk],['',other]].filter(([,items])=>items.length)
     .map(([title,items])=>`<div class="quota-window-group">${title?`<h4 class="quota-window-title">${title}</h4>`:''}${items.map(r=>bucket(r,shared)).join('')}</div>`).join('<hr class="quota-divider">');
   }
-  if(older.length)content+=`<details class="quota-older" data-history="${esc(olderKey)}"${opened.has(olderKey)?' open':''}><summary>이전 관측 ${older.length}개 <small>${older.map(r=>esc(quotaLabel(r).replace((shortService[route]||route)+' ',''))+' '+(r.remaining==null?'—':percent(r.remaining))+' · '+esc(statuses[r.status]||r.status)).join(' · ')}</small></summary>${older.map(r=>bucket(r,shared,true)).join('')}</details>`
+  if(older.length)content+=`<details class="quota-older" data-history="${esc(olderKey)}"${opened.has(olderKey)?' open':''}><summary>이전 관측 ${older.length}개 <small>${older.map(r=>esc(quotaLabel(r).replace(serviceShort(r.route,r.account_label)+' ',''))+' '+(r.remaining==null?'—':percent(r.remaining))+' · '+esc(statuses[r.status]||r.status)).join(' · ')}</small></summary>${older.map(r=>bucket(r,shared,true)).join('')}</details>`
    // Why a window is not current stays readable without opening the fold.
    +[...new Set(older.map(r=>r.note).filter(Boolean))].map(note=>`<p class="quota-note">${esc(note)}</p>`).join('');
-  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${meta}${content}${secondary.length?`<details class="quota-secondary" data-history="${key}"${opened.has(key)?' open':''}><summary>모델별 추가 한도 <small>${secondary.filter(r=>r.bucket.includes('300분')).map(r=>'5시간 '+(r.status==='fresh'?percent(r.remaining):'수신 대기')).join(' · ')}</small></summary>${secondary.map(r=>bucket(r,shared)).join('')}</details>`:''}</article>`;
+  return meta+content+(secondary.length?`<details class="quota-secondary" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>모델별 추가 한도 <small>${secondary.filter(r=>r.bucket.includes('300분')).map(r=>'5시간 '+(r.status==='fresh'?percent(r.remaining):'수신 대기')).join(' · ')}</small></summary>${secondary.map(r=>bucket(r,shared)).join('')}</details>`:'');
+ };
+ // Several Claude accounts stay one Claude Code card with a section per account.
+ const accountSection=(route,account,rows)=>{
+  const info=accountInfo(account),label=accountLabel(account)||info.label||'계정';
+  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',accountWhere(info),info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
+  const title=`<h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>`;
+  return `<section class="quota-account${accountEnded(rows)?' ended':''}" aria-label="${esc('Claude '+label+' 계정')}">${title}${cardBody(route,rows,account)}</section>`;
+ };
+ const cardHtml=({route,name,rows})=>{
+  const body=route==='claude-code'&&multiClaude()?accountGroups(rows).map(([account,list])=>accountSection(route,account,list)).join('<hr class="quota-divider">'):cardBody(route,rows,route);
+  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${body}</article>`;
  };
  $('limits').innerHTML=active.map(cardHtml).join('')
-  +(folded.length?`<details class="quota-dormant"><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');
+  +(folded.length?`<details class="quota-dormant"><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)+(g.rows.length&&g.rows.every(r=>r.user_ended)?' (구독 종료)':'')).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');
  fitSvgText($('limits'));applyGeometry($('limits'));
 }
 $('quota-overview').addEventListener('click',event=>{
@@ -231,16 +267,16 @@ document.querySelectorAll('.order-toggle').forEach(button=>button.addEventListen
 // Collapse state survives re-renders on each refresh.
 let alertsExpanded=false;
 function expiryText(e,now){
- const service=shortService[e.route]||e.route,left=soon(e.expires-now)+' 후 만료'+(e.stale?' · 확인 오래됨':'');
+ const service=serviceShort(e.route),base=shortService[familyOf(e.route)]||e.route,left=soon(e.expires-now)+' 후 만료'+(e.stale?' · 확인 오래됨':'');
  if(e.kind==='reset')return `${service} 초기화권 ${e.amount}개 ${left}`;
- const name=e.label.startsWith(service+' ')?e.label.slice(service.length+1):e.label;
+ const name=e.label.startsWith(base+' ')?e.label.slice(base.length+1):e.label;
  return `${service} ${name} ${e.partial?'일부 잔액':resourceValue(e,e.amount)} ${left}`;
 }
 function renderAlerts(limits,usage){
  const items=[];
  (limits.limits||[]).forEach(r=>{
   const label=quotaLabel(r);
-  if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15))items.push({text:`${label} 잔여 ${percent(r.remaining)}`,route:r.route});
+  if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15))items.push({text:`${label} 잔여 ${percent(r.remaining)}`,route:familyOf(r.route)});
  });
  // Balances and reset grants ending within a day; the chip jumps to the resource card.
  expiringResources(limits.resources?.items,limits.now).forEach(e=>items.push({text:expiryText(e,limits.now),resource:e.id}));

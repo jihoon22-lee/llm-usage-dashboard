@@ -27,8 +27,10 @@ $('csv-export').addEventListener('click',()=>{
 });
 $('csv-sessions').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.sessions)return;
- downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD'],
-  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'']));
+ const accounts=multiClaude();
+ downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD',...(accounts?['Claude 계정']:[])],
+  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'',
+   ...(accounts?[familyOf(s.route)==='claude-code'?(s.accounts||[]).map(a=>accountLabel(a)||a).join(' · '):'']:[])]));
 });
 $('csv-projects').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.projects)return;
@@ -53,9 +55,12 @@ function renderScope(data){
  for(const [kind,label] of Object.entries(SCOPE_LABELS)){
   const values=(data.scope_options&&data.scope_options[kind])||[];if(!values.length)continue;
   const group=document.createElement('optgroup');group.label=label;
-  for(const v of values){const o=new Option(kind==='route'?(routeNames[v]||v):v,kind+':'+v);group.append(o);}
+  for(const v of values){const o=new Option(kind==='route'?(routeNames[v]||v):kind==='account'?(accountLabel(v)||v):v,kind+':'+v);group.append(o);}
   sel.add(group);
  }
+ // The per-account view exists only once a second Claude account is known.
+ const byAccount=$('group').querySelector('option[value="account"]');
+ if(byAccount){byAccount.hidden=byAccount.disabled=!multiClaude()&&$('group').value!=='account';}
  if(scope&&![...sel.options].some(o=>o.value===scope))sel.add(new Option(scopeText(scope),scope));
  sel.value=scope||'';
  const chip=$('scope-chip');
@@ -174,7 +179,7 @@ const mobileOpen=new Map(foldedPanels.map(panel=>[panel,panel.hasAttribute('data
 const filterOptions=[...document.querySelectorAll('.filters option')].map(option=>({option,label:option.textContent}));
 const shortOptions={period:{'1h':'1시간',today:'오늘','7d':'7일','30d':'30일',all:'전체',custom:'직접'},
  granularity:{day:'일별',hour:'시간',week:'주별',month:'월별'},
- group:{provider:'제작사',route:'서비스',model:'모델',project:'프로젝트',agent:'에이전트'},
+ group:{provider:'제작사',route:'서비스',model:'모델',project:'프로젝트',account:'계정',agent:'에이전트'},
  metric:{tokens:'토큰',requests:'요청 수',cost:'비용'},
  compare:{'':'비교 없음',previous:'직전',week:'7일 전',month:'28일 전'},
  cumulative:{'0':'구간별','1':'누적',share:'점유율 막대','share-area':'점유율 면적','share-line':'점유율 꺾은선'}};
@@ -197,6 +202,7 @@ foldedPanels.forEach(panel=>panel.addEventListener('toggle',()=>{if(compactMedia
 compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
+ if('claude_accounts' in data)setClaudeAccounts(data.claude_accounts);
  $('first-use').hidden=!!data.scope||total(data.lifetime||{})>0||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
@@ -275,7 +281,7 @@ function renderSources(list){
  for(const s of [...list].sort((a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name)))
   (groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
  const worst=items=>Math.min(...items.map(s=>SOURCE_RANK[s.status]??4));
- const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><p class="source-line"><span><strong>${esc(s.name)}</strong> · ${esc(statuses[s.status]||s.status)}</span><small>${s.checked?when(s.checked):'확인 기록 없음'}</small></p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span><small>${s.checked?when(s.checked):'확인 기록 없음'}</small></p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
  const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업')||worst(a[1])-worst(b[1]));
  $('sources').innerHTML=`<div class="source-summary"><span class="ok">정상 <strong>${counts.ok}</strong></span><span class="warn">확인 필요 <strong>${counts.warn}</strong></span><span class="bad">실패·미수집 <strong>${counts.bad}</strong></span><span class="idle">미사용 <strong>${counts.idle}</strong></span></div>`
   +ordered.map(([name,items])=>name==='내부 작업'

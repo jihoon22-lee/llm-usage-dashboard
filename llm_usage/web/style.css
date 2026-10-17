@@ -216,6 +216,17 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .quota-window-title{font-size:12px;font-weight:700;color:var(--ink);margin:0 0 6px}
 .quota-window-group .bucket:first-of-type{border-top:none;padding-top:4px}
 .quota-divider{border:0;border-top:1px solid var(--border);margin:14px 0 10px}
+/* Several Claude accounts: one card, a titled section per account. */
+.quota-account-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;margin:8px 0 2px;font-size:13px;font-weight:700;color:var(--ink)}
+.quota-account-title small{font-size:var(--fs-meta);font-weight:400;color:var(--muted);overflow-wrap:anywhere}
+.quota-account .card-meta{margin-top:2px}
+.quota-account .bucket:first-of-type{border-top:none;padding-top:4px}
+.quota-account.ended .quota-account-title>span{color:var(--muted)}
+.session-accounts{display:block;font-size:var(--fs-meta);color:var(--muted)}
+.ov-accounts{display:flex;flex-direction:column;gap:5px}
+.ov-account{display:block}
+.ov-account+.ov-account{border-top:1px dashed var(--line);padding-top:4px}
+.ov-account>small{display:block;font-size:var(--fs-meta);font-weight:650;color:var(--muted);line-height:1.4}
 .quota-secondary{margin-top:16px;border-top:1px dashed var(--border);padding-top:12px}
 .quota-secondary>summary{font-size:11px;color:var(--muted);line-height:1.6}
 .quota-secondary>summary small{display:block;font-weight:400}
@@ -319,7 +330,8 @@ tr[data-scope]:hover{background:var(--raised)}
 .cfg-row>span{min-width:150px}
 .cfg-row>span small{display:block;color:var(--muted);font-size:var(--fs-meta)}
 .cfg-row input{width:130px}
-.cfg-sub-controls{display:flex;align-items:center;gap:12px}
+.cfg-sub-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+#cfg-subs .cfg-account-name{width:150px}
 .cfg-check{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .cfg-row .cfg-check input,#cfg-subs .cfg-check input{width:auto;min-height:0;padding:0}
 .cfg-sub.ended>span:first-child{color:var(--muted)}
