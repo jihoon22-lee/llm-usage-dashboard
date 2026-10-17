@@ -165,11 +165,17 @@ class ReportTests(unittest.TestCase):
         start=stamp('2026-09-29T00:00:00Z')
         with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
             for i in range(3):self.store.limit(c,'claude-code','five_hour',0,start+18000,start+i*300,'claude-oauth')
+            # The same failure also falls between the readings around a window reset.
+            for i,(remaining,resets) in enumerate(((0,start+400),(0,start+400),(100,start+400+604800))):
+                self.store.limit(c,'claude-code','seven_day',remaining,resets,start+i*300,'claude-oauth')
             # The poll between the last two readings failed: that interval is not observed 0% time.
             self.store.source(c,'claude-oauth','error','timeout',start+450)
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
-        use=next(q for q in report['quota_use'] if (q['route'],q['bucket'])==('claude-code','five_hour'))
-        self.assertEqual((use['observed_hours'],use['zero_hours']),(0.08,0.08))
+        use={q['bucket']:q for q in report['quota_use'] if q['route']=='claude-code'}
+        self.assertEqual((use['five_hour']['observed_hours'],use['five_hour']['zero_hours']),(0.08,0.08))
+        self.assertEqual((use['seven_day']['observed_hours'],use['seven_day']['zero_hours']),(0.08,0.08))
+        # The reset itself was still seen across the two readings.
+        self.assertEqual(use['seven_day']['before_reset'],dict(avg=0,min=0,max=0))
 
     def test_consecutive_exhaustion_weeks(self):
         with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:

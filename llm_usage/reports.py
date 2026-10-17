@@ -34,7 +34,12 @@ def _points(c,route,bucket,source,start,end,since=None):
                                      (route,bucket,source,max(start-600,since or 0),end+600))]
     interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<=?',
                                            (source,start-600,end+600))]
-    return segment(rows,interruptions)
+    points=segment(rows,interruptions)
+    # A fetch failure since the previous reading, whichever break reason segment() gives
+    # first (a reset or a rise in remaining can come before 'error').
+    for previous,point in zip(points,points[1:]):
+        point['interrupted']=any(previous['checked']<t<=point['checked'] for t in interruptions)
+    return points
 
 
 def _use(points,start,end):
@@ -45,7 +50,7 @@ def _use(points,start,end):
         span=point['checked']-previous['checked']
         inside=max(0,min(point['checked'],end)-max(previous['checked'],start))
         # A recorded fetch failure between two readings leaves that interval unobserved.
-        if span<=600 and point['break_reason']!='error' and previous['remaining'] is not None and point['remaining'] is not None:
+        if span<=600 and not point['interrupted'] and previous['remaining'] is not None and point['remaining'] is not None:
             observed+=inside
             if previous['remaining']<=0 and point['remaining']<=0:zero+=inside
         # The window's reset time passed between two consecutive readings: whatever the
