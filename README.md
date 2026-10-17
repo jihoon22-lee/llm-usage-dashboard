@@ -21,6 +21,8 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 - 캐시·추론 구분, 스트리밍·재수집·Windows/WSL 사본 중복 제거
 - 데스크톱·모바일, CSV, 제한된 오프라인 통계 사본, 선택적 외부 알림
 - 없는 원본 값을 0이나 100%로 채우지 않고 미제공·실패·오래된 관측을 구분
+- Claude 계정 여러 개(zerosub·paseo 등 `CLAUDE_CONFIG_DIR`별 로그인): 하나의 Claude Code 서비스 안에서 계정별 한도·초기화·토큰 사용량·구독 가치를 구분
+- 설정에서 구독 종료를 표시하면 그 서비스의 한도 조회·알림을 멈추고 한도 카드를 접음(사용 기록은 계속 집계)
 
 ## 지원 범위
 
@@ -33,6 +35,8 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 | Devin CLI | 로컬 SQLite | 기존 CLI 계정 경로 | 내부 API, Cloud 세션 미지원 |
 
 Codex 부분 응답에서 계정 ID가 빠져도 저장된 계정 유형·이메일 기반 revision이 일치하면 기존 계정 합계를 유지합니다. 이는 인증 토큰 일치 검사가 아니며, 다른 계정 ID나 변경된 revision은 별도 계정으로 처리합니다. Claude 보조 `events` API의 404는 보조 조회만 세션 변경 또는 24시간 뒤에 재시도하며, 최근 15분 내 갱신된 세션의 본문 조회는 계속합니다. 두 경계 조건은 합성 응답으로 검증했으며 실제 계정 장애 재현은 수행하지 않았습니다.
+
+Claude 계정이 여러 개면 각 설정 홈의 로그인으로 한도·자원·클라우드 세션을 따로 조회하고, 공유 transcript의 요청은 llm-usage Claude Code 훅(턴마다 세션·해시된 계정 기록)과 Claude Code 프로세스 기록으로 계정에 배정합니다. 두 번째 계정이 생기기 전 기록은 원래 계정, 근거가 없는 이후 요청은 ‘계정 미확인’으로 따로 집계하며 추정해 합치지 않습니다. 훅은 `llm-usage install-hooks`로 명시적으로 연결합니다. 이메일·이름은 저장하지 않아 계정은 요금제 이름이나 설정에서 정한 표시 이름으로 보입니다. [Claude 계정 구분](docs/architecture.md#claude-계정-구분)을 확인하세요.
 
 [구조와 수집 경로](docs/architecture.md)에서 과거 실수신과 합성 검증을 구분합니다.
 Windows는 선택한 프로필의 **기록 수집 대상**입니다. Windows/macOS 네이티브 서버 설치는 지원하지 않습니다.
