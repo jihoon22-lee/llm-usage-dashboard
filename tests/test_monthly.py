@@ -98,6 +98,14 @@ class MonthlyTests(unittest.TestCase):
         self.assertEqual(monthly.ensure_months(self.store,NOW+600,rates,PRICES,{}),['2026-08','2026-09'])
         self.assertEqual(next(s for s in self.month('2026-09')['subscriptions'] if s['route']=='codex')['value'],6.0)
 
+    def test_records_attributed_later_rebuild_the_last_two_months(self):
+        monthly.ensure_months(self.store,NOW,PRICING,PRICES,{})
+        # A record of September assigned to another project later: every token sum is kept.
+        with self.store.connect() as c:
+            c.execute("UPDATE events SET project='gamma' WHERE project='beta'");self.store.bump_data_version(c)
+        self.assertEqual(monthly.ensure_months(self.store,NOW+300,PRICING,PRICES,{}),['2026-08','2026-09'])
+        self.assertEqual([p['project'] for p in self.month('2026-09')['projects']],['alpha','gamma'])
+
     def test_quota_use_comes_from_the_history_kept_and_survives_pruning(self):
         with self.store.connect() as c:self.store.save_state(c,'history_cutoff',stamp('2026-09-05T00:00:00Z'))
         monthly.ensure_months(self.store,NOW,PRICING,PRICES,{})

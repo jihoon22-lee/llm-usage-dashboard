@@ -243,6 +243,12 @@ with sync_playwright() as p:
     older.locator('details > summary').click()
     expect(older).to_contain_text('부분 월(기록 08-20부터)')
     expect(older).to_contain_text('이 달의 한도 이력은 보존 기간이 지나')
+    # Account names that arrive after the settlements were drawn redraw them with the names.
+    page.evaluate("window.shownAccounts=claudeAccounts.list;setClaudeAccounts([{route:'claude-code',label:'Pro'},"
+                  "{route:'claude-code:abababababab',label:'두 번째'}])&&redrawReports()")
+    expect(monthly.locator(':scope > .sub-row', has_text='Anthropic / Claude Code · Pro')).to_have_count(1)
+    page.evaluate("setClaudeAccounts(window.shownAccounts)&&redrawReports()")
+    expect(monthly.locator(':scope > .sub-row', has_text='Anthropic / Claude Code · Pro')).to_have_count(0)
     page.evaluate("renderMonths([])")
     expect(monthly).to_contain_text('첫 결산은 수집기가 다음 달 첫 수집 주기에')
     page.evaluate("renderMonths(%s)" % json.dumps(MONTHS))

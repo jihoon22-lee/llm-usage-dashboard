@@ -104,7 +104,7 @@ async function loadConfig(){
  const drafts=settingsOnline?settingsDrafts():[];
  settingsAvailable(true);
  const prices=cfg.subscription_prices||{},ended=cfg.ended_subscriptions||{},accountNames=cfg.claude_account_names||{};
- if(Array.isArray(cfg.claude_accounts))setClaudeAccounts(cfg.claude_accounts);
+ if(Array.isArray(cfg.claude_accounts)&&setClaudeAccounts(cfg.claude_accounts))redrawReports();
  const claude=multiClaude()?claudeAccounts.list:[];
  const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...Object.keys(ended),...(lastUsage?.subscriptions||[]).map(s=>s.route)])]
   .filter(r=>r!=='claude-code:unknown')

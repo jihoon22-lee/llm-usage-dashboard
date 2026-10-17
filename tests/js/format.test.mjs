@@ -284,14 +284,19 @@ test('owned resources omit spending caps, sort confirmed expiry and preserve fai
 });
 
 test('several Claude accounts stay one service with account labels',()=>{
- f.setClaudeAccounts([{route:'claude-code',label:'Pro'}]);
+ f.setClaudeAccounts([]);
+ // One account shows no names: nothing to draw again.
+ assert.equal(f.setClaudeAccounts([{route:'claude-code',label:'Pro'}]),false);
  assert.equal(f.multiClaude(),false);
  // A single account looks exactly as before.
  assert.equal(f.quotaLabel({route:'claude-code',bucket:'five_hour'}),'Claude 5시간');
  assert.equal(f.serviceFull('claude-code'),'Anthropic / Claude Code');
  assert.equal(f.accountLabel('claude-code'),null);
- f.setClaudeAccounts([{route:'claude-code',label:'Pro',homes:[{kind:'default',name:'~/.claude'}]},
-  {route:'claude-code:abababababab',label:'Max 5x',homes:[{kind:'zerosub',name:'claude-0123abcd4567'}]}]);
+ const two=[{route:'claude-code',label:'Pro',homes:[{kind:'default',name:'~/.claude'}]},
+  {route:'claude-code:abababababab',label:'Max 5x',homes:[{kind:'zerosub',name:'claude-0123abcd4567'}]}];
+ // Names arriving (or changing) report a change once; the same names again do not.
+ assert.equal(f.setClaudeAccounts(two),true);
+ assert.equal(f.setClaudeAccounts(two),false);
  assert.equal(f.multiClaude(),true);
  assert.equal(f.familyOf('claude-code:abababababab'),'claude-code');
  assert.equal(f.familyOf('codex'),'codex');

@@ -77,7 +77,7 @@ const accountInfo=route=>claudeAccounts.list.find(a=>a.route===route)||{route};
 const accountEnded=rows=>rows.length>0&&rows.every(r=>r.user_ended);
 function renderLimits(data){
  lastLimits=data;
- if('claude_accounts' in data)setClaudeAccounts(data.claude_accounts);
+ if('claude_accounts' in data&&setClaudeAccounts(data.claude_accounts))redrawReports();
  const opened=new Set([...$('limits').querySelectorAll('details[open]')].map(el=>el.dataset.history));
  function bucket(r,shared,folded=false){
   const lowPct=data.low_percent??15,blocked=r.blocked_by;

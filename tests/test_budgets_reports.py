@@ -302,6 +302,17 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn(RESIDUAL,[m['model'] for m in rebuilt['models']])
         self.assertNotIn('unknown',[m['model'] for m in rebuilt['models']])
 
+    def test_records_attributed_later_rebuild_stored_weeks(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류'])
+            # Assigned to a project later: every token sum is kept.
+            c.execute("UPDATE events SET project='alpha' WHERE route='claude-code'");self.store.bump_data_version(c)
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류','alpha'])
+
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')
         self.assertIsNotNone(reports.ensure_report(self.store,later,PRICING))

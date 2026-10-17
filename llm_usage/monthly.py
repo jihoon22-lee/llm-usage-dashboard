@@ -107,8 +107,9 @@ def ensure_months(store,now,pricing=None,prices=None,ended=None):
         with store.connect() as c:
             low,high=shift(last,-1).timestamp(),current.timestamp()
             sums=','.join('SUM('+k+')' for k in TOKENS)
-            records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,SUM(requests),"+sums+
-                                                 ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
+            # Project and account too: attributing records later keeps every token sum.
+            records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,project,account,SUM(requests),"+sums+
+                                                 ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5',(low,high))]
             # Only what lies wholly inside those months can change their settlements; an
             # account day still running across the month's end does not.
             additions=[e for e in supplements(c)[0] if low<=e['start'] and e['end']<=high]

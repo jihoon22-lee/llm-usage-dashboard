@@ -23,9 +23,12 @@ const routeNames={...names,opencode:'OpenCode'};
 // labels come from the API and are shown only once a second account exists.
 const familyOf=route=>typeof route==='string'&&route.startsWith('claude-code')?'claude-code':route;
 const claudeAccounts={labels:{},list:[]};
+// True when the shown names changed, so what was drawn with the old ones can be drawn again.
 function setClaudeAccounts(list){
+ const before=JSON.stringify(claudeAccounts.labels);
  claudeAccounts.list=Array.isArray(list)?list:[];
  claudeAccounts.labels=claudeAccounts.list.length>1?Object.fromEntries(claudeAccounts.list.map(a=>[a.route,a.label])):{};
+ return JSON.stringify(claudeAccounts.labels)!==before;
 }
 const multiClaude=()=>claudeAccounts.list.length>1;
 const HOME_KINDS={default:'기본 Claude 홈',zerosub:'zerosub 관리 홈',configured:'설정한 홈',observed:'관측된 홈',windows:'Windows 홈'};

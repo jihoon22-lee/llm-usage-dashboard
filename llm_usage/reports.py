@@ -310,8 +310,10 @@ def _ensure_report(store,now,pricing=None):
         # and linked records can shrink an aggregate without a new snapshot.
         low=(monday-timedelta(weeks=KEEP)).timestamp();high=(monday+timedelta(days=7)).timestamp()
         sums=','.join('SUM('+k+')' for k in TOKENS)
-        records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,SUM(requests),"+sums+
-            ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
+        # Project and account too (the top projects, the account split): attributing records
+        # later keeps every token sum.
+        records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,project,account,SUM(requests),"+sums+
+            ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5',(low,high))]
         additions,_=supplements(c)
         additions=[e for e in additions if e['start']<high and e['end']>low]
         revision=identity(json.dumps([records,additions,pricing,REPORT_FORMAT],sort_keys=True))

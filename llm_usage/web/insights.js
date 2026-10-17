@@ -173,6 +173,9 @@ function monthTrendHtml(list){
  const ratios=m=>subscriptionOrder(m.subscriptions).filter(s=>s.ratio!=null).map(s=>`<span class="ratio-item">${esc(serviceShort(s.route,accountLabel(s.route)||s.label))} ${s.ratio.toFixed(1)}배</span>`).join(' · ')||'—';
  return `<div class="table-wrap"><table class="report-table month-trend"><thead><tr><th>월</th><th>토큰</th><th>환산</th><th>구독료 대비</th></tr></thead><tbody>${list.map(m=>`<tr><td>${esc(m.month)}${m.partial?' <small>부분</small>':''}</td><td data-tip="${fmt(m.totals.tokens)}">${compact(m.totals.tokens)}</td><td>${usd(m.totals.cost)}</td><td>${ratios(m)}</td></tr>`).join('')}</tbody></table></div>`;
 }
+// Reports and settlements name accounts and the residual as set now; drawn again when
+// those names arrive or change after them.
+function redrawReports(){if(lastReports)renderReports(lastReports);renderMonths();}
 let lastMonths=null;
 function renderMonths(list=lastMonths){
  lastMonths=list;if(!list)return;

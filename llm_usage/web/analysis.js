@@ -204,10 +204,10 @@ foldedPanels.forEach(panel=>panel.addEventListener('toggle',()=>{if(compactMedia
 compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
- if('claude_accounts' in data)setClaudeAccounts(data.claude_accounts);
+ const renamed='claude_accounts' in data&&setClaudeAccounts(data.claude_accounts);
  const shownName=residualName;setResidualName(data.residual_label);
- // Reports drawn before the name arrived (or before it changed) are drawn again.
- if(residualName!==shownName&&lastReports){renderReports(lastReports);renderMonths();}
+ // Reports drawn before the names arrived (or before they changed) are drawn again.
+ if(renamed||residualName!==shownName)redrawReports();
  $('first-use').hidden=!!data.scope||total(data.lifetime||{})>0||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
