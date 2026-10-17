@@ -249,6 +249,8 @@ class AccountTests(unittest.TestCase):
 
     def test_ended_account_is_not_polled(self):
         seen = []
+        with self.store.connect() as c:
+            self.store.source(c, 'claude-oauth' + R_SECOND[len(FAMILY):], 'ok', '', NOW - 60)
         with ExitStack() as stack:
             stack.enter_context(patch.object(limits, 'poll_claude', side_effect=lambda s, cfg, account=None: seen.append(account['route'])))
             for name in ('poll_claude_resources', 'collect_claude_cloud', 'poll_devin', 'poll_antigravity_app'):

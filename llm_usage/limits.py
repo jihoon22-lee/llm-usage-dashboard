@@ -746,10 +746,16 @@ def poll_codex_thread(store,settings):
 
 
 def mark_ended(store,*names):
-    """A subscription marked ended in the settings is not polled; its sources say why."""
+    """A subscription marked ended in the settings is not polled; its existing sources
+    say why (an earlier ok or error row must not stay live)."""
     from .store import USER_ENDED_DETAIL
     with store.connect() as c:
-        for name in names:store.source_changed(c,name,'ended',USER_ENDED_DETAIL)
+        for name in names:
+            if c.execute('SELECT 1 FROM sources WHERE name=?',(name,)).fetchone():
+                store.source_changed(c,name,'ended',USER_ENDED_DETAIL)
+
+
+CLAUDE_SOURCES=('claude-oauth','claude-credits','claude-resets','claude-cloud','claude-cloud-supplement')
 
 
 def claude_contexts(store,settings):
@@ -761,16 +767,17 @@ def claude_contexts(store,settings):
 
 
 def poll_limits(store,settings,manual=False):
-    from .claude_accounts import suffix
+    from .claude_accounts import is_claude,suffix
     from .config import ended_routes
     ended=ended_routes(settings)
+    # Ended Claude accounts, discoverable now or not: their sources (and status line) end.
+    for route in sorted(r for r in ended if is_claude(r)):
+        mark_ended(store,route,*(name+suffix(route) for name in CLAUDE_SOURCES))
     for account in claude_contexts(store,settings):
         # An account seen only through a home whose login is never read (Windows).
         if account is not None and not account.get('home'):continue
         route=(account or {}).get('route','claude-code');tag=suffix(route)
-        if route in ended:
-            mark_ended(store,*(name+tag for name in ('claude-oauth','claude-credits','claude-resets','claude-cloud','claude-cloud-supplement')))
-            continue
+        if route in ended:continue
         poll_claude(store,settings,account)
         poll_claude_resources(store,settings,account)
         try:collect_claude_cloud(store,settings,account=account)

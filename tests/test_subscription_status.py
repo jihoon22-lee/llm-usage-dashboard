@@ -73,9 +73,26 @@ class EndedSubscriptionTests(unittest.TestCase):
         self.assertIn('claude', called)
         with self.store.connect() as c:
             sources = {r['name']: dict(r) for r in c.execute('SELECT * FROM sources')}
-        for name in ('devin', 'codex', 'codex-account-usage', 'codex-thread-usage'):
+        for name in ('devin', 'codex'):
             self.assertEqual(sources[name]['status'], 'ended', name)
             self.assertEqual(sources[name]['detail'], USER_ENDED_DETAIL)
+        # Sources that never reported are not created just to say they ended.
+        self.assertNotIn('codex-thread-usage', sources)
+
+    def test_an_ended_claude_account_that_is_no_longer_found_still_ends_its_sources(self):
+        second = 'claude-code:abababababab'
+        with self.store.connect() as c:
+            self.store.source(c, 'claude-oauth:abababababab', 'error', 'Claude 인증 확인 필요', NOW-60)
+            self.store.source(c, second, 'ok', '', NOW-60)  # its status line
+        with patch.object(limits, 'claude_contexts', return_value=[]), \
+             patch.object(limits, 'poll_devin'), patch.object(limits, 'poll_antigravity_app'), \
+             patch.object(limits, 'read_codex', side_effect=OSError('offline')):
+            limits.poll_limits(self.store, dict(database=str(self.root/'usage.db'), opencode_auth='none',
+                                                ended_subscriptions={second: {'since': NOW}}))
+        with self.store.connect() as c:
+            sources = {r['name']: r['status'] for r in c.execute('SELECT name,status FROM sources')}
+        self.assertEqual((sources['claude-oauth:abababababab'], sources[second]), ('ended', 'ended'))
+        self.assertNotIn('claude-resets:abababababab', sources)
 
     def test_status_line_of_an_ended_route_is_not_ingested(self):
         inbox = self.root/'status'; inbox.mkdir()
