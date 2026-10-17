@@ -308,9 +308,12 @@ def collect_antigravity_tokens(store,settings):
 
 
 def collect_status(store,settings):
+    from .config import ended_routes
     collect_antigravity_tokens(store,settings)
+    ended=ended_routes(settings)
     for folder in settings.get('status_inboxes',[]):
         for route in ('claude-code','antigravity'):
+            if route in ended:continue
             path=Path(folder)/(route+'.json')
             if not path.exists():continue
             try:
@@ -493,8 +496,9 @@ def write_summaries(store,settings):
     """Opt-in (statusline_summary: true): the one-line quota summary the status-line
     wrapper appends below the tool's own line. Inboxes the service cannot write
     (Windows homes under the read-only sandbox) are skipped."""
+    from .config import ended_routes
     from .notify import brief_line
-    line=brief_line(store.limits())
+    line=brief_line(store.limits(ended=ended_routes(settings)))
     for folder in settings.get('status_inboxes',[]):
         try:
             path=Path(folder);tmp=path/'summary.txt.tmp'
@@ -561,7 +565,9 @@ def run(settings,once=False):
         while True:
             sd_notify('WATCHDOG=1')
             local_seen=sync_thresholds(store,settings,local_seen)
-            collect_status(store,settings)
+            # Web-edited keys (ended subscriptions, account names) apply without a restart.
+            current_settings=with_local(settings)
+            collect_status(store,current_settings)
             with store.connect() as c:
                 request=store.state(c,'refresh_request_id',0)
                 requested_at=store.state(c,'refresh_requested',0)
@@ -577,8 +583,8 @@ def run(settings,once=False):
                     with store.connect() as c:resolve(store,c)
                 last_local=time.time()
             if once or manual or now-last_limits>=300:
-                poll_limits(store,settings,manual=manual);last_limits=time.time()
-                if with_local(settings).get('statusline_summary'):write_summaries(store,settings)
+                poll_limits(store,current_settings,manual=manual);last_limits=time.time()
+                if current_settings.get('statusline_summary'):write_summaries(store,current_settings)
                 if not once:
                     try:
                         from .signals import usage_spike
@@ -589,7 +595,8 @@ def run(settings,once=False):
                             spike=usage_spike(c,current)
                             sources=[dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
                             month=store.project_month(c,current,load_pricing(local))
-                        notify_evaluate(store,local.get('notify'),current,store.limits(current),spike,sources,month,local.get('project_budgets'))
+                        from .config import ended_routes
+                        notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local)),spike,sources,month,local.get('project_budgets'))
                         from .reports import ensure_report,summary as report_summary
                         weekly=ensure_report(store,current,load_pricing(local))
                         if weekly:

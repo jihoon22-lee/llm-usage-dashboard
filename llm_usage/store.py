@@ -20,6 +20,8 @@ SERIES_KEYS = (*TOKENS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+# Source detail written while a subscription is marked ended in the settings.
+USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
 SUPPORTED_ROUTES = ('codex','claude-code','antigravity','opencode-go','devin')
 # (route, shorter-window bucket) -> the longer window that also gates usage.
 QUOTA_PARENTS = {('claude-code', 'five_hour'): 'seven_day', ('devin', 'daily'): 'weekly',
@@ -410,9 +412,11 @@ class Store:
         self.prune_history(c)
         return changed
 
-    def limits(self, now=None):
+    def limits(self, now=None, ended=None):
+        """Quota rows; `ended` holds the subscriptions the user marked as ended."""
         from .insights import quota_history,quota_pace,quota_plan,quota_trends,quota_decreases,quota_forecast,pace_lookback,window_seconds,token_total
         now = now or time.time()
+        ended = set(ended or ())
         with self.connect() as c:
             c.execute('BEGIN')
             rows = [dict(r) for r in c.execute('SELECT * FROM limits ORDER BY route,bucket')]
@@ -447,11 +451,15 @@ class Store:
             account=sources.get('claude-oauth',{}) if row['route']=='claude-code' else {}
             if account.get('checked',0)>=(row['checked'] or 0) and account.get('status') in ('error','unavailable'):
                 src=account
+            user_ended=row['route'] in ended
+            if not user_ended and src.get('status')=='ended' and str(src.get('detail','')).startswith(USER_ENDED_DETAIL):
+                # Tracking was switched back on; the next poll replaces this marker.
+                src={**src,'status':'unavailable','detail':'구독 추적 재개 · 다음 수집에서 한도를 다시 확인합니다.'}
             stale = bool(previous_account or (checked and (checked>now+SKEW or now-checked > self.thresholds['stale_seconds'] or (resets and resets <= now) or src.get('status')=='unavailable')))
-            row.update(status='error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if omitted or row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
-                       stale=stale, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
+            row.update(status='ended' if user_ended else 'error' if src.get('status')=='error' else 'ended' if src.get('status')=='ended' else 'unavailable' if omitted or row['remaining'] is None or src.get('status')=='unavailable' else 'stale' if stale else 'fresh',
+                       stale=stale or user_ended, user_ended=user_ended, reset_kst=datetime.fromtimestamp(resets,KST).isoformat() if resets else None,
                        seconds_to_reset=max(0,int(resets-now)) if resets else None,
-                       detail=src.get('detail',''),last_attempt=src.get('checked'))
+                       detail=USER_ENDED_DETAIL if user_ended else src.get('detail',''),last_attempt=src.get('checked'))
             row['history']=history.get((row['route'],row['bucket']),[])
             if previous_account:row['history']=[]
             pace=quota_pace(row['history'],now,row['status'],pace_lookback(row['bucket'])[0])
@@ -481,7 +489,8 @@ class Store:
             # so the other window keeps its last observation; say why it is not current.
             agy=re.fullmatch(r'(gemini|3p)-(5h|weekly)',row['bucket']) if row['route']=='antigravity' else None
             other=agy and by_key.get(('antigravity',f"{agy[1]}-{'weekly' if agy[2]=='5h' else '5h'}"))
-            row['note']=(f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
+            row['note']=('설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.' if row.get('user_ended') else
+                         f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
                          if other and row['status']!='fresh' and other['status']=='fresh' and other['source']=='antigravity-app' else
                          '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.' if row.get('omitted_latest') else
                          '계정·구독 조건 변경 전 관측입니다.' if row.get('previous_account') else

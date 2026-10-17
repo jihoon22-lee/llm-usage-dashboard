@@ -243,7 +243,7 @@ async def main():
             order=await page.locator('main h3, #sources-panel h2').all_text_contents()
             assert order==['다음 초기화','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
                            '프로젝트별 사용량','세션별 사용량','이전 기간과 비교','캐시 활용률 분석','주간 리포트','일별 활동','구독 가치 분석',
-                           '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','월 구독료','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
+                           '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','구독','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('usage')
             # Filters fold behind a one-line summary on mobile; opening reveals them.
             fold=page.locator('#filter-fold')
@@ -613,7 +613,7 @@ async def main():
             await restricted.goto(ORIGIN+'/')
             await expect(restricted.locator('#updated')).to_contain_text('마지막 갱신')
             assert not restricted_errors,restricted_errors
-            # Settings' first panel (월 구독료) opens by default on mobile; the
+            # Settings' first panel (구독) opens by default on mobile; the
             # other folds stay closed until touched (M4).
             await restricted.locator('#settings-open').click()
             await expect(restricted.locator('#cfg-subs input').first).to_be_visible()

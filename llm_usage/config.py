@@ -11,11 +11,18 @@ def config_path():
 
 # Keys the web UI may edit. They are stored in local.json next to the database
 # because systemd sandboxes mount ~/.config read-only (ProtectHome=read-only).
-LOCAL_KEYS = {'subscription_prices', 'thresholds', 'refresh_seconds', 'value_alert_usd', 'notify', 'project_budgets'}
+LOCAL_KEYS = {'subscription_prices', 'thresholds', 'refresh_seconds', 'value_alert_usd', 'notify', 'project_budgets',
+              'ended_subscriptions', 'claude_account_names'}
 
 
 def local_path(config):
     return Path(config['database']).parent / 'local.json'
+
+
+def ended_routes(config):
+    """Subscriptions the user marked as ended: no quota polling, folded quota cards."""
+    ended = (config or {}).get('ended_subscriptions')
+    return {route for route in ended if isinstance(route, str)} if isinstance(ended, dict) else set()
 
 
 def _read_json(path):
