@@ -368,6 +368,10 @@ test('services keep their series slot; further Claude accounts follow in name or
   f.setClaudeAccounts([{route:'claude-code:abababababab',label:'Zeta'},{route:'claude-code:cdcdcdcdcdcd',label:'Alpha'}]);
   const named=f.groupSlots('account',['claude-code:abababababab','claude-code:cdcdcdcdcdcd']);
   assert.deepEqual([named['claude-code:cdcdcdcdcdcd'],named['claude-code:abababababab']],[6,7]);
+  // A known account keeps its slot in a period where an earlier-named one has no use,
+  // and an unknown-account label comes after every known account.
+  const alone=f.groupSlots('account',['claude-code:abababababab','claude-code:unknown']);
+  assert.deepEqual([alone['claude-code:abababababab'],alone['claude-code:unknown']],[7,8]);
   f.setClaudeAccounts([]);
   assert.deepEqual({...f.groupSlots('provider',['Anthropic'])},{OpenAI:0,Anthropic:1,Google:2,Cognition:3});
 });

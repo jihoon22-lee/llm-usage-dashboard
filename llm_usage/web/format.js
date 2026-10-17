@@ -79,16 +79,21 @@ const residualText=v=>v===RESIDUAL?residualName:v;
 // already spread. In ocean, sand comes before blue (blue is close to the teal accent).
 const CHART_ORDER={charcoal:[0,1,2,3,4,5,6,7],midnight:[0,1,2,3,4,5,6,7],ocean:[0,3,2,4,5,6,7,1]};
 const chartOrder=theme=>CHART_ORDER[theme]||[0,2,3,4,5,6,7,1];
-// Each service keeps one series slot in every period, by service or by maker; further
-// Claude accounts take the next free slots in name order. Other groupings have none.
+// Each service keeps one series slot in every period, by service or by maker. Further
+// Claude accounts take the next free slots in name order: every known account first,
+// shown in the period or not, so one account keeps its color; then any other Claude
+// label of the period (계정 미확인). Other groupings have none.
 const ROUTE_SLOTS={codex:0,'claude-code':1,antigravity:2,devin:3,'opencode-go':4,opencode:5};
 const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Google:2,Cognition:3};
 function groupSlots(group,labels){
  if(group==='provider')return {...PROVIDER_SLOTS};
  if(group!=='route'&&group!=='account')return {};
  const out={...ROUTE_SLOTS},used=new Set(Object.values(out));let next=0;
- const name=l=>accountLabel(l)||l;
- for(const label of [...new Set(labels)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort((a,b)=>name(a).localeCompare(name(b))||a.localeCompare(b))){
+ const name=l=>accountLabel(l)||l,byName=(a,b)=>name(a).localeCompare(name(b))||a.localeCompare(b);
+ const extra=list=>[...new Set(list)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort(byName);
+ const known=group==='account'?extra(claudeAccounts.list.map(a=>a.route)):[];
+ for(const label of [...known,...extra(labels)]){
+  if(out[label]!=null)continue;
   while(used.has(next))next++;
   out[label]=next;used.add(next);
  }
