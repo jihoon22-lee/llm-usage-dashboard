@@ -14,8 +14,9 @@ PARTS = TOKENS[:4]
 # The Codex account residual (account day total minus this PC's records) has no model,
 # project, session or token parts. Under model and project grouping it gets this key,
 # which the dashboard shows under the user's name for it, instead of 'unknown'/'미분류';
-# every total still includes it.
-RESIDUAL = '(account-residual)'
+# every total still includes it. The '/' keeps it apart from every project name (a
+# directory basename, see store.project_label).
+RESIDUAL = '/account-residual'
 # Its name until the user sets one in the subscription settings (e.g. '자동 리뷰').
 RESIDUAL_LABEL = '로컬 미기록'
 

@@ -70,7 +70,7 @@ const shortService={'codex':'Codex','claude-code':'Claude','antigravity':'Antigr
 // The Codex account residual (account day total minus this PC's records) is one item under
 // model and project grouping: no model, project or token parts. Its name is a setting
 // (/api/usage residual_label), '로컬 미기록' until one is set.
-const RESIDUAL='(account-residual)',RESIDUAL_DEFAULT='로컬 미기록';
+const RESIDUAL='/account-residual',RESIDUAL_DEFAULT='로컬 미기록';
 let residualName=RESIDUAL_DEFAULT;
 const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
 const residualText=v=>v===RESIDUAL?residualName:v;

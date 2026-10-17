@@ -25,7 +25,7 @@ parser.add_argument('--artifacts', type=Path)
 args = parser.parse_args()
 output = artifact_directory(args.artifacts)
 ORIGIN = 'https://dashboard.test'
-RESIDUAL = '(account-residual)'
+RESIDUAL = '/account-residual'
 PRICING = {'claude-test': dict(input=3, cached=.3, output=15), 'gpt-test': dict(input=2, cached=.2, output=8)}
 now = time.time()
 folder = tempfile.TemporaryDirectory(prefix='llm-account-residual-')
