@@ -538,6 +538,7 @@ details.source-group[open]>summary{margin-bottom:-8px}
 /* This week so far, above the finished weeks. */
 .this-week{border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:12px}
 .this-week .hint{margin-top:2px}
+.week-delta{white-space:nowrap}
 .report-older{margin-top:10px;font-size:var(--fs-small)}
 .report-older details{margin:6px 0 0 10px}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */

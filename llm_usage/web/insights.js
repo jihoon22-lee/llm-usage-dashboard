@@ -121,7 +121,7 @@ const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'�
 function thisWeekHtml(w){
  if(!w)return '';
  const p=w.prior,change=priorChange(p,'',p?.current_tokens??w.tokens,p?total(p):null,'지난주');
- return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${fmt(w.requests)}회${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?' · '+esc(change):''}</p>`
+ return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${fmt(w.requests)}회${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
   +(w.routes.length?`<p class="hint">서비스별: ${w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')}</p>`:'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
   +(w.accounts?`<p class="hint">Claude 계정별: ${accountParts(w.accounts)}</p>`:'')+'</div>';
 }
