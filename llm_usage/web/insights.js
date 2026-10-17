@@ -252,10 +252,11 @@ function renderCalendar(data){
  const firstKey=`${first.getFullYear()}-${String(first.getMonth()+1).padStart(2,'0')}-${String(first.getDate()).padStart(2,'0')}`;
  if(!Object.keys(days).length){$('calendar').innerHTML='<div class="empty">수집된 기록이 없습니다.</div>';return;}
  const todayKey=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+ const level=rankLevels(cells.filter(c=>c&&c.v!=null).map(c=>c.v));
  $('calendar').innerHTML='<div class="cal-scroll"><div class="cal-months">'+months.map((m,w)=>m?`<span class="cal-m${w+1}">${m}월</span>`:'').join('')+'</div><div class="cal-grid" role="group" aria-label="최근 '+calWeeks+'주 일별 활동 달력 · 하루 최대 '+compact(max)+' '+metricName()+'">'+cells.map(c=>{if(!c)return '<span class="cal-cell cal-pad" aria-hidden="true"></span>';
   const tipText=c.v==null?c.key+' · 비용 미산정':`${c.key} · ${metricFmt(c.v)}${metricUnit()} · ${fmt(c.req)}회`;
   const hint=esc(tipText+' · 클릭하면 그날로 좁혀봅니다');
-  return `<span class="cal-cell${c.v==null?' na':' a'+(c.v?1+Math.min(4,Math.floor(c.v/max*4)):0)}" role="button" tabindex="${c.key===todayKey?0:-1}" data-day="${c.key}" aria-label="${hint}" data-tip="${hint}"></span>`;}).join('')+'</div><div class="cal-legend" aria-hidden="true">적음 <i class="cal-key"></i><i class="cal-key a1"></i><i class="cal-key a2"></i><i class="cal-key a3"></i><i class="cal-key a4"></i><i class="cal-key a5"></i> 많음 · <i class="cal-key na"></i> 비용 미산정</div></div>'+calStats((data.calendar||[]).filter(r=>r.day>=firstKey),calWeeks);
+  return `<span class="cal-cell${c.v==null?' na':' a'+level(c.v)}" role="button" tabindex="${c.key===todayKey?0:-1}" data-day="${c.key}" aria-label="${hint}" data-tip="${hint}"></span>`;}).join('')+'</div><div class="cal-legend" aria-hidden="true">적음 <i class="cal-key"></i><i class="cal-key a1"></i><i class="cal-key a2"></i><i class="cal-key a3"></i><i class="cal-key a4"></i><i class="cal-key a5"></i> 많음 · 표시 기간 순위 기준 · <i class="cal-key na"></i> 비용 미산정</div></div>'+calStats((data.calendar||[]).filter(r=>r.day>=firstKey),calWeeks);
  fitCalendar();
 }
 let calendarWidth=0;

@@ -8,7 +8,7 @@ function chart(data){
  if(!$('chart').clientWidth)return;
  const grouped=chartSeries(data),allLabels=grouped.labels;
  const labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
- const colorOf=paletteFor(allLabels);
+ const colorOf=paletteFor(allLabels,groupSlots($('group').value,allLabels));
  $('legend').innerHTML=allLabels.map(label=>`<button data-label="${esc(label)}" aria-pressed="${!hiddenLabels.has(label)}">${esc(seriesLabel(label))}</button>`).join('');
  $('legend').insertAdjacentHTML('beforeend',missingRoutes(data).map(row=>`<span class="unavailable-series">${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span>`).join(''));
  $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);chart(data);};});
@@ -65,7 +65,7 @@ function chart(data){
 }
 function bindChartTooltip(data,grouped,geometry,comparisonTotals){
  const root=$('chart'),svg=root.querySelector('svg'),tooltip=$('chart-tooltip'),cursor=root.querySelector('.chart-cursor');
- const colorOf=paletteFor(grouped.labels);
+ const colorOf=paletteFor(grouped.labels,groupSlots($('group').value,grouped.labels));
  // Long lists sit below the plot so scrolling never intercepts a bucket tap.
  const scrollable=grouped.labels.length>8;
  tooltip.classList.toggle('scrollable',scrollable);

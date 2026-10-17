@@ -373,17 +373,23 @@ function chartSeries(data){
  return {labels:shown,points:mapPoints(points),compare:comparison?{...comparison,series:mapPoints(comparison.series)}:null};
 }
 // Stable label→palette index so a model keeps its color across period changes.
-// Active labels always get distinct indices; inactive owners are evicted.
+// Active labels always get distinct indices; inactive owners are evicted. `fixed`
+// (groupSlots) gives services their own index; other labels take those indices only
+// when no other one is free.
 const labelColorIndex=new Map();
-function paletteFor(labels){
+function paletteFor(labels,fixed={}){
  const actives=[...new Set(labels.filter(l=>l!=='기타'))];
  const seen=new Map();
+ for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){labelColorIndex.set(l,fixed[l]);seen.set(fixed[l],l);}
  for(const l of actives){
+  if(seen.get(labelColorIndex.get(l))===l)continue;
   const idx=labelColorIndex.get(l);
   if(idx!=null&&!seen.has(idx)){seen.set(idx,l);continue;}
   labelColorIndex.delete(l);
  }
- const free=[];for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i))free.push(i);
+ const reserved=new Set(Object.values(fixed)),free=[];
+ for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i)&&!reserved.has(i))free.push(i);
+ for(const i of [...reserved].sort((a,b)=>a-b))if(!seen.has(i))free.push(i);
  for(const l of actives){
   if(labelColorIndex.has(l))continue;
   let idx;
