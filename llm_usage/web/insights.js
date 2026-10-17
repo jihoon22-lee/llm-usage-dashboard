@@ -100,7 +100,7 @@ let openSession=null;const sessionDetails=new Map();
 let reportsLoaded=0;
 async function loadReports(){
  if(Date.now()-reportsLoaded<300000)return;
- try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[]);}
+ try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[],d.this_week||null);}
  catch(e){$('reports').innerHTML=`<p class="hint">주간 리포트를 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
 // Quota use of the week from observations only: no verdicts, and no zeros for what was not
@@ -115,19 +115,31 @@ function quotaUseHtml(r){
  return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만</p>`
   +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hoursText(q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hoursText(q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`;
 }
+// Claude Code by account (계정 미확인 included): the names set now, else the ones stored.
+const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'계정')} <span data-tip="${fmt(a.tokens)} 토큰">${compact(a.tokens)}</span>`).join(' · ');
+// This week so far against last week cut at the same time (the period cards' comparison).
+function thisWeekHtml(w){
+ if(!w)return '';
+ const p=w.prior,change=priorChange(p,'',p?.current_tokens??w.tokens,p?total(p):null,'지난주');
+ return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${fmt(w.requests)}회${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
+  +(w.routes.length?`<p class="hint">서비스별: ${w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')}</p>`:'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
+  +(w.accounts?`<p class="hint">Claude 계정별: ${accountParts(w.accounts)}</p>`:'')+'</div>';
+}
 function reportHtml(r){
  return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${fmt(r.totals.requests)}회 · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
   +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th class="col-req">요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td><span class="svc-full">${esc(routeNames[x.route]||x.route)}</span><span class="svc-short">${esc(shortService[x.route]||x.route)}</span></td><td data-tip="${fmt(x.tokens)}">${compact(x.tokens)}</td><td class="col-req">${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
   +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
+  +(r.accounts?`<p class="hint">Claude 계정별: ${accountParts(r.accounts)}</p>`:'')
+  +(r.projects?.length?`<p class="hint">상위 프로젝트: ${r.projects.map(x=>`${esc(x.project)} ${compact(x.tokens)}`).join(' · ')}</p>`:'')
   +(r.residual?.tokens&&r.residual.account_tokens?`<p class="hint">Codex ${esc(residualName)} <span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)</p>`:'')
   +(Array.isArray(r.quota_use)||r.exhausted==null?quotaUseHtml(r):`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:e.account_label}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`);
 }
 // Kept so the reports can be drawn again when the residual's name arrives or changes.
-let lastReports=null;
-function renderReports(list){
- lastReports=list;
- $('reports').innerHTML=list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
-  :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>';
+let lastReports=null,lastWeek=null;
+function renderReports(list,week=lastWeek){
+ lastReports=list;lastWeek=week;
+ $('reports').innerHTML=thisWeekHtml(week)+(list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
+  :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>');
 }
 function sessionDetailHtml(d){
  if(!d.models.length)return '<tr class="sess-detail-row"><td colspan="8"><p class="hint">이 세션의 기록이 더 이상 없습니다.</p></td></tr>';

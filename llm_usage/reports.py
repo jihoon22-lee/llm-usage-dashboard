@@ -11,7 +11,8 @@ from .store import KST
 KEEP=12
 # Bumped when what a report holds changes, so the stored weeks are rebuilt once (not
 # announced again). 2: the Codex account residual left the top models for its own line.
-REPORT_FORMAT=2
+# 3: Claude Code split by account, and the top projects.
+REPORT_FORMAT=3
 
 
 def last_week(now):
@@ -96,6 +97,16 @@ def _names(c):
     accounts=describe(c)
     names={a['route']:a['label'] for a in accounts} if len(accounts)>1 else {}
     return label,names
+
+
+def _accounts(c,usage):
+    """Several Claude accounts: Claude Code by account (계정 미확인 included, so the parts
+    add up to the service), with the plan names of the moment; the page and the notification
+    show the names set in the dashboard. None with one account."""
+    from .claude_accounts import UNKNOWN
+    _,names=_names(c)
+    return [dict(account=e['account'],label='계정 미확인' if e['account']==UNKNOWN else names.get(e['account']),tokens=e['tokens'],cost=e['cost'])
+            for e in usage.get('claude_split') or [] if e['tokens']] or None
 
 
 def exhaustions(c,start,end):
@@ -185,6 +196,12 @@ def streaks(store,c,monday,exhausted):
 
 
 def build(store,now,pricing=None):
+    # Every usage view of the week and the residual share read the same supplements.
+    from .reconciliation import held
+    with held():return _build(store,now,pricing)
+
+
+def _build(store,now,pricing=None):
     monday,next_monday=last_week(now)
     day=lambda d:d.strftime('%Y-%m-%d')
     span=dict(period='custom',granularity='day',pricing=pricing,sections='core')
@@ -201,9 +218,11 @@ def build(store,now,pricing=None):
     for row in previous['rows']:before[row['route']]=before.get(row['route'],0)+token_total(row)
     for e in routes.values():
         e['change_pct']=(e['tokens']-before[e['route']])/before[e['route']]*100 if before.get(e['route']) else None
-    # The Codex account residual is not a model; it is reported on its own line.
+    # The Codex account residual is not a model or a project; it is reported on its own line.
     from .reconciliation import RESIDUAL
     top=sorted((r for r in models['rows'] if r['model']!=RESIDUAL),key=lambda r:-token_total(r))[:5]
+    insight=store.usage(start=day(monday),end=day(next_monday-timedelta(days=1)),group='route',**{**span,'sections':'insights'})
+    projects=sorted((p for p in insight.get('projects') or [] if p['project']!=RESIDUAL),key=lambda p:-token_total(p))[:5]
     totals,prior=_totals(current),_totals(previous)
     # Quota figures need the week's quota history; once it is pruned they are None
     # (not 0) and ensure_report keeps the values an earlier build computed.
@@ -213,6 +232,7 @@ def build(store,now,pricing=None):
         use=quota_use(c,monday.timestamp(),next_monday.timestamp()) if covered else None
         runs=streaks(store,c,monday,exhausted)
         residual=residual_share(c,monday.timestamp(),next_monday.timestamp())
+        accounts=_accounts(c,current)
     counts={(e['route'],e['bucket']):e['count'] for e in exhausted or []}
     # An exhaustion counted from a reading just before the week can leave a window with no
     # observed interval inside it; it keeps a row (observed 0) so the count is not lost.
@@ -229,6 +249,7 @@ def build(store,now,pricing=None):
                 change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if prior['tokens'] else None,
                 routes=sorted(routes.values(),key=lambda e:-e['tokens']),
                 models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost')) for r in top],
+                accounts=accounts,projects=[dict(project=p['project'],tokens=token_total(p),cost=p.get('cost')) for p in projects],
                 exhausted=exhausted,quota_use=use,residual=residual,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
 
 
@@ -253,6 +274,13 @@ def ensure_report(store,now,pricing=None):
 
     Weeks missed while the collector was stopped are filled in, within the kept
     count and never before the first recorded event."""
+    # The change check and every rebuilt week read the same supplements; only reports
+    # are written meanwhile.
+    from .reconciliation import held
+    with held():return _ensure_report(store,now,pricing)
+
+
+def _ensure_report(store,now,pricing=None):
     monday,_=last_week(now)
     recount_exhaustions(store,now)
     # Reconcile previously published local reports after a backfill. Do not
@@ -300,19 +328,41 @@ def ensure_report(store,now,pricing=None):
     return report if missing and missing[0]==0 else None
 
 
+def this_week(store,now,pricing=None):
+    """This week so far (KST Monday 00:00 to now) against last week cut at the same time:
+    the period cards' comparison (`prior`), with this week's services and Claude accounts."""
+    from .insights import token_total
+    from .reconciliation import held
+    monday,_=last_week(now);monday+=timedelta(days=7)
+    day=lambda d:d.strftime('%Y-%m-%d')
+    with held():
+        usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now)
+    routes={}
+    for row in usage['rows']:routes[row['route']]=routes.get(row['route'],0)+token_total(row)
+    with store.connect() as c:accounts=_accounts(c,usage)
+    return dict(start=day(monday),end=day(monday+timedelta(days=6)),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),
+                cost=(usage.get('cost') or {}).get('period'),prior=usage.get('prior'),accounts=accounts,
+                routes=[dict(route=route,tokens=tokens) for route,tokens in sorted(routes.items(),key=lambda x:-x[1]) if tokens])
+
+
 def recent(store,limit=KEEP):
     with store.connect() as c:
         return [store.state(c,r[0]) for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%' ORDER BY key DESC LIMIT ?",(limit,)).fetchall()]
 
 
-def summary(report,residual_label=None):
-    """Plain-text body for an external notification."""
+def summary(report,residual_label=None,names=None):
+    """Plain-text body for an external notification. `names`: the Claude account names set
+    in the dashboard, over the ones stored at build time."""
     from .notify import SERVICE,_label
     tokens=lambda v:f'{v/1e6:,.1f}M'
     lines=[f"{report['start']} ~ {report['end']} · {tokens(report['totals']['tokens'])} 토큰 · {report['totals']['requests']:,}회"
            +(f" · 전주 대비 {report['change_pct']:+.0f}%" if report['change_pct'] is not None else '')]
     if report['totals']['cost'] is not None:lines.append(f"공개 단가 환산 ${report['totals']['cost']:,.0f}")
     lines+= [f"{SERVICE.get(r['route'],r['route'])} {tokens(r['tokens'])}"+(f" ({r['change_pct']:+.0f}%)" if r['change_pct'] is not None else '') for r in report['routes'][:5]]
+    if report.get('accounts'):
+        named=lambda a:(names or {}).get(a['account']) or a.get('label') or '계정'
+        lines.append('Claude 계정별 '+' · '.join(f"{named(a)} {tokens(a['tokens'])}" for a in report['accounts']))
+    if report.get('projects'):lines.append('상위 프로젝트 '+' · '.join(f"{p['project']} {tokens(p['tokens'])}" for p in report['projects'][:3]))
     if report['exhausted']:lines.append('한도 소진 '+', '.join(f"{_label(e)} {e['count']}회"+(f" ({e['streak']}주 연속)" if e.get('streak',0)>1 else '')
                                                          for e in _with_streaks(report)))
     share=report.get('residual')

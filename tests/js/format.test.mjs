@@ -400,4 +400,7 @@ test('period cards name the compared window and refuse an incomplete one',()=>{
   // An unpriced earlier window has no cost line; no comparison has none either.
   assert.equal(f.priorChange(prior,'7d',10,null),'');
   assert.equal(f.priorChange(null,'all',10,5),'');
+  // The reports tab names the earlier window itself (this week against last week).
+  assert.equal(f.priorChange(prior,'',150,100,'지난주'),'지난주 같은 시점 대비 +50.0%');
+  assert.equal(f.priorChange({...prior,complete:false},'',150,100,'지난주'),'지난주 같은 시점 기록 부족');
 });

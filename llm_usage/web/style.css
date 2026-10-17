@@ -535,6 +535,10 @@ details.source-group[open]>summary{margin-bottom:-8px}
 @media(max-width:600px){.quota-use :is(td,th):is(:first-child,:nth-child(4)){white-space:normal}.quota-use td:first-child{min-width:6.5em}.quota-use .badge{display:inline-block;margin:2px 0 0}}
 .report-table td,.report-table th{padding:6px 8px;font-size:var(--fs-small)}
 @media(max-width:600px){.report-table .col-req{display:none}.report-table td,.report-table th{padding:6px 5px}}
+/* This week so far, above the finished weeks. */
+.this-week{border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:12px}
+.this-week .hint{margin-top:2px}
+.week-delta{white-space:nowrap}
 .report-older{margin-top:10px;font-size:var(--fs-small)}
 .report-older details{margin:6px 0 0 10px}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */

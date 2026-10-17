@@ -139,8 +139,9 @@ def create_app(config=None):
 
     @app.get('/api/reports')
     def reports():
-        from .reports import recent
-        return jsonify(reports=recent(store))
+        from .pricing import load_pricing
+        from .reports import recent,this_week
+        return jsonify(reports=recent(store),this_week=this_week(store,time.time(),load_pricing(config)))
 
     @app.get('/api/limits')
     def limits():

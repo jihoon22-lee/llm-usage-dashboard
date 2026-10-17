@@ -190,6 +190,31 @@ class ReconciliationTests(unittest.TestCase):
         self.evidence(50,end='2026-10-12T11:00:00Z')
         self.assertIn('counter_decreased',[x['reason'] for x in self.usage(period='today')['reconciliation']['conflicts']])
 
+    def test_held_supplements_are_worked_out_once_per_block_and_copied(self):
+        from unittest.mock import patch
+        from llm_usage import reconciliation
+        self.event();self.evidence()
+        other=Store(Path(self.tmp.name)/'other.db')
+        with patch.object(reconciliation,'_supplements',side_effect=reconciliation._supplements) as work:
+            with reconciliation.held():
+                with self.store.connect() as c:
+                    first,_=reconciliation.supplements(c)
+                    first[0]['tokens']=-1  # a caller's change stays its own
+                    again,_=reconciliation.supplements(c)
+                self.usage(period='today')
+                # Each database is worked out on its own.
+                with other.connect() as c:self.assertEqual(reconciliation.supplements(c)[0],[])
+            self.assertEqual(work.call_count,2)
+            self.assertEqual(again[0]['tokens'],80)
+            # A later block works it out again, so what was written meanwhile is seen.
+            self.evidence(150,end='2026-10-12T11:00:00Z')
+            with reconciliation.held(),self.store.connect() as c:after,_=reconciliation.supplements(c)
+            self.assertEqual(work.call_count,3)
+            self.assertEqual(sum(e['tokens'] for e in after),130)
+            # Outside a block every call works it out.
+            with self.store.connect() as c:reconciliation.supplements(c);reconciliation.supplements(c)
+            self.assertEqual(work.call_count,5)
+
     def test_running_account_bucket_is_bounded_by_receipt_not_fabricated_time(self):
         with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-12',tokens=1000)],self.now)
         u=self.usage(period='today')
