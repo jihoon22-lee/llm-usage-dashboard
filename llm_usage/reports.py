@@ -13,6 +13,10 @@ KEEP=12
 # announced again). 2: the Codex account residual left the top models for its own line.
 # 3: Claude Code split by account, and the top projects.
 REPORT_FORMAT=3
+# Readings up to 10 minutes past a week's or month's end close its last interval
+# (_points), and the quota history of a finished period does not change after them: it is
+# built once they are in, rather than frozen without them.
+SETTLE_AFTER=600
 
 
 def last_week(now):
@@ -170,15 +174,42 @@ def residual_share(c,start,end):
     return dict(tokens=residual,account_tokens=sum(r['tokens'] for r in days),days=len(days))
 
 
-def quota_covered(store,c,start):
-    """Whether quota history from `start` on is still kept. Pruning removes what is older
-    than its cutoff, and a later, longer retention_days does not bring it back; a rebuilt
-    older week keeps the figures computed back then."""
+def history_cutoff(store,c):
+    """Quota history older than this is gone (None: nothing pruned yet). A later, longer
+    retention_days does not bring it back."""
     cutoff=store.state(c,'history_cutoff')
     if cutoff is None and store.state(c,'history_pruned'):
         # Pruned before the cutoff was recorded.
         cutoff=store.state(c,'history_pruned')-store.thresholds['retention_days']*86400
+    return cutoff
+
+
+def quota_covered(store,c,start):
+    """Whether quota history from `start` on is still kept; a rebuilt older week keeps the
+    figures computed back then."""
+    cutoff=history_cutoff(store,c)
     return cutoff is None or start>=cutoff
+
+
+def quota_covered_from(store,c,start):
+    """Where the quota history kept from `start` on begins."""
+    return max(start,history_cutoff(store,c) or start)
+
+
+def quota_rows(c,start,end,exhausted=None):
+    """Quota use per window in [start, end) with its exhaustion count (exhausted)."""
+    if exhausted is None:exhausted=exhaustions(c,start,end)
+    use=quota_use(c,start,end)
+    counts={(e['route'],e['bucket']):e['count'] for e in exhausted}
+    # An exhaustion counted from a reading just before the span can leave a window with no
+    # observed interval inside it; it keeps a row (observed 0) so the count is not lost.
+    have={(row['route'],row['bucket']) for row in use}
+    for e in exhausted:
+        if (e['route'],e['bucket']) not in have:
+            use.append(dict(route=e['route'],bucket=e['bucket'],observed_hours=0,zero_hours=0,resets_observed=0,before_reset=None,
+                            display_name=e.get('display_name'),**({'account_label':e['account_label']} if e.get('account_label') else {})))
+    for row in use:row['exhausted']=counts.get((row['route'],row['bucket']),0)
+    return use
 
 
 def streaks(store,c,monday,exhausted):
@@ -229,20 +260,11 @@ def _build(store,now,pricing=None):
     with store.connect() as c:
         covered=quota_covered(store,c,monday.timestamp())
         exhausted=exhaustions(c,monday.timestamp(),next_monday.timestamp()) if covered else None
-        use=quota_use(c,monday.timestamp(),next_monday.timestamp()) if covered else None
+        use=quota_rows(c,monday.timestamp(),next_monday.timestamp(),exhausted) if covered else None
         runs=streaks(store,c,monday,exhausted)
         residual=residual_share(c,monday.timestamp(),next_monday.timestamp())
         accounts=_accounts(c,current)
-    counts={(e['route'],e['bucket']):e['count'] for e in exhausted or []}
-    # An exhaustion counted from a reading just before the week can leave a window with no
-    # observed interval inside it; it keeps a row (observed 0) so the count is not lost.
-    have={(row['route'],row['bucket']) for row in use or []}
-    for e in exhausted or [] if use is not None else []:
-        if (e['route'],e['bucket']) not in have:
-            use.append(dict(route=e['route'],bucket=e['bucket'],observed_hours=0,zero_hours=0,resets_observed=0,before_reset=None,
-                            display_name=e.get('display_name'),**({'account_label':e['account_label']} if e.get('account_label') else {})))
-    for row in use or []:
-        row['exhausted']=counts.get((row['route'],row['bucket']),0);row['streak']=runs.get((row['route'],row['bucket']),0)
+    for row in use or []:row['streak']=runs.get((row['route'],row['bucket']),0)
     busiest=max(current['series'],key=lambda p:sum(token_total(v) for v in p['values'].values()),default=None)
     return dict(week=day(monday),start=day(monday),end=day(next_monday-timedelta(days=1)),built=now,
                 totals=totals,previous=prior,
@@ -281,7 +303,7 @@ def ensure_report(store,now,pricing=None):
 
 
 def _ensure_report(store,now,pricing=None):
-    monday,_=last_week(now)
+    monday,_=last_week(now-SETTLE_AFTER)
     recount_exhaustions(store,now)
     # Reconcile previously published local reports after a backfill. Do not
     # re-send notifications for a report that already existed.
@@ -292,8 +314,10 @@ def _ensure_report(store,now,pricing=None):
         # and linked records can shrink an aggregate without a new snapshot.
         low=(monday-timedelta(weeks=KEEP)).timestamp();high=(monday+timedelta(days=7)).timestamp()
         sums=','.join('SUM('+k+')' for k in TOKENS)
-        records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,SUM(requests),"+sums+
-            ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
+        # Project and account too (the top projects, the account split): attributing records
+        # later keeps every token sum.
+        records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,project,account,SUM(requests),"+sums+
+            ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5',(low,high))]
         additions,_=supplements(c)
         additions=[e for e in additions if e['start']<high and e['end']>low]
         revision=identity(json.dumps([records,additions,pricing,REPORT_FORMAT],sort_keys=True))
@@ -320,7 +344,7 @@ def _ensure_report(store,now,pricing=None):
             if not store.state(c,'report:'+week.strftime('%Y-%m-%d')):missing.append(back)
     report=None
     for back in reversed(missing):
-        report=build(store,now-7*86400*back,pricing);report['built']=now
+        report=build(store,now-SETTLE_AFTER-7*86400*back,pricing);report['built']=now
         with store.connect() as c:store.save_state(c,'report:'+report['week'],report)
     with store.connect() as c:
         for (old,) in c.execute("SELECT key FROM state WHERE key LIKE 'report:%' ORDER BY key DESC LIMIT -1 OFFSET ?",(KEEP,)).fetchall():

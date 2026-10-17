@@ -79,7 +79,8 @@ with sync_playwright() as p:
     # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
     page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
     assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
-    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue']
+    # A panel the saved order does not know (added later) follows the known ones.
+    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue','monthly']
     assert page.evaluate("[...document.querySelectorAll('#view-usage>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
     page.evaluate("storage.set('llmOrder','{}')");page.reload()
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')

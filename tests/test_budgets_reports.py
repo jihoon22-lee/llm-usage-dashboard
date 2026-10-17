@@ -302,6 +302,31 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn(RESIDUAL,[m['model'] for m in rebuilt['models']])
         self.assertNotIn('unknown',[m['model'] for m in rebuilt['models']])
 
+    def test_records_attributed_later_rebuild_stored_weeks(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류'])
+            # Assigned to a project later: every token sum is kept.
+            c.execute("UPDATE events SET project='alpha' WHERE route='claude-code'");self.store.bump_data_version(c)
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류','alpha'])
+
+    def test_a_week_is_built_once_the_readings_past_its_end_are_in(self):
+        # Readings up to 10 minutes past the week's end close its last interval.
+        end=stamp('2026-10-04T15:00:00Z')  # Monday 10-05 00:00 KST
+        with patch('llm_usage.store.time.time',return_value=end+120),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end-300,'devin')
+        reports.ensure_report(self.store,end+120,PRICING)
+        with self.store.connect() as c:self.assertIsNone(self.store.state(c,'report:2026-09-28'))
+        with patch('llm_usage.store.time.time',return_value=end+240),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end+240,'devin')
+        self.assertEqual(reports.ensure_report(self.store,end+600,PRICING)['week'],'2026-09-28')
+        with self.store.connect() as c:report=self.store.state(c,'report:2026-09-28')
+        devin=next(q for q in report['quota_use'] if q['route']=='devin')
+        self.assertEqual((devin['observed_hours'],devin['zero_hours']),(0.08,0.08))
+
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')
         self.assertIsNotNone(reports.ensure_report(self.store,later,PRICING))
