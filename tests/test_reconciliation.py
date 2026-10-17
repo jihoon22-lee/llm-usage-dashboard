@@ -60,13 +60,29 @@ class ReconciliationTests(unittest.TestCase):
         with self.store.connect() as c:
             self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
             self.store.account_tokens(c,'codex',[dict(startDate=day,tokens=tokens) for day,tokens in
-                                                 (('2026-10-03',100),('2026-10-04',200),('2026-10-11',300),('2026-10-12',400))],self.now)
+                                                 (('2026-09-20',50),('2026-10-03',100),('2026-10-04',200),('2026-10-11',300),('2026-10-12',400))],self.now)
         body=self.usage(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
         prior=body['prior']
         self.assertEqual((prior['start'],prior['end_exclusive'],prior['current_end']),
                          ('2026-09-28T00:00:00+09:00','2026-10-04T21:00:00+09:00','2026-10-12T21:00:00+09:00'))
         self.assertEqual(total(body['totals']),700)
         self.assertEqual((prior['current_tokens'],total(prior),prior['residual_tokens'],prior['complete']),(300,100,100,True))
+
+    def test_card_comparison_needs_every_counted_source_to_reach_the_earlier_window(self):
+        # Local records reach back, but account days begin inside the current window: the
+        # earlier window's account share is missing, not zero.
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-08',tokens=300)],self.now)
+        span=dict(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
+        self.assertFalse(self.usage(**span)['prior']['complete'])
+        # Account days alone (no local records) that cover both windows compare.
+        alone=Store(Path(self.tmp.name)/'alone.db')
+        with alone.connect() as c:
+            alone.account_tokens(c,'codex',[dict(startDate=day,tokens=tokens) for day,tokens in
+                                            (('2026-09-20',50),('2026-10-01',100),('2026-10-08',300))],self.now)
+        prior=alone.usage(now=self.now,**span)['prior']
+        self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,100))
 
     def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
         # The Codex account total beyond this PC's records has no model or project. Under

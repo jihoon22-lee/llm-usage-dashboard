@@ -218,6 +218,10 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
     entries,conflicts=supplements(c)
+    # Where each aggregate source's evidence begins (any scope): a comparison needs it
+    # to reach back as far as the local records.
+    first_seen={}
+    for e in entries:first_seen[e['source']]=min(first_seen.get(e['source'],math.inf),e['start'])
     entries=[e for e in entries if matches(e,scope)]
     a,b=stamp(data['start']),stamp(data['end_exclusive'])
     conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
@@ -280,10 +284,14 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     prior=data.get('prior')
     if prior:
         pa,pb,cut=stamp(prior['start']),stamp(prior['end_exclusive']),stamp(prior['current_end'])
+        counted=set()
         for e in entries:
             if e.get('running'):continue
-            if pa<=e['start'] and e['end']<=pb:add(prior,e)
-            if a<=e['start'] and e['end']<=cut:prior['current_tokens']+=e['tokens']
+            if pa<=e['start'] and e['end']<=pb:add(prior,e);counted.add(e['source'])
+            if a<=e['start'] and e['end']<=cut:prior['current_tokens']+=e['tokens'];counted.add(e['source'])
+        # A source counted on either side must already have covered the earlier window;
+        # otherwise its share is missing there, not zero.
+        if any(first_seen[source]>pa for source in counted):prior['complete']=False
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)

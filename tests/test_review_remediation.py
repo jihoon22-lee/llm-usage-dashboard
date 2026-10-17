@@ -159,7 +159,9 @@ class CompareTests(Base):
         self.assertEqual((week['mode'],week['start'],week['complete'],week['output'],week['cost']),
                          ('week','2026-09-26T00:00:00+09:00',True,0,None))
         self.assertFalse(usage(period='today',compare='month')['prior']['complete'])
-        self.assertFalse(usage(period='7d',scope='model:gpt-other')['prior']['complete'])
+        # A scope with no use on either side compares nothing: complete, both zero.
+        empty=usage(period='7d',scope='model:gpt-other')['prior']
+        self.assertEqual((empty['complete'],empty['current_tokens'],empty['output']),(True,0,0))
         self.assertIsNone(usage(period='all')['prior'])
 
 

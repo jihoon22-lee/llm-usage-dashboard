@@ -1010,7 +1010,7 @@ class Store:
             if effective>a:
                 stop=a2+(effective-a)
                 prior=dict(mode=mode,label=self.COMPARE_LABELS[mode],start=a2.isoformat(),end_exclusive=stop.isoformat(),
-                           current_end=effective.isoformat(),running=effective<b,complete=first is not None and first<=a2.timestamp(),
+                           current_end=effective.isoformat(),running=effective<b,complete=True,
                            current_tokens=token_total(total),requests=0,cost=None,**dict.fromkeys(TOKENS,0))
                 spent=None
                 for r in c.execute('SELECT model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+count+' FROM events WHERE ts>=? AND ts<?'
@@ -1020,6 +1020,9 @@ class Store:
                     rate=rate_for(r['model'],pricing,r['day']) if pricing else None
                     if rate:spent=(spent or 0)+estimate(dict(r),rate)
                 if spent is not None:prior['cost']=round(spent,4)
+                # Local records take part only when either side has some; then they must
+                # reach back to the earlier window (reconciliation checks its sources too).
+                if (token_total(prior) or token_total(total)) and not (first is not None and first<=a2.timestamp()):prior['complete']=False
         session_list=[];sessionless=0;project_list=[];sessions_total=0
         if sections!='core':
             sessions={}
