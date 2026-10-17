@@ -405,6 +405,8 @@ class Store:
             c.execute('DELETE FROM quota_interruptions WHERE checked<?',(retention,))
             c.execute('DELETE FROM resource_history WHERE checked<?',(retention,))
             self.save_state(c,'history_pruned',now)
+            # What is older than any prune's cutoff is gone, even if retention_days grows later.
+            self.save_state(c,'history_cutoff',max(retention,self.state(c,'history_cutoff',0)))
 
     def limit(self, c, route, bucket, remaining, resets, checked, source, metadata=None):
         from .resources import account, number, quota_context, SKEW

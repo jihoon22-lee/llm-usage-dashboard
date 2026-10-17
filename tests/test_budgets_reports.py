@@ -149,6 +149,28 @@ class ReportTests(unittest.TestCase):
         with self.store.connect() as c:later=reports.quota_use(c,end,end+7*86400)
         self.assertFalse(any(q['resets_observed'] for q in later))
 
+    def test_longest_observed_stream_is_used(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            # The account poll stops after two readings; the status line goes on to exhaust the window.
+            for i,remaining in enumerate((80,78)):
+                self.store.limit(c,'claude-code','seven_day',remaining,start+6*86400,start+i*300,'claude-oauth')
+            for i,remaining in enumerate((40,20,5,0,0)):
+                self.store.limit(c,'claude-code','seven_day',remaining,start+6*86400,start+86400+i*300,'claude-code')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use=next(q for q in report['quota_use'] if (q['route'],q['bucket'])==('claude-code','seven_day'))
+        self.assertEqual((use['exhausted'],use['observed_hours'],use['zero_hours']),(1,0.33,0.08))
+
+    def test_fetch_failure_between_readings_is_not_observed(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            for i in range(3):self.store.limit(c,'claude-code','five_hour',0,start+18000,start+i*300,'claude-oauth')
+            # The poll between the last two readings failed: that interval is not observed 0% time.
+            self.store.source(c,'claude-oauth','error','timeout',start+450)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use=next(q for q in report['quota_use'] if (q['route'],q['bucket'])==('claude-code','five_hour'))
+        self.assertEqual((use['observed_hours'],use['zero_hours']),(0.08,0.08))
+
     def test_consecutive_exhaustion_weeks(self):
         with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
             for i,remaining in enumerate((5,0)):
@@ -175,6 +197,19 @@ class ReportTests(unittest.TestCase):
         # A week first built after its history was pruned says so instead of reporting zeros.
         self.assertEqual((unseen['exhausted'],unseen['quota_use']),(None,None))
         self.assertNotIn('한도 소진',reports.summary(unseen))
+
+    def test_longer_retention_after_pruning_keeps_quota_figures(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:before=self.store.state(c,'report:2026-09-28')
+        month=later+40*86400
+        with patch('llm_usage.store.time.time',return_value=month),self.store.connect() as c:self.store.prune_history(c)
+        # Retention is raised after the prune: the deleted history of that week does not come back.
+        wider=Store(Path(self.tmp.name)/'usage.db',thresholds={'retention_days':90})
+        reports.ensure_report(wider,month,{**PRICING,'claude-x':dict(input=1,output=1)})
+        with wider.connect() as c:after=wider.state(c,'report:2026-09-28')
+        self.assertNotEqual(after['built'],before['built'])
+        self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
 
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')

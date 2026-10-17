@@ -23,23 +23,60 @@ def _totals(usage):
     return dict(unallocated_tokens=(usage.get('reconciliation') or {}).get('unallocated_tokens',0),supplemental_tokens=(usage.get('reconciliation') or {}).get('supplemental_tokens',0),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'))
 
 
+def _points(c,route,bucket,source,start,end,since=None):
+    """One source stream's readings for [start, end), segmented (insights.segment).
+
+    Readings up to 10 minutes outside the week join it, so an interval or a reset at the
+    week's edge is seen; observations of a previous account (before `since`) are left out."""
+    from .insights import segment
+    rows=[dict(r) for r in c.execute('SELECT checked,remaining,resets FROM limit_history WHERE route=? AND bucket=? AND source=? '
+                                     'AND checked>=? AND checked<=? ORDER BY checked',
+                                     (route,bucket,source,max(start-600,since or 0),end+600))]
+    interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<=?',
+                                           (source,start-600,end+600))]
+    return segment(rows,interruptions)
+
+
+def _use(points,start,end):
+    """(observed seconds, 0% seconds, remaining before each observed reset) inside [start, end)."""
+    observed=zero=0.0;before=[];epoch_reset=None
+    for previous,point in zip(points,points[1:]):
+        if previous['break_before']:epoch_reset=previous['resets']
+        span=point['checked']-previous['checked']
+        inside=max(0,min(point['checked'],end)-max(previous['checked'],start))
+        # A recorded fetch failure between two readings leaves that interval unobserved.
+        if span<=600 and point['break_reason']!='error' and previous['remaining'] is not None and point['remaining'] is not None:
+            observed+=inside
+            if previous['remaining']<=0 and point['remaining']<=0:zero+=inside
+        # The window's reset time passed between two consecutive readings: whatever the
+        # next reading says (a new window, no window yet, the old time), the reset was seen.
+        # A new window read up to a minute early (clock skew) counts as well.
+        skew=60 if point['break_reason']=='reset' else 0
+        if (span<=600 and epoch_reset is not None and start<=epoch_reset<end
+                and previous['checked']<epoch_reset<=point['checked']+skew and previous['remaining'] is not None):
+            before.append(previous['remaining'])
+    return observed,zero,before
+
+
 def _streams(c,start,end):
-    """(route, bucket, source) observed in [start, end), one source stream per bucket.
+    """[(route, bucket, source, points)] observed in [start, end), one source stream per bucket.
 
     One bucket is often observed by two streams (account poll and local status line,
-    'codex' and 'codex-local'); each sees the same exhaustion. Use one stream per
-    bucket, preferring the account poll as quota_history does, else the busiest one."""
+    'codex' and 'codex-local'); each sees the same exhaustion. Use the stream that observed
+    the bucket longest in the week, the account poll on a tie as quota_history prefers it,
+    so an account poll that stopped early in the week does not hide the readings after it."""
     from .claude_accounts import account_source
+    since={r[0]:r[1] for r in c.execute('SELECT route,since FROM resource_accounts')}
     streams={}
     for route,bucket,source,n in c.execute('SELECT route,bucket,source,COUNT(*) FROM limit_history WHERE checked>=? AND checked<? '
                                            'GROUP BY route,bucket,source',(start,end)).fetchall():
-        streams.setdefault((route,bucket),[]).append((source,n))
+        points=_points(c,route,bucket,source,start,end,since.get(route))
+        streams.setdefault((route,bucket),[]).append(((_use(points,start,end)[0],source==account_source(route),n,source),points))
     chosen=[]
-    for (route,bucket),items in streams.items():
-        account=account_source(route)
-        source=account if any(s==account for s,_ in items) else max(items,key=lambda item:(item[1],item[0]))[0]
-        chosen.append((route,bucket,source))
-    return sorted(chosen)
+    for (route,bucket),items in sorted(streams.items()):
+        rank,points=max(items,key=lambda item:item[0])
+        chosen.append((route,bucket,rank[3],points))
+    return chosen
 
 
 def _names(c):
@@ -57,7 +94,7 @@ def exhaustions(c,start,end):
     """Quota exhaustions (remaining reaching 0 from above) observed in [start, end),
     per route and bucket, in each bucket's own source stream."""
     counts={}
-    for route,bucket,source in _streams(c,start,end):
+    for route,bucket,source,_ in _streams(c,start,end):
         previous=c.execute('SELECT remaining FROM limit_history WHERE route=? AND bucket=? AND source=? AND checked<? ORDER BY checked DESC LIMIT 1',
                            (route,bucket,source,start)).fetchone()
         before=previous[0] if previous else None
@@ -76,7 +113,8 @@ def exhaustions(c,start,end):
 def quota_use(c,start,end):
     """How each quota window was used in [start, end), from observations only.
 
-    observed_hours: time covered by consecutive observations (no gap over 10 minutes).
+    observed_hours: time covered by consecutive observations (no gap over 10 minutes and
+    no recorded fetch failure between them).
     zero_hours: the part of it where two consecutive observations were both 0%.
     before_reset: the last observed remaining of each window that reset in the week,
     counted only when the reset was seen as it happened: a reading before the window's
@@ -86,31 +124,9 @@ def quota_use(c,start,end):
     left out, as are observations of a previous account (before its current epoch).
     Readings up to 10 minutes outside the week join it, so a reset or an interval at the
     week's edge is seen; time is counted only inside the week."""
-    from .insights import segment
-    since={r[0]:r[1] for r in c.execute('SELECT route,since FROM resource_accounts')}
     out=[]
-    for route,bucket,source in _streams(c,start,end):
-        rows=[dict(r) for r in c.execute('SELECT checked,remaining,resets FROM limit_history WHERE route=? AND bucket=? AND source=? '
-                                         'AND checked>=? AND checked<=? ORDER BY checked',
-                                         (route,bucket,source,max(start-600,since.get(route) or 0),end+600))]
-        interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<=?',
-                                               (source,start-600,end+600))]
-        points=segment(rows,interruptions)
-        observed=zero=0.0;before=[];epoch_reset=None
-        for previous,point in zip(points,points[1:]):
-            if previous['break_before']:epoch_reset=previous['resets']
-            span=point['checked']-previous['checked']
-            inside=max(0,min(point['checked'],end)-max(previous['checked'],start))
-            if span<=600 and previous['remaining'] is not None and point['remaining'] is not None:
-                observed+=inside
-                if previous['remaining']<=0 and point['remaining']<=0:zero+=inside
-            # The window's reset time passed between two consecutive readings: whatever the
-            # next reading says (a new window, no window yet, the old time), the reset was seen.
-            # A new window read up to a minute early (clock skew) counts as well.
-            skew=60 if point['break_reason']=='reset' else 0
-            if (span<=600 and epoch_reset is not None and start<=epoch_reset<end
-                    and previous['checked']<epoch_reset<=point['checked']+skew and previous['remaining'] is not None):
-                before.append(previous['remaining'])
+    for route,bucket,source,points in _streams(c,start,end):
+        observed,zero,before=_use(points,start,end)
         if observed<60 and not before:continue
         out.append(dict(route=route,bucket=bucket,observed_hours=round(observed/3600,2),zero_hours=round(zero/3600,2),
                         resets_observed=len(before),
@@ -123,10 +139,14 @@ def quota_use(c,start,end):
 
 
 def quota_covered(store,c,start):
-    """Whether quota history from `start` on is still kept (history is pruned after
-    retention_days); a rebuilt older week keeps the figures computed back then."""
-    pruned=store.state(c,'history_pruned')
-    return not pruned or start>=pruned-store.thresholds['retention_days']*86400
+    """Whether quota history from `start` on is still kept. Pruning removes what is older
+    than its cutoff, and a later, longer retention_days does not bring it back; a rebuilt
+    older week keeps the figures computed back then."""
+    cutoff=store.state(c,'history_cutoff')
+    if cutoff is None and store.state(c,'history_pruned'):
+        # Pruned before the cutoff was recorded.
+        cutoff=store.state(c,'history_pruned')-store.thresholds['retention_days']*86400
+    return cutoff is None or start>=cutoff
 
 
 def streaks(store,c,monday,exhausted):
