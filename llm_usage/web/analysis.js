@@ -222,16 +222,21 @@ function renderUsage(data){
  $('recent-usage-note').hidden=!recent;
  document.querySelector('[data-panel="heatmap"]').hidden=recent;
  renderScope(data);
- // Card deltas always compare token totals, whatever metric is selected.
- // The earlier window is cut at the same elapsed time as the running period.
- const cmpSum=data.compare&&data.compare.elapsed?total(data.compare.elapsed):null;
- const curSum=total(data.totals);
- const delta=cmpSum?(curSum-cmpSum)/cmpSum:null;
- const cards=[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output'],['전체 토큰','total']];
- $('cards').innerHTML=cards.map(([label,k])=>{
-  const d=k==='total'&&delta!=null?` · ${esc(data.compare.label)} 같은 경과 시간 대비 ${delta>=0?'+':'−'}${Math.abs(delta*100).toFixed(1)}%`:'';
-  return `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" data-tip="${fmt(k==='total'?total(data.totals):data.totals[k])}">${compact(k==='total'?total(data.totals):data.totals[k])}</div><small>선택 기간 · 전체 누계 ${compact(k==='total'?total(data.lifetime):data.lifetime[k])}${d}</small></div>`;}).join('')
- +(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?`<div class="stat"><div class="stat-label">비용 추정</div><div class="stat-value" data-tip="${esc(usd(data.cost.period))}">${usd(data.cost.period)}</div><small>공개 단가 기준 환산 · 단가 확정 토큰 ${percent(data.cost.coverage)}${data.cost.lifetime!=null?' · 전체 누계 '+usd(data.cost.lifetime):''}${data.cost.cache_savings?` · 캐시 읽기 덕분 ${usd(data.cost.cache_savings)} 절감 환산`:''}</small></div>`:'');
+ // Total tokens and cost lead, each with its change against the window before (or the
+ // chosen comparison) up to the same elapsed time. Token changes compare tokens whatever
+ // metric is selected; a running account day is left out of both sides (API `prior`).
+ const prior=data.prior;
+ const change=(current,previous)=>{const text=priorChange(prior,data.period,current,previous);return text?`<small class="stat-delta">${esc(text)}</small>`:'';};
+ const card=(label,value,tip,lines)=>`<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" data-tip="${esc(tip)}">${value}</div>${lines}</div>`;
+ const tokens=total(data.totals);
+ const cost=data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?data.cost:null;
+ $('cards').innerHTML=card('전체 토큰',compact(tokens),fmt(tokens),
+   change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small>`)
+  +(cost?card('비용 추정',usd(cost.period),usd(cost.period),
+   change(cost.period,prior?prior.cost??(total(prior)?null:0):null)
+   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}</small>`):'')
+  +[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output']].map(([label,k])=>
+   card(label,compact(data.totals[k]),fmt(data.totals[k]),`<small>선택 기간 · 전체 누계 ${compact(data.lifetime[k])}</small>`)).join('');
  renderModelTable(data);renderHeatmap(data.heatmap);
  $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note;
  renderAccountGap(data.account_gap);

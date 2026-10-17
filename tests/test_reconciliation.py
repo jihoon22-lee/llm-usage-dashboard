@@ -54,6 +54,20 @@ class ReconciliationTests(unittest.TestCase):
         self.event();self.evidence()
         self.assertEqual(self.usage(period='today',subscriptions={'claude-code':20})['subscriptions'][0]['period_tokens'],100)
 
+    def test_card_comparison_takes_account_days_ended_at_the_same_elapsed_time(self):
+        # A running account day is in the period total but not set against a whole one:
+        # each side of the card comparison counts the aggregates ended by its cut.
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            self.store.account_tokens(c,'codex',[dict(startDate=day,tokens=tokens) for day,tokens in
+                                                 (('2026-10-03',100),('2026-10-04',200),('2026-10-11',300),('2026-10-12',400))],self.now)
+        body=self.usage(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
+        prior=body['prior']
+        self.assertEqual((prior['start'],prior['end_exclusive'],prior['current_end']),
+                         ('2026-09-28T00:00:00+09:00','2026-10-04T21:00:00+09:00','2026-10-12T21:00:00+09:00'))
+        self.assertEqual(total(body['totals']),700)
+        self.assertEqual((prior['current_tokens'],total(prior),prior['residual_tokens'],prior['complete']),(300,100,100,True))
+
     def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
         # The Codex account total beyond this PC's records has no model or project. Under
         # model and project grouping it is one residual item rather than 'unknown' or

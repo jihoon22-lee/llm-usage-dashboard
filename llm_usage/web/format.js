@@ -58,6 +58,23 @@ const KIND_NAMES={main:'메인',sub:'서브 에이전트',fork:'포크',unattrib
 const estimateWith=(rows,rate)=>rows.reduce((s,r)=>s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)
  +(r.output||0)*rate.output+(r.cache_creation||0)*(rate.cache_write??rate.input))/1e6,0);
 const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
+// A period card's change against the window it is compared with (API `prior`, cut at the
+// same elapsed time): '직전 7일 같은 시점 대비 +12.3%', or a multiple from twice as much
+// ('3.2배', past a hundred '100배 이상'). A window older than the first record says so; a
+// window without use has no ratio; an unknown value has no line.
+const PRIOR_NAMES={'1h':'직전 1시간',today:'어제','7d':'직전 7일','30d':'직전 30일'};
+function priorChange(prior,period,current,previous){
+ if(!prior)return '';
+ const name=(prior.mode==='week'?'7일 전':prior.mode==='month'?'28일 전':PRIOR_NAMES[period]||'직전 기간')+(prior.running?' 같은 시점':'');
+ if(!prior.complete)return `${name} 기록 부족`;
+ if(previous==null||current==null)return '';
+ if(!previous)return `${name} 사용 없음`;
+ const ratio=current/previous;
+ if(ratio>=100)return `${name} 대비 100배 이상`;
+ if(ratio>=2)return `${name} 대비 ${ratio.toFixed(1)}배`;
+ const d=(ratio-1)*100;
+ return `${name} 대비 ${d>=0?'+':'−'}${Math.abs(d).toFixed(1)}%`;
+}
 // Month-to-date use against a project's token and/or USD budget (the larger share counts).
 function budgetState(usage,budget){
  const parts=[];

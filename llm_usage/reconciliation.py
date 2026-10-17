@@ -132,10 +132,12 @@ def supplements(c):
     for group in groups.values():
         previous=None
         for r in sorted(group,key=lambda x:x['end']):
+            running=False
             if r['source']=='codex-account':
                 # A received running-day count cannot contain future activity.
                 # This is an upper bound, not a claim that work happened at poll
                 # time. Revisions still replace the SAME original daily bucket.
+                running=r['checked']<r['end']
                 r={**r,'end':min(r['end'],r['checked'])}
                 if r['end']<=r['start']:continue
             parts=json.loads(r['parts']) if r['parts'] else None
@@ -160,7 +162,7 @@ def supplements(c):
                 out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
                                 model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
                                 tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
-                                account=_account(c,r)))
+                                account=_account(c,r),running=running))
             previous=r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence
@@ -273,6 +275,15 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
             if options is not None and value and value not in options:options.append(value)
+    # The card comparison: on both sides, aggregates that ended by the same elapsed time.
+    # A running account day is in the period total but not set against a whole one.
+    prior=data.get('prior')
+    if prior:
+        pa,pb,cut=stamp(prior['start']),stamp(prior['end_exclusive']),stamp(prior['current_end'])
+        for e in entries:
+            if e.get('running'):continue
+            if pa<=e['start'] and e['end']<=pb:add(prior,e)
+            if a<=e['start'] and e['end']<=cut:prior['current_tokens']+=e['tokens']
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)

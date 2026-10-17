@@ -361,14 +361,16 @@ async def main():
             # No interactive elements remain nested inside <summary>.
             assert await page.evaluate("document.querySelectorAll('summary button').length")==0
             await view('usage')
-            # The 전체 토큰 card delta always compares token totals, whatever the metric.
-            delta_tokens=await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")
-            assert '7일 전 동일 구간 같은 경과 시간 대비' in delta_tokens,delta_tokens
+            # The 전체 토큰 card leads; its change always compares token totals, whatever the metric.
+            # Records start on 09-01, inside the week-earlier window: no change from a partial window.
+            delta_tokens=await page.evaluate("document.querySelector('#cards .stat .stat-delta').textContent")
+            assert await page.evaluate("document.querySelector('#cards .stat .stat-label').textContent")=='전체 토큰'
+            assert delta_tokens=='7일 전 같은 시점 기록 부족',delta_tokens
             # Heatmap and calendar follow the selected metric.
             await page.locator('#metric').select_option('requests')
             await expect(page.locator('#refresh')).to_be_enabled()
             await expect(page.locator('#heatmap .heat-legend')).to_contain_text('요청 수')
-            assert await page.evaluate("document.querySelectorAll('#cards .stat')[3].querySelector('small').textContent")==delta_tokens
+            assert await page.evaluate("document.querySelector('#cards .stat .stat-delta').textContent")==delta_tokens
             await view('reports')
             await expect(page.locator('#calendar .cal-grid')).to_have_attribute('aria-label',re.compile('요청 수'))
             await expect(page.locator('#calendar-caption')).to_contain_text('일별 요청 수')
@@ -399,7 +401,7 @@ async def main():
             # The summary cards sit on the usage tab, right after the filter, and carry the active period.
             assert await page.evaluate("document.querySelector('#filter-fold').compareDocumentPosition(document.querySelector('#cards')) & Node.DOCUMENT_POSITION_FOLLOWING")
             await expect(page.locator('#cards-period')).to_contain_text('최근 30일')
-            await expect(page.locator('#cards')).to_contain_text('7일 전 동일 구간 같은 경과 시간 대비')
+            await expect(page.locator('#cards')).to_contain_text('7일 전 같은 시점 기록 부족')
             assert await page.locator('#cards-edit').count()==0
             await view('quota')
             # The quota tab leads with quotas and carries no period cards.

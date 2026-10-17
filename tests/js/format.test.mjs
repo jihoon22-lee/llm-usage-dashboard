@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -383,4 +383,21 @@ test('calendar steps follow the rank among the shown days',()=>{
   assert.deepEqual([5,5,5].map(f.rankLevels([5,5,5])),[5,5,5]);
   assert.equal(f.rankLevels([7])(7),5);
   assert.equal(f.rankLevels([])(3),5);
+});
+
+test('period cards name the compared window and refuse an incomplete one',()=>{
+  const prior={mode:'previous',running:true,complete:true};
+  assert.equal(f.priorChange(prior,'7d',112.3,100),'직전 7일 같은 시점 대비 +12.3%');
+  assert.equal(f.priorChange({...prior,running:false},'1h',50,100),'직전 1시간 대비 −50.0%');
+  assert.equal(f.priorChange({...prior,mode:'week'},'30d',100,100),'7일 전 같은 시점 대비 +0.0%');
+  assert.equal(f.priorChange(prior,'custom',100,0),'직전 기간 같은 시점 사용 없음');
+  // From twice as much a multiple reads better than a percentage of a small base.
+  assert.equal(f.priorChange(prior,'7d',199,100),'직전 7일 같은 시점 대비 +99.0%');
+  assert.equal(f.priorChange(prior,'7d',320,100),'직전 7일 같은 시점 대비 3.2배');
+  assert.equal(f.priorChange(prior,'today',5e9,10),'어제 같은 시점 대비 100배 이상');
+  // Collection began inside the earlier window: no change from a partial window.
+  assert.equal(f.priorChange({...prior,complete:false},'today',100,1),'어제 같은 시점 기록 부족');
+  // An unpriced earlier window has no cost line; no comparison has none either.
+  assert.equal(f.priorChange(prior,'7d',10,null),'');
+  assert.equal(f.priorChange(null,'all',10,5),'');
 });

@@ -70,6 +70,7 @@ section[data-view]{margin-top:24px}
 .stat-label{font-size:var(--fs-meta);color:var(--muted)}
 .stat-value{font-size:26px;letter-spacing:-.8px;font-weight:650;margin:8px 0}
 .stat small{color:var(--subtle);font-size:var(--fs-small)}
+.stat .stat-delta{display:block;margin-bottom:3px;color:var(--ink);font-variant-numeric:tabular-nums}
 .panel{border:1px solid var(--border);background:var(--surface);padding:23px;border-radius:10px;margin-bottom:20px}
 .legend{display:flex;gap:17px;flex-wrap:wrap;font-size:var(--fs-small);margin-bottom:16px}
 .legend span::before{content:'●';color:var(--color);margin-right:6px}
