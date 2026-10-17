@@ -30,7 +30,10 @@ with sync_playwright() as p:
         assert page.evaluate('lastUsage.totals.total_tokens===lastUsage.reconciliation.recorded_tokens+lastUsage.reconciliation.supplemental_tokens')
         assert page.evaluate('lastUsage.series.reduce((n,p)=>n+Object.values(p.values).reduce((s,v)=>s+total(v),0),0)+lastUsage.reconciliation.unallocated_tokens===total(lastUsage.totals)')
         assert page.evaluate('lastUsage.rows.reduce((n,r)=>n+total(r),0)===total(lastUsage.totals)')
-        expect(page.locator('#composition')).to_contain_text('내역 미분류')
+        # Tokens without a breakdown stay in the composition key: here all of them are the
+        # Codex account residual, its own item (out of the ring by default) rather than 내역 미분류.
+        expect(page.locator('#composition [data-token="residual_tokens"]')).to_contain_text('로컬 미기록')
+        expect(page.locator('#composition [data-token="unclassified_tokens"]')).to_have_count(0)
         assert not page.evaluate("document.querySelector('#composition').innerHTML.includes('NaN')")
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert not errors,errors

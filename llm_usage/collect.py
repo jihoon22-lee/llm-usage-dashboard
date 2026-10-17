@@ -639,7 +639,7 @@ def run(settings,once=False):
                         weekly=ensure_report(store,current,load_pricing(local))
                         if weekly:
                             from .notify import deliver
-                            deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly))],current)
+                            deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label')))],current)
                     except Exception as exc:notify_failure(store,exc)  # never stops collection
             sd_notify('WATCHDOG=1')
             if not once and due(last_backup,backup_ok,now):

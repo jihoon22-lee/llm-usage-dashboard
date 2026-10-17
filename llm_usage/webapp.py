@@ -100,6 +100,10 @@ def create_app(config=None):
         return sorted({r['model'] for r in data.get('rows') or [] if r.get('est_cost') is None and r.get('requests')
                        and r['model'] not in NO_PUBLIC_PRICE and origins.get(r['model'])!='hidden'})
 
+    def residual_label():
+        from .reconciliation import RESIDUAL_LABEL
+        return config.get('residual_label') or RESIDUAL_LABEL
+
     def active_prices():
         """Monthly prices of subscriptions that are not marked ended."""
         ended=ended_routes(config)
@@ -111,7 +115,9 @@ def create_app(config=None):
             as_of=float(request.args['as_of']) if 'as_of' in request.args else None
             data=(store.usage(period=request.args.get('period','7d'),start=request.args.get('start'),end=request.args.get('end'),
                             granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=active_prices(),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of,names=config.get('claude_account_names'),ended=ended_routes(config)))
-            return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {}} if 'rows' in data else data)
+            # The residual's name is a display setting, not part of the cached usage body.
+            return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {},
+                            'residual_label':residual_label()} if 'rows' in data else data)
         except (ValueError,TypeError,OverflowError):abort(400,description='기간 또는 집계 단위를 확인하세요.')
 
     @app.get('/api/session')
@@ -234,6 +240,7 @@ def create_app(config=None):
         return jsonify(subscription_routes=sorted(routes),subscription_prices=config.get('subscription_prices') or {},
                        ended_subscriptions=config.get('ended_subscriptions') or {},claude_accounts=claude,
                        claude_account_names=config.get('claude_account_names') or {},notify=masked(config.get('notify')),
+                       residual_label=config.get('residual_label'),
                        project_budgets=config.get('project_budgets') or {},model_usage_30d=usage30,
                        thresholds=store.thresholds,pricing=pricing,refresh_seconds=config.get('refresh_seconds',300),
                        value_alert_usd=config.get('value_alert_usd'),
@@ -259,6 +266,12 @@ def create_app(config=None):
                     and isinstance(v,str) and len(v.strip())<=40 and not any(ord(ch)<32 or ord(ch)==127 for ch in v) for r,v in names.items())):
                 abort(400,description='계정 이름은 40자 이하로 입력하세요.')
             patch['claude_account_names']={r:v.strip() for r,v in names.items() if v.strip()}
+        label=body.get('residual_label')
+        if label is not None:
+            # The name of the Codex account residual (e.g. '자동 리뷰'); empty restores the default.
+            if not isinstance(label,str) or len(label.strip())>20 or any(ord(ch)<32 or ord(ch)==127 for ch in label):
+                abort(400,description='계정 합계 차이 이름은 20자 이하로 입력하세요.')
+            patch['residual_label']=label.strip() or None
         ended=body.get('ended')
         if ended is not None:
             # Omitted keeps the stored state; a list replaces it and keeps the original dates.
@@ -270,7 +283,7 @@ def create_app(config=None):
             saved=persist(change)
         else:saved=persist(patch)
         return jsonify(subscription_prices=clean,ended_subscriptions=saved.get('ended_subscriptions') or {},
-                       claude_account_names=saved.get('claude_account_names') or {})
+                       claude_account_names=saved.get('claude_account_names') or {},residual_label=saved.get('residual_label'))
 
     @app.post('/api/config/pricing')
     def set_pricing():

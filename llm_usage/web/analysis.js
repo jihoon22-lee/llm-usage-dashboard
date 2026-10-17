@@ -4,8 +4,10 @@ function modelRowValue(row){
  const key=tableSort.key;
  return key==='total'||key==='share'?modelTotal(row):key==='provider'?`${row.provider} / ${row.route}`:key==='est_cost'?(row.est_cost??-1):key==='avg'?(row.requests?(row.recorded_tokens??modelTotal(row))/row.requests:-1):row[key];
 }
+// The Codex account residual is not a model: it stays last (table and CSV) whatever the sort.
 function sortedModelRows(data){
  return[...data.rows].sort((a,b)=>{
+  if((a.model===RESIDUAL)!==(b.model===RESIDUAL))return a.model===RESIDUAL?1:-1;
   const aa=modelRowValue(a),bb=modelRowValue(b);
   const comparison=typeof aa==='number'?aa-bb:compareText.compare(String(aa??''),String(bb??''));
   return comparison*(tableSort.direction==='desc'?-1:1)||compareText.compare(`${a.model} / ${a.route}`,`${b.model} / ${b.route}`);
@@ -23,7 +25,7 @@ $('csv-export').addEventListener('click',()=>{
  if(!lastUsage)return;
  const denom=modelTotal(lastUsage.totals);
  downloadCsv('models',['제작사','사용 서비스','모델','요청 수','평균 토큰/요청','비중 %','Uncached Input','Cached Input','Output','Total (incl. cache creation)','Cache creation','Reasoning','비용 추정 USD'],
-  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,r.model,r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
+  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,residualText(r.model),r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
 });
 $('csv-sessions').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.sessions)return;
@@ -35,7 +37,7 @@ $('csv-sessions').addEventListener('click',()=>{
 $('csv-projects').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.projects)return;
  downloadCsv('projects',['프로젝트','세션','요청 수','토큰','비용 추정 USD','최근 활동 KST'],
-  lastUsage.projects.map(p=>[p.project,p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
+  lastUsage.projects.map(p=>[residualText(p.project),p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
 });
 $('csv-series').addEventListener('click',event=>{
  event.preventDefault();event.stopPropagation();
@@ -203,6 +205,9 @@ compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
  if('claude_accounts' in data)setClaudeAccounts(data.claude_accounts);
+ const shownName=residualName;setResidualName(data.residual_label);
+ // Reports drawn before the name arrived (or before it changed) are drawn again.
+ if(residualName!==shownName&&lastReports)renderReports(lastReports);
  $('first-use').hidden=!!data.scope||total(data.lifetime||{})>0||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
@@ -248,9 +253,9 @@ function renderAccountGap(gap){
  const box=$('account-gap');
  if(!gap||!gap.days||!gap.days.length){box.innerHTML='';return;}
  const days=gap.days.slice(-7).reverse();
- box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 로컬 미기록 <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
-  +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다.</p>`
-  +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>미기록</th></tr></thead><tbody>`
+ box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 ${esc(residualName)} <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
+  +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다. 모델·프로젝트별 보기에서는 ‘${esc(residualName)}’ 한 항목으로 따로 보이며, 이름은 설정의 구독에서 바꿀 수 있습니다.</p>`
+  +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>${esc(residualName)}</th></tr></thead><tbody>`
   +days.map(d=>`<tr><td>${esc(d.day)} 09:00–다음 날 09:00</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
   +'</tbody></table></div></details>';
 }
@@ -305,11 +310,14 @@ bindColsToggle($('sess-cols'),document.querySelector('[data-panel="sessions"] ta
 function renderModelTable(data){
  const denom=modelTotal(data.totals);
  const all=sortedModelRows(data);
- const match=r=>`${r.provider} ${routeNames[r.route]||r.route} ${r.model}`.toLowerCase().includes(modelFilter);
- const rows=modelFilter?all.filter(match):all;
- $('model-search-count').textContent=modelFilter?`${rows.length}/${all.length}개`:'';
+ const match=r=>`${r.provider} ${routeNames[r.route]||r.route} ${residualText(r.model)}`.toLowerCase().includes(modelFilter);
+ const shown=modelFilter?all.filter(match):all;
+ // The Codex account residual is not a model: it stays below the ranked rows, unranked.
+ const rows=shown.filter(r=>r.model!==RESIDUAL),residual=shown.filter(r=>r.model===RESIDUAL);
+ $('model-search-count').textContent=modelFilter?`${shown.length}/${all.length}개`:'';
  const avg=r=>r.requests?(r.recorded_tokens??modelTotal(r))/r.requests:null;
- $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
+ const residualRow=r=>`<tr class="residual-row"><td class="row-rank">—</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(residualName)}<small>계정 합계 − 이 PC 기록 · 모델 구분 없음</small></td><td class="col-detail">—</td><td>—</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`;
+ $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')+residual.map(residualRow).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
  $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${fmt(row.requests)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
  document.querySelectorAll('[data-sort]').forEach(button=>{
   const selected=button.dataset.sort===tableSort.key;
@@ -352,7 +360,7 @@ function chartSeries(data){
  const points=data.series;
  const compact=$('group').value!=='model'&&labels.length>8;
  const sum=l=>points.reduce((s,p)=>s+metricValue(p.values[l]||{}),0);
- const kept=new Set(compact?[...labels].filter(l=>l!=='기타').sort((a,b)=>sum(b)-sum(a)).slice(0,7):labels);
+ const kept=new Set(compact?[...[...labels].filter(l=>l!=='기타'&&l!==RESIDUAL).sort((a,b)=>sum(b)-sum(a)).slice(0,7),...labels.filter(l=>l===RESIDUAL)]:labels);
  const shown=compact?[...labels.filter(l=>kept.has(l)),'기타']:labels;
  function mapPoints(series){return series.map(p=>{
   const values=Object.fromEntries(shown.map(l=>[l,{}]));

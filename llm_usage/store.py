@@ -766,14 +766,17 @@ class Store:
             if rate:e['cost']+=estimate(row,rate);e['priced_tokens']+=tokens
         from .reconciliation import supplements
         additions,_=supplements(c)
+        residual=0
         for r in additions:
             if r['start']>=start.timestamp() and r['end']<=now.timestamp():
+                # The Codex account residual belongs to no project; it is kept apart.
+                if r['source']=='codex-account':residual+=r['tokens'];continue
                 e=out.setdefault(r['project'] or '미분류',dict(tokens=0,cost=0.0,priced_tokens=0))
                 e['tokens']+=r['tokens']
         for e in out.values():
             e['cost']=round(e['cost'],4) if e['priced_tokens'] else None
             e['priced_share']=e.pop('priced_tokens')/e['tokens']*100 if e['tokens'] else None
-        return dict(month=start.strftime('%Y-%m'),projects=out)
+        return dict(month=start.strftime('%Y-%m'),projects=out,residual_tokens=residual)
 
     def project_detail(self,project,now=None,pricing=None,days=30,budget=None):
         """One project over the last `days` KST days: models, daily use, busiest sessions,
@@ -807,7 +810,8 @@ class Store:
         with self.connect() as c:extra,conflicts=supplements(c)
         unallocated=[]
         for e in extra:
-            if (e['project'] or '미분류')!=project or e['end']>now.timestamp():continue
+            # The Codex account residual is listed apart from '미분류' (see reconciliation.RESIDUAL).
+            if e['source']=='codex-account' or (e['project'] or '미분류')!=project or e['end']>now.timestamp():continue
             if e['start']>=month_start.timestamp():month['tokens']+=e['tokens']
             if e['start']<start.timestamp():continue
             m=models.setdefault((e['route'],e['model'] or 'unknown'),dict(route=e['route'],model=e['model'] or 'unknown',tokens=0,requests=0,cost=None))

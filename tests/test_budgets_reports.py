@@ -84,6 +84,21 @@ class ReportTests(unittest.TestCase):
         self.assertIn('Codex codex · 10080분 2회',reports.summary(report))
         self.assertIn('전주 대비',reports.summary(report))
 
+    def test_codex_account_residual_share_is_its_own_line(self):
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            # Account days run 09:00-09:00 KST: 09-27 and 10-04 cross the week's edges.
+            self.store.account_tokens(c,'codex',[dict(startDate=d,tokens=t) for d,t in (('2026-09-27',700),('2026-09-29',4000),('2026-10-04',900))],NOW)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        # Only 09-29 lies wholly inside the week: its 4,000 less this PC's 2,000 records.
+        self.assertEqual(report['residual'],dict(tokens=2000,account_tokens=4000,days=1))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in report['models']])
+        self.assertIn('Codex 로컬 미기록 ',reports.summary(report))
+        self.assertIn('Codex 자동 리뷰 ',reports.summary(report,'자동 리뷰'))
+        self.assertIn('계정 합계의 50% (1일 기준)',reports.summary(report))
+        # Without account days the line is left out rather than shown as 0%.
+        self.assertIsNone(reports.build(self.store,stamp('2026-09-28T01:00:00Z'),PRICING)['residual'])
+
     def test_quota_use_counts_observed_and_zero_time(self):
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
         codex=next(q for q in report['quota_use'] if q['route']=='codex')
@@ -216,6 +231,25 @@ class ReportTests(unittest.TestCase):
         with wider.connect() as c:after=wider.state(c,'report:2026-09-28')
         self.assertNotEqual(after['built'],before['built'])
         self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
+
+    def test_report_format_change_rebuilds_stored_weeks_once(self):
+        from llm_usage.reconciliation import RESIDUAL
+        later=stamp('2026-10-05T01:00:00Z')
+        with self.store.connect() as c:
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-09-29',tokens=4000)],NOW)
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            # A week stored by an earlier version: the residual among the models, no own line.
+            old=self.store.state(c,'report:2026-09-28')
+            self.store.save_state(c,'report:2026-09-28',{**old,'models':[dict(model='unknown',route='codex',tokens=2000,cost=None)],'residual':None})
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:self.assertEqual(self.store.state(c,'report:2026-09-28')['residual'],None)
+        with patch.object(reports,'REPORT_FORMAT',reports.REPORT_FORMAT+1):
+            self.assertIsNone(reports.ensure_report(self.store,later+120,PRICING))
+        with self.store.connect() as c:rebuilt=self.store.state(c,'report:2026-09-28')
+        self.assertEqual((rebuilt['built'],rebuilt['residual']['tokens']),(later+120,2000))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in rebuilt['models']])
+        self.assertNotIn('unknown',[m['model'] for m in rebuilt['models']])
 
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')

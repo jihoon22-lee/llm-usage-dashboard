@@ -54,6 +54,42 @@ class ReconciliationTests(unittest.TestCase):
         self.event();self.evidence()
         self.assertEqual(self.usage(period='today',subscriptions={'claude-code':20})['subscriptions'][0]['period_tokens'],100)
 
+    def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
+        # The Codex account total beyond this PC's records has no model or project. Under
+        # model and project grouping it is one residual item rather than 'unknown' or
+        # '미분류'; totals, series and the comparison include it in every grouping.
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            self.store.event(c,'x',stamp('2026-10-07T03:00:00Z'),'OpenAI','codex','gpt-test',dict(uncached_input=100,output=50),session='t')
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-07',tokens=1000),dict(startDate='2026-09-30',tokens=400)],self.now)
+        span=dict(period='custom',start='2026-10-05',end='2026-10-11',granularity='week',compare='previous')
+        views={group:self.usage(group=group,**span) for group in ('provider','route','model','project')}
+        sums=lambda series:[sum(total(v) for v in p['values'].values()) for p in series]
+        for group,body in views.items():
+            with self.subTest(group=group):
+                self.assertEqual((total(body['totals']),body['totals']['residual_tokens'],body['reconciliation']['residual_tokens']),(1000,850,850))
+                self.assertEqual((sums(body['series']),sums(body['compare']['series'])),([1000],[400]))
+        model,project=views['model'],views['project']
+        self.assertEqual(set(model['series'][0]['values']),{'gpt-test',RESIDUAL})
+        self.assertEqual({k for k,v in model['compare']['series'][0]['values'].items() if total(v)},{RESIDUAL})
+        self.assertEqual({r['model']:total(r) for r in model['rows']},{'gpt-test':150,RESIDUAL:850})
+        # A local record without a project stays '미분류', apart from the residual.
+        self.assertEqual(set(project['series'][0]['values']),{'미분류',RESIDUAL})
+        self.assertEqual({p['project']:total(p) for p in project['projects']},{'미분류':150,RESIDUAL:850})
+        # Neither is a model or a project to filter by.
+        self.assertNotIn(RESIDUAL,model['scope_options']['model']+model['scope_options']['project'])
+        self.assertNotIn('unknown',model['scope_options']['model'])
+        with self.store.connect() as c:month=self.store.project_month(c,self.now)
+        self.assertEqual((month['residual_tokens'],{k:v['tokens'] for k,v in month['projects'].items()}),(850,{'미분류':150}))
+        # Narrowing to '미분류' or 'unknown' leaves it out; its service and provider keep it.
+        scoped=lambda scope:self.usage(scope=scope,group='model',**span)
+        unassigned=scoped('project:미분류')
+        self.assertEqual((total(unassigned['totals']),unassigned['totals'].get('residual_tokens',0)),(150,0))
+        self.assertEqual([r['model'] for r in unassigned['rows']],['gpt-test'])
+        self.assertEqual(total(scoped('model:unknown')['totals']),0)
+        self.assertEqual((total(scoped('route:codex')['totals']),total(scoped('provider:OpenAI')['totals'])),(1000,1000))
+        self.assertEqual(sum(m['tokens'] for m in self.store.project_detail('미분류',now=self.now)['models']),150)
+
     def test_cumulative_results_are_differenced_not_summed(self):
         self.event();self.evidence()
         self.evidence(160,end='2026-10-12T11:00:00Z')

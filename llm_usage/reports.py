@@ -9,6 +9,9 @@ import json
 from .store import KST
 
 KEEP=12
+# Bumped when what a report holds changes, so the stored weeks are rebuilt once (not
+# announced again). 2: the Codex account residual left the top models for its own line.
+REPORT_FORMAT=2
 
 
 def last_week(now):
@@ -143,6 +146,19 @@ def quota_use(c,start,end):
     return out
 
 
+def residual_share(c,start,end):
+    """The Codex account residual (account day total minus this PC's records) of the
+    account days lying wholly inside [start, end), with the account total of those same
+    days. Account days run 09:00–09:00 KST, so a Monday–Sunday week covers six of them;
+    None when no such day was received."""
+    from .reconciliation import account_days,supplements
+    days=[r for r in account_days(c) if start<=r['start'] and r['end']<=end]
+    if not days:return None
+    starts={r['start'] for r in days}
+    residual=sum(e['tokens'] for e in supplements(c)[0] if e['source']=='codex-account' and e['start'] in starts)
+    return dict(tokens=residual,account_tokens=sum(r['tokens'] for r in days),days=len(days))
+
+
 def quota_covered(store,c,start):
     """Whether quota history from `start` on is still kept. Pruning removes what is older
     than its cutoff, and a later, longer retention_days does not bring it back; a rebuilt
@@ -185,7 +201,9 @@ def build(store,now,pricing=None):
     for row in previous['rows']:before[row['route']]=before.get(row['route'],0)+token_total(row)
     for e in routes.values():
         e['change_pct']=(e['tokens']-before[e['route']])/before[e['route']]*100 if before.get(e['route']) else None
-    top=sorted(models['rows'],key=lambda r:-token_total(r))[:5]
+    # The Codex account residual is not a model; it is reported on its own line.
+    from .reconciliation import RESIDUAL
+    top=sorted((r for r in models['rows'] if r['model']!=RESIDUAL),key=lambda r:-token_total(r))[:5]
     totals,prior=_totals(current),_totals(previous)
     # Quota figures need the week's quota history; once it is pruned they are None
     # (not 0) and ensure_report keeps the values an earlier build computed.
@@ -194,6 +212,7 @@ def build(store,now,pricing=None):
         exhausted=exhaustions(c,monday.timestamp(),next_monday.timestamp()) if covered else None
         use=quota_use(c,monday.timestamp(),next_monday.timestamp()) if covered else None
         runs=streaks(store,c,monday,exhausted)
+        residual=residual_share(c,monday.timestamp(),next_monday.timestamp())
     counts={(e['route'],e['bucket']):e['count'] for e in exhausted or []}
     # An exhaustion counted from a reading just before the week can leave a window with no
     # observed interval inside it; it keeps a row (observed 0) so the count is not lost.
@@ -210,7 +229,7 @@ def build(store,now,pricing=None):
                 change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if prior['tokens'] else None,
                 routes=sorted(routes.values(),key=lambda e:-e['tokens']),
                 models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost')) for r in top],
-                exhausted=exhausted,quota_use=use,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
+                exhausted=exhausted,quota_use=use,residual=residual,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
 
 
 def recount_exhaustions(store,now):
@@ -249,7 +268,7 @@ def ensure_report(store,now,pricing=None):
             ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
         additions,_=supplements(c)
         additions=[e for e in additions if e['start']<high and e['end']>low]
-        revision=identity(json.dumps([records,additions,pricing],sort_keys=True))
+        revision=identity(json.dumps([records,additions,pricing,REPORT_FORMAT],sort_keys=True))
         refresh=revision!=store.state(c,'reports:usage-revision')
         old_weeks=[r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%'")] if refresh else []
     # Oldest first, so a week's consecutive-exhaustion count reads the rebuilt week before it.
@@ -286,7 +305,7 @@ def recent(store,limit=KEEP):
         return [store.state(c,r[0]) for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%' ORDER BY key DESC LIMIT ?",(limit,)).fetchall()]
 
 
-def summary(report):
+def summary(report,residual_label=None):
     """Plain-text body for an external notification."""
     from .notify import SERVICE,_label
     tokens=lambda v:f'{v/1e6:,.1f}M'
@@ -296,6 +315,10 @@ def summary(report):
     lines+= [f"{SERVICE.get(r['route'],r['route'])} {tokens(r['tokens'])}"+(f" ({r['change_pct']:+.0f}%)" if r['change_pct'] is not None else '') for r in report['routes'][:5]]
     if report['exhausted']:lines.append('한도 소진 '+', '.join(f"{_label(e)} {e['count']}회"+(f" ({e['streak']}주 연속)" if e.get('streak',0)>1 else '')
                                                          for e in _with_streaks(report)))
+    share=report.get('residual')
+    if share and share['tokens'] and share['account_tokens']:
+        from .reconciliation import RESIDUAL_LABEL
+        lines.append(f"Codex {residual_label or RESIDUAL_LABEL} {tokens(share['tokens'])} 토큰 · 계정 합계의 {share['tokens']/share['account_tokens']*100:.0f}% ({share['days']}일 기준)")
     zero=sorted((q for q in report.get('quota_use') or [] if q['zero_hours']>0),key=lambda q:-q['zero_hours'])
     if zero:lines.append('0%로 머문 시간 '+', '.join(f"{_label(q)} {_hours(q['zero_hours'])}" for q in zero[:3]))
     return '\n'.join(lines)

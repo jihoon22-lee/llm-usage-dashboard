@@ -119,9 +119,13 @@ function reportHtml(r){
  return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${fmt(r.totals.requests)}회 · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
   +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th class="col-req">요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td><span class="svc-full">${esc(routeNames[x.route]||x.route)}</span><span class="svc-short">${esc(shortService[x.route]||x.route)}</span></td><td data-tip="${fmt(x.tokens)}">${compact(x.tokens)}</td><td class="col-req">${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
   +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
+  +(r.residual?.tokens&&r.residual.account_tokens?`<p class="hint">Codex ${esc(residualName)} <span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)</p>`:'')
   +(Array.isArray(r.quota_use)||r.exhausted==null?quotaUseHtml(r):`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:e.account_label}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`);
 }
+// Kept so the reports can be drawn again when the residual's name arrives or changes.
+let lastReports=null;
 function renderReports(list){
+ lastReports=list;
  $('reports').innerHTML=list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
   :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>';
 }
@@ -182,11 +186,12 @@ $('projects').addEventListener('click',async event=>{
 });
 function renderProjects(data){
  if(!('projects' in data)){if(!$('projects').textContent.trim())$('projects').innerHTML='<tr><td colspan="7" class="empty">불러오는 중…</td></tr>';return;}
- const list=data.projects||[];
+ const list=(data.projects||[]).filter(p=>p.project!==RESIDUAL),residual=(data.projects||[]).filter(p=>p.project===RESIDUAL);
  const budgets=data.project_budgets||{},month=data.project_month;
  const budgetLine=name=>{const b=budgets[name];if(!b||!month)return '';const st=budgetState(month.projects[name],b);
   return `<small class="budget-line">이번 달 예산 ${Math.round(st.ratio*100)}% · ${esc(st.text)}</small><span class="budget-bar ${st.level}"><i data-w="${Math.min(100,st.ratio*100).toFixed(1)}"></i></span>`;};
  $('projects').innerHTML=list.map(p=>`<tr data-scope="project:${esc(p.project)}" tabindex="0" aria-describedby="drill-hint"><td><strong>${esc(p.project)}</strong>${budgetLine(p.project)}</td><td class="col-detail">${p.sessions?fmt(p.sessions):'—'}</td><td>${fmt(p.requests)}</td><td>${fmt(total(p))}</td><td>${p.cost!=null?usd(p.cost):'—'}</td><td class="col-detail">${esc(when(p.last_ts))}</td><td><button type="button" class="mini-btn proj-open" data-project="${esc(p.project)}" aria-expanded="${openProject===p.project}">상세</button></td></tr>`).join('')
+  +residual.map(p=>`<tr class="residual-row"><td><strong>${esc(residualName)}</strong><small>Codex 계정 합계 − 이 PC 기록 · 프로젝트 구분 없음</small></td><td class="col-detail">—</td><td>—</td><td>${fmt(total(p))}</td><td>—</td><td class="col-detail">—</td><td></td></tr>`).join('')
   ||'<tr><td colspan="7" class="empty">선택 기간에 수집된 사용 기록이 없습니다.</td></tr>';
  const opened=openProject&&$('projects').querySelector(`.proj-open[data-project="${CSS.escape(openProject)}"]`);
  if(opened&&projectDetails.has(openProject))opened.closest('tr').insertAdjacentHTML('afterend',projectDetails.get(openProject));
