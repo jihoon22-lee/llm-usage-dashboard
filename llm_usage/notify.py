@@ -132,7 +132,7 @@ def other_accounts(rows,row):
     if family(row['route'])!=FAMILY:return []
     return [f"{_label(r)} {'사용 불가' if r.get('blocked_by') else format(r['remaining'],'.1f')+'%'}" for r in rows
             if r['route'] not in (row['route'],UNKNOWN) and family(r['route'])==FAMILY and r['bucket']==row['bucket']
-            and r.get('status')=='fresh' and r.get('remaining') is not None]
+            and r.get('status')=='fresh' and r.get('remaining') is not None and not (r.get('scope') or {}).get('identity_unverified')]
 
 
 def quota_messages(rows,previous,low_percent):

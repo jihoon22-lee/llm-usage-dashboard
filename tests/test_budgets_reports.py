@@ -126,6 +126,29 @@ class ReportTests(unittest.TestCase):
         # The window reset at +3000 once, with 0% left; the stale reading after it is not another reset.
         self.assertEqual((use['3p-5h']['resets_observed'],use['3p-5h']['before_reset']),(1,dict(avg=0,min=0,max=0)))
 
+    def test_week_edges_join_readings_just_outside(self):
+        start,end=stamp('2026-09-27T15:00:00Z'),stamp('2026-10-04T15:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=end+3600),self.store.connect() as c:
+            # A reset in the last minutes of the week, confirmed by a poll just after it.
+            self.store.limit(c,'claude-code','five_hour',30,end-100,end-400,'claude-oauth')
+            self.store.limit(c,'claude-code','five_hour',100,end-100+18000,end+150,'claude-oauth')
+            # 0% across the start of the week counts only from the start.
+            self.store.limit(c,'claude-code','seven_day',0,end+86400,start-200,'claude-oauth')
+            self.store.limit(c,'claude-code','seven_day',0,end+86400,start+100,'claude-oauth')
+            # An exhaustion counted from a reading long before the week, with no interval inside it.
+            self.store.limit(c,'codex','codex · 300분',50,end+86400,start-3600,'codex')
+            self.store.limit(c,'codex','codex · 300분',0,end+86400,start+100,'codex')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use={(q['route'],q['bucket']):q for q in report['quota_use']}
+        five=use[('claude-code','five_hour')]
+        self.assertEqual((five['resets_observed'],five['before_reset'],five['observed_hours']),(1,dict(avg=30,min=30,max=30),0.11))
+        self.assertEqual((use[('claude-code','seven_day')]['zero_hours'],use[('claude-code','seven_day')]['observed_hours']),(0.03,0.03))
+        kept=use[('codex','codex · 300분')]
+        self.assertEqual((kept['exhausted'],kept['observed_hours'],kept['before_reset']),(1,0,None))
+        # The next week does not count the same reset again.
+        with self.store.connect() as c:later=reports.quota_use(c,end,end+7*86400)
+        self.assertFalse(any(q['resets_observed'] for q in later))
+
     def test_consecutive_exhaustion_weeks(self):
         with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
             for i,remaining in enumerate((5,0)):

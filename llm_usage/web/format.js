@@ -107,9 +107,10 @@ const quotaLabel=r=>{
  return bn.startsWith(sv)?bn:`${serviceShort(r.route,r.account_label)} ${bn}`;
 };
 // When one Claude account's window is exhausted: the other accounts' current value in the
-// same window ('Claude(Max 5x) 5시간 92.0%'). Current values only; no recommendation.
+// same window ('Claude(Max 5x) 5시간 92.0%'). Current values of a verified account only
+// (a status-line value not tied to the account is left out); no recommendation.
 const otherAccounts=(rows,row)=>familyOf(row.route)!=='claude-code'?[]:(rows||[])
- .filter(r=>r.route!==row.route&&familyOf(r.route)==='claude-code'&&r.route!=='claude-code:unknown'&&r.bucket===row.bucket&&r.status==='fresh'&&r.remaining!=null)
+ .filter(r=>r.route!==row.route&&familyOf(r.route)==='claude-code'&&r.route!=='claude-code:unknown'&&r.bucket===row.bucket&&r.status==='fresh'&&r.remaining!=null&&!r.scope?.identity_unverified)
  .map(r=>`${quotaLabel(r)} ${quotaValue(r)}`);
 const SCOPE_LABELS={route:'서비스',provider:'제작사',model:'모델',project:'프로젝트',account:'Claude 계정'};
 const scopeText=scope=>{const i=scope.indexOf(':');if(i<0)return scope;

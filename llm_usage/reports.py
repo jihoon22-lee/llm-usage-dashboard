@@ -83,24 +83,27 @@ def quota_use(c,start,end):
     reset time and the next one at most 10 minutes later, after it. A window that reset
     unobserved is not guessed; a reset time that moves while a window is idle, or a grant
     that resets a window early, is not a reset. Windows observed for under a minute are
-    left out, as are observations of a previous account (before its current epoch)."""
+    left out, as are observations of a previous account (before its current epoch).
+    Readings up to 10 minutes outside the week join it, so a reset or an interval at the
+    week's edge is seen; time is counted only inside the week."""
     from .insights import segment
     since={r[0]:r[1] for r in c.execute('SELECT route,since FROM resource_accounts')}
     out=[]
     for route,bucket,source in _streams(c,start,end):
         rows=[dict(r) for r in c.execute('SELECT checked,remaining,resets FROM limit_history WHERE route=? AND bucket=? AND source=? '
-                                         'AND checked>=? AND checked<? ORDER BY checked',
-                                         (route,bucket,source,max(start,since.get(route) or 0),end))]
-        interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<?',
-                                               (source,start,end))]
+                                         'AND checked>=? AND checked<=? ORDER BY checked',
+                                         (route,bucket,source,max(start-600,since.get(route) or 0),end+600))]
+        interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<=?',
+                                               (source,start-600,end+600))]
         points=segment(rows,interruptions)
         observed=zero=0.0;before=[];epoch_reset=None
         for previous,point in zip(points,points[1:]):
             if previous['break_before']:epoch_reset=previous['resets']
             span=point['checked']-previous['checked']
+            inside=max(0,min(point['checked'],end)-max(previous['checked'],start))
             if span<=600 and previous['remaining'] is not None and point['remaining'] is not None:
-                observed+=span
-                if previous['remaining']<=0 and point['remaining']<=0:zero+=span
+                observed+=inside
+                if previous['remaining']<=0 and point['remaining']<=0:zero+=inside
             # The window's reset time passed between two consecutive readings: whatever the
             # next reading says (a new window, no window yet, the old time), the reset was seen.
             # A new window read up to a minute early (clock skew) counts as well.
@@ -167,6 +170,13 @@ def build(store,now,pricing=None):
         use=quota_use(c,monday.timestamp(),next_monday.timestamp()) if covered else None
         runs=streaks(store,c,monday,exhausted)
     counts={(e['route'],e['bucket']):e['count'] for e in exhausted or []}
+    # An exhaustion counted from a reading just before the week can leave a window with no
+    # observed interval inside it; it keeps a row (observed 0) so the count is not lost.
+    have={(row['route'],row['bucket']) for row in use or []}
+    for e in exhausted or [] if use is not None else []:
+        if (e['route'],e['bucket']) not in have:
+            use.append(dict(route=e['route'],bucket=e['bucket'],observed_hours=0,zero_hours=0,resets_observed=0,before_reset=None,
+                            display_name=e.get('display_name'),**({'account_label':e['account_label']} if e.get('account_label') else {})))
     for row in use or []:
         row['exhausted']=counts.get((row['route'],row['bucket']),0);row['streak']=runs.get((row['route'],row['bucket']),0)
     busiest=max(current['series'],key=lambda p:sum(token_total(v) for v in p['values'].values()),default=None)

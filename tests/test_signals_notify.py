@@ -159,7 +159,10 @@ class NotifyTests(unittest.TestCase):
                 dict(route='claude-code:abababababab',bucket='five_hour',remaining=92,resets=NOW+900,status='fresh',account_label='Max 5x'),
                 dict(route='claude-code:abababababab',bucket='seven_day',remaining=97,resets=NOW+86400,status='fresh',account_label='Max 5x'),
                 dict(route='claude-code:unknown',bucket='five_hour',remaining=50,resets=NOW+900,status='fresh'),
-                dict(route='claude-code:cdcdcdcdcdcd',bucket='five_hour',remaining=80,resets=NOW+900,status='stale',account_label='Team')])
+                dict(route='claude-code:cdcdcdcdcdcd',bucket='five_hour',remaining=80,resets=NOW+900,status='stale',account_label='Team'),
+                # A status-line value not tied to its account is not another account's value.
+                dict(route='claude-code:efefefefefef',bucket='five_hour',remaining=70,resets=NOW+900,status='fresh',account_label='Team 2',
+                     scope=dict(identity_unverified=True))])
         self.run_eval(limits(40))
         sent=self.run_eval(limits(0))
         exhausted=[m for m in sent if m[0]=='exhausted']

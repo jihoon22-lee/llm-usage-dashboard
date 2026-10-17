@@ -314,10 +314,11 @@ test('several Claude accounts stay one service with account labels',()=>{
   {route:'claude-code:abababababab',bucket:'seven_day',status:'fresh',remaining:97,account_label:'Max 5x'},
   {route:'claude-code:unknown',bucket:'five_hour',status:'fresh',remaining:50},
   {route:'claude-code:cdcdcdcdcdcd',bucket:'five_hour',status:'stale',remaining:80},
+  {route:'claude-code:efefefefefef',bucket:'five_hour',status:'fresh',remaining:70,scope:{identity_unverified:true}},
   {route:'codex',bucket:'five_hour',status:'fresh',remaining:70}];
  assert.deepEqual([...f.otherAccounts(rows,rows[0])],['Claude(Max 5x) 5시간 92.0%']);
  assert.deepEqual([...f.otherAccounts([{...rows[1],remaining:40,blocked_by:{bucket:'seven_day'}},rows[0]],rows[0])],['Claude(Max 5x) 5시간 사용 불가']);
- assert.deepEqual([...f.otherAccounts(rows,rows[5])],[]);
+ assert.deepEqual([...f.otherAccounts(rows,rows[6])],[]);
  f.setClaudeAccounts(undefined);
  assert.equal(f.multiClaude(),false);
 });
