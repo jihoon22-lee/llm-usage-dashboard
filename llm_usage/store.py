@@ -1098,22 +1098,32 @@ class Store:
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
         subs=[]
         claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
+        # Several Claude accounts: the Claude Code total split by account, 계정 미확인
+        # included, so the parts add up to the service (reconciliation adds supplements).
+        claude_split=None
+        if len(claude_routes)>1 and period!='1h':
+            split={}
+            for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
+                               ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
+                               (a.timestamp(),b.timestamp(),*scope_args)):
+                e=split.setdefault(r['account'],dict(account=r['account'],tokens=0,requests=0,cost=None))
+                e['tokens']+=token_total(dict(r));e['requests']+=r['requests']
+                rate=rate_for(r['model'],pricing,r['day']) if pricing else None
+                if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
+            claude_split=sorted(split.values(),key=lambda e:(-e['tokens'],e['account']))
         if (subscriptions or len(claude_routes)>1) and period!='1h':
             by_route={};tokens_by_route={}
             for row in rows:
                 tokens_by_route[row['route']]=tokens_by_route.get(row['route'],0)+token_total(row)
                 if row.get('est_cost') is not None:
                     by_route[row['route']]=by_route.get(row['route'],0)+row['est_cost']
-            if len(claude_routes)>1:
+            if claude_split is not None:
                 # Each Claude subscription is valued with its own account's requests.
                 by_route={k:v for k,v in by_route.items() if k!='claude-code'}
                 tokens_by_route.pop('claude-code',None)
-                for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+
-                                   ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
-                                   (a.timestamp(),b.timestamp(),*scope_args)):
-                    tokens_by_route[r['account']]=tokens_by_route.get(r['account'],0)+token_total(dict(r))
-                    rate=rate_for(r['model'],pricing,r['day']) if pricing else None
-                    if rate:by_route[r['account']]=by_route.get(r['account'],0)+estimate(dict(r),rate)
+                for e in claude_split:
+                    tokens_by_route[e['account']]=e['tokens']
+                    if e['cost'] is not None:by_route[e['account']]=e['cost']
             # Scale by the elapsed part of the period: a running week is not seven days yet.
             days=max(1,(min(b,now)-a).total_seconds()/86400)
             prices=dict(subscriptions or {})
@@ -1144,7 +1154,7 @@ class Store:
         return dict(period=period,start=a.isoformat(),end_exclusive=b.isoformat(),timezone='Asia/Seoul',totals=total,lifetime=lifetime,
                     granularity=granularity,heatmap=heatmap,cost=cost,
                     rows=rows,series=series,labels=labels,first_record=first,insights=insights,
-                    calendar=calendar,subscriptions=subs,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,prior=prior,
+                    calendar=calendar,subscriptions=subs,claude_split=claude_split,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,prior=prior,
                     scope=scope,scope_options=scope_options,
                     coverage='로컬·클라우드 요청 기록과 서버 누계를 중복 없이 대조합니다. KST 기준으로 배분 가능한 토큰은 차트에 포함하고, 일자를 확정할 수 없는 계정·세션 누계는 미배분으로 표시합니다. 계정 차이를 dot 사용량으로 단정하지 않습니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
                     token_note='출력(Output)은 추론(reasoning)을 포함합니다. 캐시 생성(Cache creation)은 별도 입력으로 총 토큰에 한 번만 포함합니다. 추론은 출력의 부분집합이거나 원본 미제공(0)입니다.')

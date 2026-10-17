@@ -250,6 +250,12 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             continue
         if sub is not None and sub.get('period_tokens') is not None:sub['period_tokens']+=e['tokens']
         accepted.append(e);add(data['totals'],e)
+        split=data.get('claude_split')
+        if split is not None and e['route']=='claude-code':
+            account=e.get('account') or 'claude-code'
+            part=next((x for x in split if x['account']==account),None)
+            if part is None:part=dict(account=account,tokens=0,requests=0,cost=None);split.append(part)
+            part['tokens']+=e['tokens']
         label=series_label(e,group)
         located=False
         for p in data['series']:
@@ -301,6 +307,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         # A source counted on either side must already have covered the earlier window;
         # otherwise its share is missing there, not zero.
         if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
+    if data.get('claude_split'):data['claude_split'].sort(key=lambda x:(-x['tokens'],x['account']))
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)

@@ -452,6 +452,49 @@ class AccountTests(unittest.TestCase):
         # The route view still shows one Claude Code service.
         by_route = self.store.usage(period='7d', group='route', pricing=pricing)
         self.assertEqual(sorted(by_route['labels']), ['claude-code', 'codex'])
+        # Its total split by account, 계정 미확인 included, adds up to the service.
+        split = {e['account']: e for e in by_route['claude_split']}
+        self.assertEqual({k: (v['tokens'], v['requests'], v['cost']) for k, v in split.items()},
+                         {FAMILY: (1_000_000, 1, 1), R_SECOND: (2_000_000, 2, 2), UNKNOWN: (1_000_000, 1, 1)})
+        claude = sum(r['uncached_input'] + r['cached_input'] + r['output'] + r['cache_creation'] for r in by_route['rows'] if r['route'] == 'claude-code')
+        self.assertEqual(sum(e['tokens'] for e in by_route['claude_split']), claude)
+        # A cloud supplement read with the second login joins that account's part.
+        from llm_usage.reconciliation import snapshot, total
+        with self.store.connect() as c:
+            self.store.save_state(c, 'claude_cloud_account:k-second', R_SECOND)
+            snapshot(self.store, c, source='claude-cloud', scope_id='claude:cloud-only', route='claude-code', provider='Anthropic',
+                     model='claude-test', session='cloud-only', start=NOW - 7200, end=NOW - 7100, tokens=500,
+                     parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=500), account_key='k-second')
+        supplemented = self.store.usage(period='7d', group='route', pricing=pricing)
+        split = {e['account']: e['tokens'] for e in supplemented['claude_split']}
+        self.assertEqual(split[R_SECOND], 2_000_500)
+        claude = sum(total(r) for r in supplemented['rows'] if r['route'] == 'claude-code')
+        self.assertEqual(sum(split.values()), claude)
+        # One account has no split (nothing to tell apart).
+        self.assertIsNone(Store(Path(self.tmp.name) / 'single.db').usage(period='7d')['claude_split'])
+
+    def test_weekly_report_splits_claude_code_by_account(self):
+        from llm_usage import reports
+        accounts(self.store, self.cfg, NOW)
+        _, this_monday = reports.last_week(NOW)
+        with self.store.connect() as c:
+            # NOW minus a week always lies in the last finished week.
+            for i, account in enumerate((FAMILY, R_SECOND, R_SECOND, UNKNOWN)):
+                self.store.event(c, f'w{i}', NOW - 7 * 86400, 'Anthropic', 'claude-code', 'claude-test',
+                                 dict(uncached_input=1_000_000), account=account)
+            self.store.event(c, 'this-week', this_monday.timestamp(), 'Anthropic', 'claude-code', 'claude-test', dict(output=10), account=R_SECOND)
+        report = reports.build(self.store, NOW)
+        self.assertEqual([(a['account'], a['tokens']) for a in report['accounts']],
+                         [(R_SECOND, 2_000_000), (FAMILY, 1_000_000), (UNKNOWN, 1_000_000)])
+        # 계정 미확인 is one of the parts, so they add up to the service.
+        service = next(r['tokens'] for r in report['routes'] if r['route'] == 'claude-code')
+        self.assertEqual(sum(a['tokens'] for a in report['accounts']), service)
+        self.assertEqual(report['accounts'][2]['label'], '계정 미확인')
+        # The notification names accounts as set in the dashboard, else the stored plan name.
+        text = reports.summary(report, names={R_SECOND: '두 번째'})
+        self.assertIn(f"Claude 계정별 두 번째 2.0M · {report['accounts'][1]['label']} 1.0M · 계정 미확인 1.0M", text)
+        week = reports.this_week(self.store, NOW)
+        self.assertEqual([(a['account'], a['tokens']) for a in week['accounts']], [(R_SECOND, 10)])
 
     def test_hook_installer_merges_with_existing_hooks_once(self):
         settings_file = self.h.default / 'settings.json'

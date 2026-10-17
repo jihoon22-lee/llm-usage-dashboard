@@ -99,6 +99,46 @@ class ReportTests(unittest.TestCase):
         # Without account days the line is left out rather than shown as 0%.
         self.assertIsNone(reports.build(self.store,stamp('2026-09-28T01:00:00Z'),PRICING)['residual'])
 
+    def test_report_lists_top_projects_without_the_account_residual(self):
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            self.store.event(c,'pa',stamp('2026-09-30T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=4_000_000),project='alpha')
+            self.store.event(c,'pb',stamp('2026-09-30T02:00:00Z'),'OpenAI','codex','gpt-test',dict(output=1_000_000),project='beta')
+            # A residual far above every project still stays out of the project ranking.
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-09-29',tokens=90_000_000)],NOW)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        self.assertEqual([p['project'] for p in report['projects']],['alpha','beta','미분류'])
+        self.assertEqual(report['projects'][0],dict(project='alpha',tokens=4_000_000,cost=40.0))
+        # Records without a project stay as 미분류 (w1, w2 and the Saturday record).
+        self.assertEqual(report['projects'][2]['tokens'],1500+500+300+9_999)
+        self.assertNotIn(RESIDUAL,[p['project'] for p in report['projects']])
+        # One Claude account: no account split.
+        self.assertIsNone(report['accounts'])
+        self.assertIn('상위 프로젝트 alpha 4.0M · beta 1.0M · 미분류 0.0M',reports.summary(report))
+        self.assertNotIn('Claude 계정별',reports.summary(report))
+
+    def test_this_week_so_far_against_last_week_at_the_same_time(self):
+        with self.store.connect() as c:
+            # Last week up to Saturday 18:00 KST is set against this week; the rest is not.
+            self.store.event(c,'l1',stamp('2026-09-26T08:30:00Z'),'OpenAI','codex','gpt-test',dict(output=200))
+            self.store.event(c,'l2',stamp('2026-09-26T10:00:00Z'),'OpenAI','codex','gpt-test',dict(output=7000))
+        week=reports.this_week(self.store,NOW,PRICING)
+        self.assertEqual((week['start'],week['end']),('2026-09-28','2026-10-04'))
+        self.assertEqual(week['tokens'],1500+500+300+9_999)
+        self.assertEqual(week['routes'],[dict(route='codex',tokens=1500+500+9_999),dict(route='claude-code',tokens=300)])
+        prior=week['prior']
+        self.assertEqual((prior['start'],prior['end_exclusive']),('2026-09-21T00:00:00+09:00','2026-09-26T18:00:00+09:00'))
+        self.assertTrue(prior['running'])
+        # p1 (09-22) and l1 (17:30); l2 at 19:00 comes after the same point.
+        self.assertEqual(prior['uncached_input']+prior['output'],1000+200)
+        self.assertEqual(prior['current_tokens'],week['tokens'])
+        # Records begin inside last week, so the comparison says it lacks the start of it.
+        self.assertFalse(prior['complete'])
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-14T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+        self.assertTrue(reports.this_week(self.store,NOW,PRICING)['prior']['complete'])
+        self.assertIsNone(week['accounts'])
+
     def test_quota_use_counts_observed_and_zero_time(self):
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
         codex=next(q for q in report['quota_use'] if q['route']=='codex')
@@ -289,7 +329,10 @@ class BudgetWebTests(unittest.TestCase):
         usage=self.get('/api/usage?period=7d').get_json()
         self.assertEqual(usage['project_budgets']['a']['tokens'],2_000_000)
         self.assertIn('projects',usage['project_month'])
-        self.assertEqual(self.get('/api/reports').get_json(),{'reports':[]})
+        reports=self.get('/api/reports').get_json()
+        self.assertEqual(reports['reports'],[])
+        # This week so far, with nothing recorded: no use, and nothing to compare left out.
+        self.assertEqual((reports['this_week']['tokens'],reports['this_week']['routes']),(0,[]))
 
 
 if __name__=='__main__':unittest.main()

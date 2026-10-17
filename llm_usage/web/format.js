@@ -63,9 +63,9 @@ const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
 // ('3.2배', past a hundred '100배 이상'). A window older than the first record says so; a
 // window without use has no ratio; an unknown value has no line.
 const PRIOR_NAMES={'1h':'직전 1시간',today:'어제','7d':'직전 7일','30d':'직전 30일'};
-function priorChange(prior,period,current,previous){
+function priorChange(prior,period,current,previous,label){
  if(!prior)return '';
- const name=(prior.mode==='week'?'7일 전':prior.mode==='month'?'28일 전':PRIOR_NAMES[period]||'직전 기간')+(prior.running?' 같은 시점':'');
+ const name=(label||(prior.mode==='week'?'7일 전':prior.mode==='month'?'28일 전':PRIOR_NAMES[period]||'직전 기간'))+(prior.running?' 같은 시점':'');
  if(!prior.complete)return `${name} 기록 부족`;
  if(previous==null||current==null)return '';
  if(!previous)return `${name} 사용 없음`;

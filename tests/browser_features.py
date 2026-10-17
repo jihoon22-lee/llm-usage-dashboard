@@ -33,12 +33,22 @@ REPORT = dict(week='2026-09-21', start='2026-09-21', end='2026-09-27', built=now
               routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
               models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
               exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24',
+              accounts=[dict(account='claude-code', label='Pro', tokens=4e8, cost=None),
+                        dict(account='claude-code:unknown', label='계정 미확인', tokens=1e8, cost=None)],
+              projects=[dict(project='fixture-project', tokens=2e9, cost=500.0), dict(project='미분류', tokens=1e9, cost=None)],
               quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=150.5, zero_hours=0,
                               resets_observed=1, before_reset=dict(avg=41.0, min=41.0, max=41.0), exhausted=0, streak=0),
                          dict(route='claude-code', bucket='five_hour', observed_hours=120, zero_hours=3.5, resets_observed=18,
                               before_reset=dict(avg=22.4, min=0.0, max=80.0), exhausted=2, streak=3),
                          dict(route='claude-code', bucket='seven_day', observed_hours=0.5, zero_hours=0, resets_observed=0,
                               before_reset=None, exhausted=0, streak=0)])
+
+# This week so far: last week up to the same point (Wednesday 12:00 KST) is the comparison.
+THIS_WEEK = dict(start='2026-09-28', end='2026-10-04', tokens=1.5e9, requests=2000, cost=400.0,
+                 prior=dict(mode='previous', label='직전 기간', start='2026-09-21T00:00:00+09:00', end_exclusive='2026-09-23T12:00:00+09:00',
+                            current_end='2026-09-30T12:00:00+09:00', running=True, complete=True, current_tokens=1.5e9, requests=1800,
+                            cost=300.0, uncached_input=1.2e9, cached_input=0, output=0, cache_creation=0),
+                 accounts=None, routes=[dict(route='codex', tokens=1e9), dict(route='claude-code', tokens=5e8)])
 
 
 def preview(page):
@@ -72,7 +82,7 @@ def preview(page):
             data['sessions_total'] = 1
             route.fulfill(json=data)
         elif path == '/api/reports':
-            route.fulfill(json=dict(reports=[REPORT]))
+            route.fulfill(json=dict(reports=[REPORT], this_week=THIS_WEEK))
         elif path == '/api/session':
             route.fulfill(json=SESSION)
         elif path == '/api/config':
@@ -159,6 +169,16 @@ with sync_playwright() as p:
     reports = page.locator('#reports')
     expect(reports).to_contain_text('2026-09-21 ~ 2026-09-27')
     expect(reports).to_contain_text('전주 대비 +13%')
+    # This week so far leads, against last week at the same point; then the finished week
+    # with Claude Code by account (stored names without account settings) and top projects.
+    week = reports.locator('.this-week')
+    expect(week).to_contain_text('이번 주 2026-09-28 ~ 2026-10-04 · 진행 중 · 09. 30. 12:00 기준')
+    expect(week).to_contain_text('지난주 같은 시점 대비 +25.0%')
+    expect(week).to_contain_text('서비스별: Codex 1B · Claude 500M')
+    expect(week.locator('.hint')).to_have_count(1)
+    assert reports.locator(':scope > *').first.get_attribute('class') == 'this-week'
+    expect(reports).to_contain_text('Claude 계정별: Pro 400M · 계정 미확인 100M')
+    expect(reports).to_contain_text('상위 프로젝트: fixture-project 2B · 미분류 1B')
     # Quota use: observed facts per window, the tightest first; nothing unobserved reads as 0.
     use = reports.locator('.quota-use tbody tr')
     expect(use).to_have_count(3)
@@ -177,6 +197,13 @@ with sync_playwright() as p:
     page.evaluate("renderReports([{...%s,quota_use:null,exhausted:null}])" % json.dumps(REPORT))
     expect(reports).to_contain_text('보존 기간이 지나')
     page.evaluate("renderReports(%s)" % json.dumps([REPORT]))
+    expect(week).to_contain_text('지난주 같은 시점 대비 +25.0%')
+    # A week begun inside the stored records cannot be compared; nothing yet this week says so.
+    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps({**THIS_WEEK, 'tokens': 0, 'requests': 0, 'routes': [],
+                                                                                 'prior': {**THIS_WEEK['prior'], 'complete': False}})))
+    expect(week).to_contain_text('지난주 같은 시점 기록 부족')
+    expect(week).to_contain_text('이번 주에는 아직 사용 기록이 없습니다.')
+    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(THIS_WEEK)))
     # Settings: secrets are write-only; save, clear and test go through the API only.
     page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')
