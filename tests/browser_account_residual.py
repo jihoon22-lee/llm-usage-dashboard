@@ -101,6 +101,8 @@ with sync_playwright() as p:
     line = page.locator('#ranking .rank-residual')
     expect(line).to_contain_text('로컬 미기록')
     expect(line).to_contain_text('순위 제외')
+    expect(line.locator('.rank-hatch i')).to_have_count(1)
+    assert line.locator('.rank-hatch i').evaluate('e=>parseFloat(e.style.width)>0')
     expect(page.locator(f'#ranking [data-scope="model:{RESIDUAL}"]')).to_have_count(0)
     # Token composition: its own muted item, left out of the ring by default.
     toggle = page.locator('#donut-noresidual')
@@ -142,7 +144,7 @@ with sync_playwright() as p:
     # Requests and cost: the residual has neither, so no value and no bar.
     page.select_option('#metric', 'requests')
     expect(line).to_contain_text('요청 수 없음')
-    expect(line.locator('svg')).to_have_count(0)
+    expect(line.locator('.rank-bar')).to_have_count(0)
     page.select_option('#metric', 'tokens')
     # The weekly report, drawn before the name changes, is drawn again with the new name.
     page.locator('#tab-reports').click()
