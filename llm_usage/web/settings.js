@@ -2,7 +2,8 @@
 // Settings: subscription prices, model rates, thresholds, external alerts and budgets.
 const RATE_KEYS=['input','cached','output','cache_write'];
 const RATE_LABELS={input:'입력',cached:'캐시 읽기',output:'출력',cache_write:'캐시 쓰기'};
-const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90']];
+const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90'],
+ ['unused_percent','초기화 전 남은 한도 알림 · 잔여','% 이상 · 10~100'],['unused_hours','초기화 전 남은 한도 알림 · 초기화까지','시간 이내 · 1~72']];
 function cfgMsg(id,text){const el=$(id);el.textContent=text;el.setAttribute('role','status');}
 let settingsEpoch=0,settingsOnline=false,configVersion=0;
 const priceOperations=new Map(),priceMessages=new Map();
@@ -227,7 +228,9 @@ $('cfg-pricing').addEventListener('click',async e=>{
  if(ok)refresh();
 });
 // External alerts: secrets are write-only here; the page only learns which channels are set.
-const NOTIFY_EVENTS={low:'잔여 적음',exhausted:'소진',recovered:'초기화 후 회복',spike:'사용량 급증',collector:'수집기 재시작',source:'수집 실패 지속',budget:'프로젝트 예산',report:'주간 리포트'};
+const NOTIFY_EVENTS={low:'잔여 적음',exhausted:'소진',recovered:'초기화 후 회복',spike:'사용량 급증',collector:'수집기 재시작',source:'수집 실패 지속',budget:'프로젝트 예산',report:'주간 리포트',unused:'초기화 전 남은 한도'};
+// Off until turned on, as on the server.
+const NOTIFY_OFF_BY_DEFAULT=new Set(['unused']);
 // Budgets: this month's busiest projects plus every budgeted one; tokens are entered in millions.
 const extraBudgetProjects=new Set();
 function renderBudgets(budgets){
@@ -266,7 +269,7 @@ function renderNotifySettings(n){
  $('webhook-state').textContent=ch.webhook?`설정됨 · ${ch.webhook}`:'Discord·Slack 호환';
  $('telegram-state').textContent=ch.telegram?'설정됨':'봇 토큰 · 채팅 ID';
  for(const id of ['ntfy-url','webhook-url','tg-token','tg-chat'])$(id).value='';
- $('notify-events').innerHTML=Object.entries(NOTIFY_EVENTS).map(([k,label])=>`<label><input type="checkbox" data-notify-event="${k}"${(n.events||{})[k]!==false?' checked':''}> ${label}</label>`).join('');
+ $('notify-events').innerHTML=Object.entries(NOTIFY_EVENTS).map(([k,label])=>`<label><input type="checkbox" data-notify-event="${k}"${((n.events||{})[k]??!NOTIFY_OFF_BY_DEFAULT.has(k))?' checked':''}> ${label}</label>`).join('');
  $('quiet-start').value=n.quiet?n.quiet[0]:'';$('quiet-end').value=n.quiet?n.quiet[1]:'';
  $('notify-test').disabled=!(ch.ntfy||ch.webhook||ch.telegram);
 }

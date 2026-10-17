@@ -123,7 +123,9 @@ def project_label(cwd):
 
 
 class Store:
-    DEFAULT_THRESHOLDS={'stale_seconds':600,'retention_days':30,'low_percent':15,'quota_hide_days':7}
+    # unused_*: the pre-reset notice (off unless its notification is turned on) for a window
+    # longer than a day with at least unused_percent left within unused_hours of its reset.
+    DEFAULT_THRESHOLDS={'stale_seconds':600,'retention_days':30,'low_percent':15,'quota_hide_days':7,'unused_percent':50,'unused_hours':48}
 
     def __init__(self, path, thresholds=None, rollup=True):
         self.path = str(path)
@@ -553,7 +555,8 @@ class Store:
         return dict(limits=rows, sources=list(sources.values()), now=now,history_days=1,claude_accounts=claude,
                     resources=resources,quota_policies=policies,stale_seconds=self.thresholds['stale_seconds'],
                     retention_days=self.thresholds['retention_days'],low_percent=self.thresholds['low_percent'],
-                    quota_hide_days=self.thresholds['quota_hide_days'])
+                    quota_hide_days=self.thresholds['quota_hide_days'],unused_percent=self.thresholds['unused_percent'],
+                    unused_hours=self.thresholds['unused_hours'])
 
     def capacity_history(self,c,row,now,keep=8,min_used=5):
         """Tokens one percentage point bought in recent finished windows of this bucket.

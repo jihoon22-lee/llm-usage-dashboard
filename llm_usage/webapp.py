@@ -337,7 +337,8 @@ def create_app(config=None):
     def set_thresholds():
         body=request.get_json(silent=True) or {}
         patch={}
-        for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90)}.items():
+        for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90),
+                            'unused_percent':(10,100),'unused_hours':(1,72)}.items():
             if key not in body:continue
             if not number(body[key],lo,hi):abort(400,description=f'{key}는 {lo}~{hi} 범위여야 합니다.')
             patch[key]=body[key]

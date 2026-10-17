@@ -18,11 +18,19 @@ from .store import KST
 
 CHANNEL_KEYS=('ntfy_url','webhook_url','telegram_token','telegram_chat')
 EVENTS={'low':'잔여 적음','exhausted':'소진','recovered':'초기화 후 회복','spike':'사용량 급증',
-        'collector':'수집기 재시작','source':'수집 실패 지속','budget':'프로젝트 예산','report':'주간 리포트'}
+        'collector':'수집기 재시작','source':'수집 실패 지속','budget':'프로젝트 예산','report':'주간 리포트',
+        'unused':'초기화 전 남은 한도'}
+# Events that stay off until turned on in the settings.
+OFF_BY_DEFAULT={'unused'}
 SOURCE_ERROR_MINUTES=30
 COLLECTOR_GAP_MINUTES=10
 STATE_KEY='notify:state'
 SOURCE='외부 알림'
+
+
+def wanted(notify,kind):
+    """Whether the settings send this kind of message."""
+    return ((notify or {}).get('events') or {}).get(kind,kind not in OFF_BY_DEFAULT)
 
 
 def notification_url(value):
@@ -65,7 +73,7 @@ def masked(notify):
     return dict(channels={'ntfy':hint(notify['ntfy_url']) if notify.get('ntfy_url') else None,
                           'webhook':hint(notify['webhook_url']) if notify.get('webhook_url') else None,
                           'telegram':'설정됨' if notify.get('telegram_token') and notify.get('telegram_chat') else None},
-                events={k:(notify.get('events') or {}).get(k,True) for k in EVENTS},
+                events={k:wanted(notify,k) for k in EVENTS},
                 quiet=notify.get('quiet'))
 
 
@@ -112,6 +120,10 @@ WINDOWS={'five_hour':'5시간','seven_day':'주간','seven_day_opus':'Opus 주�
 AGY_BUCKET=re.compile(r'(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?')
 
 
+def _window(row):
+    return WINDOWS.get(row['bucket']) or row.get('display_name') or row['bucket']
+
+
 def _label(row):
     """The same names the dashboard shows (bucketName/quotaLabel in web/format.js)."""
     from .claude_accounts import family
@@ -121,8 +133,23 @@ def _label(row):
     agy=AGY_BUCKET.fullmatch(bucket) if row['route']=='antigravity' else None
     if agy:
         return f"{service} {'5시간' if agy[3]=='5h' else '주간'} {'3rd party' if agy[1]=='3p' else 'Gemini'}"+''.join(f' {part}' for part in (agy[2],agy[4]) if part)
-    name=WINDOWS.get(bucket) or row.get('display_name') or bucket
+    name=_window(row)
     return name if name.startswith(service) else f'{service} {name}'
+
+
+def model_quota(row):
+    """A model's own window inside its service's shared one (modelQuota in web/format.js)."""
+    from .claude_accounts import FAMILY,family
+    return ((row.get('scope') or {}).get('role') in ('model','unknown')
+            or (row['route']=='codex' and ' · ' in row['bucket'] and row['bucket'].split(' · ')[0]!='codex')
+            or (family(row['route'])==FAMILY and row['bucket'].startswith('seven_day_')))
+
+
+def same_window(a,b,bucket):
+    """Two reported resets of one window. Readings move it by seconds and two sources can
+    differ by hours, while the next window resets at least a whole window later."""
+    from .insights import window_seconds
+    return a is not None and b is not None and abs(a-b)<=(window_seconds(bucket) or 0)/2
 
 
 def other_accounts(rows,row):
@@ -135,9 +162,20 @@ def other_accounts(rows,row):
             and r.get('status')=='fresh' and r.get('remaining') is not None and not (r.get('scope') or {}).get('identity_unverified')]
 
 
-def quota_messages(rows,previous,low_percent):
-    """(messages, new state) from quota rows; the first sight of a bucket only records it."""
-    state={};messages=[]
+def _until(seconds):
+    return f'{round(seconds/60)}분' if seconds<3600 else f'{round(seconds/3600)}시간'
+
+
+def quota_messages(rows,previous,low_percent,unused=None,now=None):
+    """(messages, new state) from quota rows; the first sight of a bucket only records it.
+
+    unused: (percent, hours). A shared window longer than a day with at least `percent` left
+    and its reset (as the provider reports it) due within `hours` is told once per window,
+    naming the model windows that reset with it. A model window is capped by its shared one
+    and never told on its own. An idle window whose reset keeps moving away never gets that
+    close to it. The notice carries its reset, after which a held one is dropped."""
+    from .insights import window_seconds
+    state={};messages=[];now=now or time.time()
     for row in rows:
         if row.get('status')!='fresh' or row.get('remaining') is None or row.get('blocked_by') or (row.get('scope') or {}).get('identity_unverified'):continue
         key=f"{row['route']}:{row['bucket']}"+(f":{row['account_epoch']}" if row.get('account_epoch') else '');remaining=row['remaining']
@@ -145,6 +183,19 @@ def quota_messages(rows,previous,low_percent):
         state[key]=now_state;before=previous.get(key)
         if before is None:continue
         label=_label(row)
+        resets=row.get('resets');told=before.get('unused')
+        if told is not None:now_state['unused']=told
+        if (unused and resets and not model_quota(row) and not same_window(told,resets,row['bucket'])
+                and (window_seconds(row['bucket']) or 0)>86400 and remaining>=unused[0] and 0<resets-now<=unused[1]*3600):
+            now_state['unused']=resets
+            # Model windows as long as this one that reset with it (not a 5-hour one near it).
+            models=[f"{_window(r)} {r['remaining']:.0f}%" for r in rows
+                    if r['route']==row['route'] and model_quota(r) and window_seconds(r['bucket'])==window_seconds(row['bucket'])
+                    and r.get('status')=='fresh' and r.get('remaining') is not None
+                    and not (r.get('scope') or {}).get('identity_unverified') and same_window(r.get('resets'),resets,r['bucket'])]
+            messages.append(('unused',f'{label} {remaining:.0f}% 남음 · {_until(resets-now)} 후 초기화',
+                             f"초기화 {_when(resets)}"+(f" · 모델별 추가 한도 {', '.join(models)}" if models else '')
+                             +f" · 남은 한도 알림 기준 {unused[0]:g}% 이상 · {unused[1]:g}시간 이내",resets))
         if now_state['zero'] and not before['zero']:
             others=other_accounts(rows,row)
             messages.append(('exhausted',f'{label} 소진',f"잔여 0% · 초기화 {_when(row.get('resets'))}"+(' · 다른 계정 '+', '.join(others) if others else '')))
@@ -201,7 +252,10 @@ def evaluate(store,notify,now=None,limits=None,spike=None,sources=None,month=Non
     with store.connect() as c:previous=store.state(c,STATE_KEY,{}) or {}
     messages=[]
     if limits is not None:
-        quota,previous_quota=quota_messages(limits['limits'],previous.get('quota',{}),limits.get('low_percent',15))
+        # Only while turned on, so a window already due when it is turned on is still told.
+        unused=((limits['unused_percent'],limits['unused_hours']) if wanted(notify,'unused') and limits.get('unused_percent') and limits.get('unused_hours')
+                else None)
+        quota,previous_quota=quota_messages(limits['limits'],previous.get('quota',{}),limits.get('low_percent',15),unused,now)
         messages+=quota;previous['quota']=previous_quota
     if month is not None:
         budget,previous['budget']=budget_messages(month,budgets,previous.get('budget') or {})
@@ -255,20 +309,20 @@ def deliver(store,notify,messages,now):
     outside quiet hours; several are combined into one digest. A message whose every
     channel failed is retried each evaluation until it expires. The outcome is recorded
     as the '외부 알림' source and in a short history, without any channel secret."""
-    enabled=(notify or {}).get('events') or {}
-    wanted=[dict(kind=k,title=t,body=b,ts=now,attempts=0) for k,t,b in messages if enabled.get(k,True)]
+    # A message may carry when it stops being true (until); a held one is dropped then.
+    sending=[dict(kind=k,title=t,body=b,ts=now,attempts=0,**({'until':rest[0]} if rest else {})) for k,t,b,*rest in messages if wanted(notify,k)]
     if not configured(notify):return []
     with store.connect() as c:
-        outbox=[m for m in (store.state(c,OUTBOX_KEY,[]) or []) if enabled.get(m['kind'],True)]
-        fresh=[m for m in outbox if now-m['ts']<=OUTBOX_TTL.get(m['kind'],DEFAULT_TTL) and m['attempts']<MAX_ATTEMPTS]
+        outbox=[m for m in (store.state(c,OUTBOX_KEY,[]) or []) if wanted(notify,m['kind'])]
+        fresh=[m for m in outbox if now-m['ts']<=OUTBOX_TTL.get(m['kind'],DEFAULT_TTL) and m['attempts']<MAX_ATTEMPTS and now<m.get('until',now+1)]
         expired=[m for m in outbox if m not in fresh]
         log=[dict(ts=now,kind=m['kind'],title=m['title'],status='expired') for m in expired]
         if quiet_now(notify,now):
-            log+=[dict(ts=now,kind=m['kind'],title=m['title'],status='held') for m in wanted]
-            store.save_state(c,OUTBOX_KEY,fresh+wanted);_log(c,store,log)
+            log+=[dict(ts=now,kind=m['kind'],title=m['title'],status='held') for m in sending]
+            store.save_state(c,OUTBOX_KEY,fresh+sending);_log(c,store,log)
             return []
         store.save_state(c,OUTBOX_KEY,[]);_log(c,store,log)
-    queue=fresh+wanted
+    queue=fresh+sending
     if not queue:return []
     held=[m for m in fresh if m['attempts']==0]
     if len(held)>DIGEST_OVER:

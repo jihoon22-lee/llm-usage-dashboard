@@ -255,7 +255,10 @@ with sync_playwright() as p:
     # Settings: secrets are write-only; save, clear and test go through the API only.
     page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')
-    expect(page.locator('#notify-events input')).to_have_count(8)
+    expect(page.locator('#notify-events input')).to_have_count(9)
+    # The pre-reset notice stays off until turned on.
+    expect(page.locator('#notify-events input[data-notify-event="unused"]')).not_to_be_checked()
+    expect(page.locator('#notify-events input[data-notify-event="low"]')).to_be_checked()
     budget = page.locator('#cfg-budgets [data-budget="fixture-project"]')
     expect(budget.locator('[data-budget-key="tokens"]')).to_have_value('0.001')
     budget.locator('[data-budget-key="usd"]').fill('50')
@@ -270,7 +273,7 @@ with sync_playwright() as p:
     expect(page.locator('#notify-msg')).to_contain_text('저장했습니다.')
     path, body = posts[-1]
     assert path == '/api/config/notify' and body['webhook_url'] == 'https://hooks.example/abc' and 'ntfy_url' not in body, body
-    assert body['events']['spike'] is False and body['quiet'] == [23, 7], body
+    assert body['events']['spike'] is False and body['events']['unused'] is False and body['quiet'] == [23, 7], body
     expect(page.locator('#webhook-state')).to_have_text('설정됨 · hooks.example')
     expect(page.locator('#webhook-url')).to_have_value('')
     page.locator('[data-notify-clear="ntfy_url"]').click()
