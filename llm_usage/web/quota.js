@@ -85,18 +85,25 @@ function renderLimits(data){
   const level=r.remaining==null?'':blocked||r.remaining<=lowPct?'level-low':r.remaining<=50?'level-mid':'level-ok';
   const win=r.window?`<p class="window-usage">이번 한도 구간의 로컬 기록 <strong>${compact(r.window.tokens)}</strong> 토큰 · ${fmt(r.window.requests)}회 요청${r.window.open?'':' · 종료된 구간'}</p>`:'';
  const events=r.events&&r.events.exhausted?`<p class="quota-events">최근 ${r.events.days}일 소진 ${r.events.exhausted}회 · 마지막 ${esc(when(r.events.last_exhausted))} KST</p>`:'';
-  const blockedNote=blocked?`<br><span class="quota-blocked-note">주간 한도 소진 · 주간 초기화(${blocked.resets?when(blocked.resets)+' KST · '+left(blocked.seconds_to_reset):'미제공'}) 후 사용 가능</span>`:'';
+  const blockedNote=blocked?`<p class="quota-blocked-note">주간 한도 소진 · 주간 초기화(${blocked.resets?when(blocked.resets)+' KST · '+left(blocked.seconds_to_reset):'미제공'}) 후 사용 가능</p>`:'';
   const key=r.route+':'+r.bucket+':detail';
-  const decrease=observedDecrease(r);
+  // A measured decline is a line of its own; a measured zero stays in 상세, apart from
+  // too few observations (no line anywhere).
+  const decrease=observedDecrease(r),fell=decrease&&Number(decrease.decrease_pp.toFixed(1))>0;
   const decreaseText=decrease?`최근 ${Math.round(decrease.observed_minutes)}분 · ${decrease.decrease_pp.toFixed(1)}%p 감소`:'';
-  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges"><span class="badge ${esc(r.status)}">${esc(r.user_ended?'구독 종료':statuses[r.status])}</span>${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
+  const decreaseSpan=decrease?` title="${esc(when(decrease.start))} → ${esc(when(decrease.end))} KST · 실제 관측 구간"`:'';
+  // A current value needs no badge; an older, missing or ended one says so.
+  const state=r.status!=='fresh'||r.user_ended?`<span class="badge ${esc(r.status)}">${esc(r.user_ended?'구독 종료':statuses[r.status])}</span>`:'';
+  const reset=!r.resets?'초기화 정보 미제공':r.seconds_to_reset<=0?'초기화 경과 · 재확인 대기':`초기화 ${soon(r.seconds_to_reset)} 후`;
+  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges">${state}${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
    +`<div class="bucket-summary"><div class="remaining">${r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${r.status==='fresh'?'잔여':'이전 관측'}${blocked?' · 사용 불가':''}</small></div>`
    +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress></div>`)
-   +`<p class="bucket-reset">${r.resets?'초기화 '+esc(left(r.seconds_to_reset)):'초기화 정보 미제공'}${blockedNote}</p></div>`
+   +`<p class="bucket-reset">${esc(reset)}</p></div>${blockedNote}`
    +(r.note&&!folded?`<p class="quota-note">${esc(r.note)}</p>`:'')
-   +(decrease?`<p class="bucket-decrease" title="${esc(when(decrease.start))} → ${esc(when(decrease.end))} KST · 실제 관측 구간">${esc(decreaseText)}</p>`:'')
+   +(fell?`<p class="bucket-decrease"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
    +`<details class="bucket-detail" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>상세</summary>`
    +`<p>${r.resets?'초기화 '+esc(when(r.resets))+' KST':''}${shared?'':(r.resets?'<br>':'')+'마지막 확인 '+when(r.checked)+(r.detail?'<br>'+esc(r.detail):'')}</p>`
+   +(decrease&&!fell?`<p class="decrease-detail"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
    +`${events}${win}${quotaHistory(r,opened,data.now)}</details></div>`;
  }
  const groups=Object.entries(names).map(([route,name])=>{
@@ -114,7 +121,8 @@ function renderLimits(data){
  // A service with several Claude accounts folds only when every account is quiet.
  const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
  const active=groups.filter(g=>!dormant(g)),folded=groups.filter(dormant);
- $('limits').classList.toggle('two-services',active.length===2);
+ // Desktop columns follow the number of service cards (up to three), so none stands empty.
+ $('limits').dataset.cards=String(Math.min(active.length,3));
  $('quota-overview').classList.toggle('editing',editingQuota);
  $('quota-overview').innerHTML='<div class="overview-caption"><span>서비스</span><span>'+(editingQuota?'화살표로 순서 조정':'잔여 · 초기화까지')+'</span></div>'+active.map(({route,rows})=>{
   // A route with a current value is current; older buckets beside it are noted, not

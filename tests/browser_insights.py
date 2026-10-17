@@ -436,12 +436,18 @@ async def main():
             # The ended OpenCode Go card folds into the dormant section.
             await expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단 1개')
             await expect(page.locator('#limits > .quota-dormant')).to_contain_text('OpenCode Go')
-            # Quota cards auto-fit a 300px-minimum grid: at 1440px all active
-            # cards share one row and the dormant fold spans the full width.
+            # Desktop quota cards take up to three equal columns with one line per
+            # window: at 1440px four services fill a row of three and start the next;
+            # the dormant fold spans the full width.
             boxes=await page.locator('#limits > .limit-card').evaluate_all('els=>els.map(e=>e.getBoundingClientRect())')
-            assert len(boxes)>=3
-            assert len({round(b['y']) for b in boxes})==1,boxes
-            assert len({round(b['width']) for b in boxes})==1,boxes
+            assert len(boxes)==4,boxes
+            assert len({round(b['y']) for b in boxes[:3]})==1 and boxes[3]['y']>boxes[0]['y'],boxes
+            assert len({round(b['width']) for b in boxes})==1 and abs(boxes[3]['x']-boxes[0]['x'])<=1,boxes
+            rows=await page.locator('#limits > .limit-card .bucket').evaluate_all('''els=>els.filter(e=>e.offsetParent).map(e=>{
+              const box=e.getBoundingClientRect(),bar=e.querySelector('.bar-wrap'),reset=e.querySelector('.bucket-reset').getBoundingClientRect();
+              return {top:box.top,reset:reset.top,bar:bar?bar.getBoundingClientRect().top:null};})''')
+            # Remaining, bar and reset share the window's line.
+            assert rows and all(r['bar'] is None or abs(r['bar']-r['reset'])<16 for r in rows),rows
             dormant=await page.locator('#limits > .quota-dormant').bounding_box()
             grid=await page.locator('#limits').bounding_box()
             assert dormant['y']>boxes[0]['y'] and abs(dormant['width']-grid['width'])<=1,(dormant,grid)
