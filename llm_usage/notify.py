@@ -106,7 +106,10 @@ def quiet_now(notify,now):
 
 SERVICE={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'}
 WINDOWS={'five_hour':'5시간','seven_day':'주간','seven_day_opus':'Opus 주간','seven_day_sonnet':'Sonnet 주간',
-         'seven_day_oauth_apps':'앱 주간','rolling':'5시간','daily':'일간','weekly':'주간','monthly':'월간'}
+         'seven_day_oauth_apps':'앱 주간','seven_day_cowork':'Cowork 주간','seven_day_omelette':'추가 주간 한도',
+         'seven_day_overage_included':'추가 포함량 주간','rolling':'5시간','daily':'일간','weekly':'주간','monthly':'월간'}
+# '<family>[-<pool>]-<window>[-n]', e.g. 'gemini-5h', '3p-weekly-2', 'gemini-argon-wtu-weekly'.
+AGY_BUCKET=re.compile(r'(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?')
 
 
 def _label(row):
@@ -115,9 +118,9 @@ def _label(row):
     bucket=row['bucket'];service=SERVICE.get(family(row['route']),row['route'])
     # Several Claude accounts: 'Claude(Max 5x) 5시간'.
     if row.get('account_label'):service+=f"({row['account_label']})"
-    agy=re.fullmatch(r'(gemini|3p)-(5h|weekly)(?:-(\d+))?',bucket) if row['route']=='antigravity' else None
+    agy=AGY_BUCKET.fullmatch(bucket) if row['route']=='antigravity' else None
     if agy:
-        return f"{service} {'5시간' if agy[2]=='5h' else '주간'} {'3rd party' if agy[1]=='3p' else 'Gemini'}"+(f' {agy[3]}' if agy[3] else '')
+        return f"{service} {'5시간' if agy[3]=='5h' else '주간'} {'3rd party' if agy[1]=='3p' else 'Gemini'}"+''.join(f' {part}' for part in (agy[2],agy[4]) if part)
     name=WINDOWS.get(bucket) or row.get('display_name') or bucket
     return name if name.startswith(service) else f'{service} {name}'
 
@@ -196,7 +199,10 @@ def evaluate(store,notify,now=None,limits=None,spike=None,sources=None,month=Non
         previous['spike_hour']=spike['hour_start']
         messages.append(('spike','사용량 급증',f"{_when(spike['hour_start'])}부터 1시간 {spike['tokens']/1e6:.1f}M 토큰 · 평소 상위 5% 기준의 {spike['ratio']:.1f}배"))
     if sources is not None:
+        from .claude_accounts import source_label
         failing=previous.get('failing',{})
+        # Per-account sources read with the account's name, as on the dashboard.
+        labels={r['route']:r['account_label'] for r in (limits or {}).get('limits') or [] if r.get('account_label')}
         for source in sources:
             name=source['name']
             if name==SOURCE:continue  # its own failures are already the source status
@@ -204,7 +210,7 @@ def evaluate(store,notify,now=None,limits=None,spike=None,sources=None,month=Non
             since=failing.setdefault(name,dict(since=now,sent=False))
             if not since['sent'] and now-since['since']>=SOURCE_ERROR_MINUTES*60:
                 since['sent']=True
-                messages.append(('source',f'{name} 수집 실패 지속',f"{SOURCE_ERROR_MINUTES}분 넘게 실패 · {source.get('detail') or ''}".strip(' ·')))
+                messages.append(('source',f'{source_label(name,labels)} 수집 실패 지속',f"{SOURCE_ERROR_MINUTES}분 넘게 실패 · {source.get('detail') or ''}".strip(' ·')))
         previous['failing']=failing
     with store.connect() as c:store.save_state(c,STATE_KEY,previous)
     return deliver(store,notify,messages,now)

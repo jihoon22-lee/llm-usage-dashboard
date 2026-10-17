@@ -1067,19 +1067,21 @@ class Store:
         subs=[]
         claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
         if (subscriptions or len(claude_routes)>1) and period!='1h':
-            by_route={}
+            by_route={};tokens_by_route={}
             for row in rows:
+                tokens_by_route[row['route']]=tokens_by_route.get(row['route'],0)+token_total(row)
                 if row.get('est_cost') is not None:
                     by_route[row['route']]=by_route.get(row['route'],0)+row['est_cost']
             if len(claude_routes)>1:
                 # Each Claude subscription is valued with its own account's requests.
                 by_route={k:v for k,v in by_route.items() if k!='claude-code'}
-                if pricing:
-                    for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+
-                                       ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
-                                       (a.timestamp(),b.timestamp(),*scope_args)):
-                        rate=rate_for(r['model'],pricing,r['day'])
-                        if rate:by_route[r['account']]=by_route.get(r['account'],0)+estimate(dict(r),rate)
+                tokens_by_route.pop('claude-code',None)
+                for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+
+                                   ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
+                                   (a.timestamp(),b.timestamp(),*scope_args)):
+                    tokens_by_route[r['account']]=tokens_by_route.get(r['account'],0)+token_total(dict(r))
+                    rate=rate_for(r['model'],pricing,r['day']) if pricing else None
+                    if rate:by_route[r['account']]=by_route.get(r['account'],0)+estimate(dict(r),rate)
             # Scale by the elapsed part of the period: a running week is not seven days yet.
             days=max(1,(min(b,now)-a).total_seconds()/86400)
             prices=dict(subscriptions or {})
@@ -1090,7 +1092,8 @@ class Store:
             for route,monthly in prices.items():
                 if monthly is not None and (not isinstance(monthly,(int,float)) or monthly<0):continue
                 est=by_route.get(route)
-                subs.append(dict(route=route,monthly_usd=monthly,period_cost=est,
+                # No tokens in the period is not the same as tokens without a list price.
+                subs.append(dict(route=route,monthly_usd=monthly,period_cost=est,period_tokens=tokens_by_route.get(route,0),
                                  monthly_equiv=est*30.44/days if est is not None else None))
         labels = sorted({r['label'] for r in buckets})
         lookup = {(r['bucket'],r['label']):r for r in buckets}
@@ -1128,7 +1131,9 @@ class Store:
     def _usage_live(self,c,rows,now):
         """Source freshness and availability change with wall time, so they are
         computed on every call instead of being cached with the body."""
-        sources = [dict(r) for r in c.execute('SELECT * FROM sources ORDER BY name')]
+        # The last success lets the page tell a single failed poll from a lasting failure.
+        health=dict(c.execute('SELECT name,last_success FROM source_health').fetchall())
+        sources = [dict(r,last_success=health.get(r['name'])) for r in c.execute('SELECT * FROM sources ORDER BY name')]
         stale=self.thresholds['stale_seconds']
         collector=self.state(c,'collector',{})
         sources.append(dict(name='수집기',checked=collector.get('checked'),

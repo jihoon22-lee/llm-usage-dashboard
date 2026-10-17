@@ -40,6 +40,14 @@ def account_source(route):
     return 'claude-oauth' + suffix(route) if is_claude(route) else route
 
 
+def source_label(name, labels):
+    """'claude-oauth:<hash>' as 'claude-oauth · Max 5x' when the account has a label
+    (the dashboard's sourceName); every other source name is returned unchanged."""
+    m = re.fullmatch(r'(.+):([0-9a-f]{12})', name or '')
+    label = m and (labels or {}).get(FAMILY + ':' + m[2])
+    return f'{m[1]} · {label}' if label else name
+
+
 def account_key(identity):
     """Same key resources.observe_account stores for route 'claude-code'."""
     from .resources import key

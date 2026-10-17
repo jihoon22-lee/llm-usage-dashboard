@@ -37,13 +37,19 @@ with store.connect() as c:
     for route, five, seven, source in (('claude-code', 0, 25, 'claude-oauth'), (SECOND, 92, 97, 'claude-oauth:abababababab')):
         store.limit(c, route, 'five_hour', five, now+900, now-60, source)
         store.limit(c, route, 'seven_day', seven, now+3*86400, now-60, source)
-        store.source(c, source, 'ok', '계정 사용량 조회 · 내부 OAuth 경로', now-60)
+        # The second account's poll is overdue: a delay chip that names the account.
+        store.source(c, source, 'ok', '계정 사용량 조회 · 내부 OAuth 경로', now-60 if route == 'claude-code' else now-1200)
     store.limit(c, 'codex', 'codex · 10080분', 98, now+4*86400, now-60, 'codex')
     store.source(c, 'codex', 'ok', '', now-60)
     for bucket in ('daily', 'weekly'):
         store.limit(c, 'devin', bucket, 100, now+86400, now-60, 'devin')
     store.source(c, 'devin', 'ok', 'Free · 계정 사용량 조회', now-60)
     store.source(c, 'claude-accounts', 'ok', 'Claude 계정 2개 · 훅 기록 12건 · 계정 미확인 요청 3건', now-60)
+    # A source that never succeeded is a chip at once; one that failed five minutes after a
+    # success is not yet (the status tab shows both).
+    store.source(c, 'claude-credits:abababababab', 'error', 'HTTP 500', now-120)
+    store.source(c, 'claude-resets:abababababab', 'ok', '', now-400)
+    store.source(c, 'claude-resets:abababababab', 'error', 'HTTP 503', now-100)
     for day in range(5):
         for i, (route, account, model, tokens) in enumerate((('claude-code', 'claude-code', 'claude-test', 4000), ('claude-code', SECOND, 'claude-test', 9000),
                                                             ('claude-code', 'claude-code:unknown', 'claude-test', 500), ('codex', None, 'gpt-test', 7000))):
@@ -95,6 +101,9 @@ with sync_playwright() as p:
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')
     expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0%')
+    expect(page.locator('#alerts')).to_contain_text('claude-credits · Max 5x 수집 실패')
+    expect(page.locator('#alerts')).to_contain_text('claude-oauth · Max 5x 수집 지연')
+    expect(page.locator('#alerts')).not_to_contain_text('claude-resets')
     # The ended Devin subscription folds with its reason and leaves the reset timeline.
     expect(page.locator('#reset-timeline')).not_to_contain_text('Devin')
     dormant = page.locator('.quota-dormant')
@@ -126,6 +135,7 @@ with sync_playwright() as p:
     # Status sources name their account.
     page.locator('#tab-status').click()
     expect(page.locator('#sources')).to_contain_text('claude-oauth · Max 5x')
+    expect(page.locator('#sources')).to_contain_text('claude-resets · Max 5x')
     expect(page.locator('#sources')).to_contain_text('claude-accounts')
     # Settings: a row per Claude account with a display name; the ended toggle is kept.
     page.locator('#settings-open').click()

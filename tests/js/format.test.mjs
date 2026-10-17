@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -123,11 +123,41 @@ test('Antigravity bucket names and labels',()=>{
   assert.equal(f.quotaLabel({route:'antigravity',bucket:'3p-5h'}),'Antigravity 5시간 3rd party');
   assert.equal(f.quotaLabel({route:'claude-code',bucket:'five_hour'}),'Claude 5시간');
   assert.equal(f.quotaLabel({route:'codex',bucket:'codex · 10080분',display_name:'Codex 공통 · 주간'}),'Codex 공통 · 주간');
-  const rows=[{bucket:'3p-weekly'},{bucket:'gemini-5h'},{bucket:'3p-5h'},{bucket:'other'}];
+  // A named pool ('argon-wtu') stays in its window group with its own name.
+  assert.deepEqual({...f.agyBucket('gemini-argon-wtu-weekly')},{family:'Gemini',window:'주간',suffix:'argon-wtu'});
+  assert.deepEqual({...f.agyBucket('gemini-5h-2')},{family:'Gemini',window:'5시간',suffix:'2'});
+  assert.equal(f.quotaLabel({route:'antigravity',bucket:'gemini-argon-wtu-weekly'}),'Antigravity 주간 Gemini argon-wtu');
+  const rows=[{bucket:'3p-weekly'},{bucket:'gemini-5h'},{bucket:'3p-5h'},{bucket:'other'},{bucket:'gemini-argon-wtu-weekly'}];
   const w=f.agyWindows(rows);
   assert.deepEqual(w.h5.map(r=>r.bucket),['gemini-5h','3p-5h']);
-  assert.deepEqual(w.wk.map(r=>r.bucket),['3p-weekly']);
+  assert.deepEqual(w.wk.map(r=>r.bucket),['gemini-argon-wtu-weekly','3p-weekly']);
   assert.deepEqual(w.other.map(r=>r.bucket),['other']);
+});
+
+test('optional and per-model weekly windows read as names, not keys',()=>{
+  // Reset-grant targets carry only route and bucket.
+  assert.equal(f.bucketName({route:'claude-code',bucket:'seven_day_overage_included'}),'추가 포함량 주간');
+  assert.equal(f.bucketName({route:'claude-code',bucket:'seven_day_fable'}),'Fable 주간');
+  assert.equal(f.bucketName({route:'claude-code',bucket:'seven_day_fable',display_name:'seven_day_fable'}),'Fable 주간');
+  assert.equal(f.bucketName({route:'claude-code',bucket:'seven_day_new_model',display_name:'New Model 주간'}),'New Model 주간');
+  assert.equal(f.bucketName({route:'devin',bucket:'daily',display_name:'일간 한도'}),'일간');
+  assert.equal(f.bucketName({route:'x',bucket:'custom'}),'custom');
+});
+
+test('amounts, IDs and per-account source kinds',()=>{
+  assert.equal(f.amountText(42,'USD'),'42');
+  assert.equal(f.amountText(12.3456,'USD'),'12.35');
+  assert.equal(f.amountText(1234.5,'KRW'),'1,235');
+  assert.equal(f.amountText(1234.567,'credit'),'1,235');
+  assert.equal(f.amountText(12.345,'credit'),'12.35');
+  assert.equal(f.amountText(3,'count'),'3');
+  assert.equal(f.amountText(null,'USD'),'—');
+  assert.equal(f.shortId('01234567-0000-7000-8000-00000000abcd'),'01234567…abcd');
+  assert.equal(f.shortId('abc123'),'abc123');
+  assert.equal(f.shortId(null),'');
+  assert.equal(f.sourceBase('claude-oauth:abababababab'),'claude-oauth');
+  assert.equal(f.sourceBase('WSL .claude/projects'),'WSL .claude/projects');
+  assert.equal(f.sourceBase(null),'');
 });
 
 test('availability uses current values and counts a blocked window as 0',()=>{

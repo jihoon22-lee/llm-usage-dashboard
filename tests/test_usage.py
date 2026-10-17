@@ -206,6 +206,17 @@ class UsageTests(unittest.TestCase):
         src=next(s for s in self.store.limits(1235)['sources'] if s['name']=='antigravity')
         self.assertEqual(src['status'],'error')
 
+    def test_sources_carry_their_last_success(self):
+        # The page shows a failure chip only once a source has not succeeded for a while.
+        now=time.time()
+        with self.store.connect() as c:
+            self.store.source(c,'codex','ok','fine',now-100)
+            self.store.source(c,'codex','error','HTTP 500',now-10)
+            self.store.source(c,'devin','error','HTTP 401',now-10)
+        sources={s['name']:s for s in self.store.usage(period='today')['sources']}
+        self.assertEqual((sources['codex']['status'],sources['codex']['last_success']),('error',now-100))
+        self.assertIsNone(sources['devin']['last_success'])
+
     def test_older_status_source_cannot_override_new_confirmation(self):
         with self.store.connect() as c:
             self.store.source(c,'antigravity','ok','new',200)

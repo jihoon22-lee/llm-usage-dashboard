@@ -4,10 +4,11 @@ const RESOURCE_SCOPES={subscription:'구독 경로 추가 사용',cloud:'클라�
 let editingResource=null,resourceSaving=false,resourceDirty=false,resourceRequestId=null,resourceOpener=null;
 function resourceValue(row,value=row.amount){
  if(value==null)return '미제공';
- if(row.unit==='count')return fmt(value)+'회';
- if(row.unit==='credit')return fmt(value)+' 크레딧';
+ const amount=amountText(value,row.unit);
+ if(row.unit==='count')return amount+'회';
+ if(row.unit==='credit')return amount+' 크레딧';
  if(row.unit==='minor')return fmt(value)+' · 통화·소액 단위 확인 필요';
- return fmt(value)+' '+row.unit;
+ return amount+' '+row.unit;
 }
 function resourceConditions(row){
  const parts=[];
@@ -59,9 +60,10 @@ function resourceCard(row,opened){
  const base=shortService[familyOf(row.route)]||row.route,service=serviceShort(row.route),name=row.label.startsWith(base+' ')?row.label.slice(base.length+1):row.label;
  const current=['fresh','manual'].includes(row.status);
  const checkedText=checked?'확인 '+when(checked):'확인 기록 없음';
+ const exact=row.amount!=null&&row.unit!=='minor'&&Number.isFinite(Number(row.amount))?Number(row.amount).toLocaleString('ko-KR',{maximumFractionDigits:10}):null;
  const conditions=resourceConditions(row);
  const restriction=(row.usage_conditions||row).enabled===false?conditions.find(t=>/비활성화|제한|제공 대상/.test(t)):null;
- return `<article class="resource-card ${esc(row.status)}" data-resource-id="${esc(row.id)}"><div class="resource-main"><h3><span class="resource-service">${esc(service)}</span> ${esc(name)}${badge}</h3><strong class="resource-value">${esc(resourceValue(row))}${current?'':'<small>이전 확인값</small>'}</strong></div>${expiry}${scopeText||restriction?`<p class="resource-scope">${esc(scopeText)}${row.model?' · '+esc(row.model):''}${restriction?`<span class="resource-condition">${scopeText?' · ':''}${esc(restriction)}</span>`:''}</p>`:''}${duplicate}<details data-resource-detail="${esc(row.id)}"${opened.has(row.id)?' open':''}><summary>상세 <small class="resource-checked">${esc(checkedText)}</small></summary>${conditions.length?`<p>${conditions.map(esc).join(' · ')}</p>`:''}${expiryNote?`<p>${esc(expiryNote)}</p>`:''}${pastGrants}${row.reported_total!=null&&row.reported_total!==row.amount?`<p>제공사 전체 잔액 ${esc(resourceValue(row,row.reported_total))} 중 범용 잔액만 위에 표시합니다.</p>`:''}${row.rate_per_hour!=null?`<p>최근 확인한 지출 ${esc(resourceValue(row,row.rate_per_hour))}/시간 · 같은 결제기간 원본 누적 지출 기준</p>`:''}${row.kind==='reset'&&!row.details_known&&row.origin==='auto'?'<p>초기화권별 적용 범위·만료 상세를 받지 못했습니다.</p>':''}<p>${checked?'마지막 확인 '+esc(when(checked))+' KST · ':''}${row.origin==='manual'?(row.account_scope==='independent'?'별도 API 자원 수동 기록':'수동 확인 기록 · 현재 계정의 제공사 화면에서 재확인'):(row.identity_verified?'기본 로그인 계정 기준 자동 조회':'계정 식별 미확인 · 제공사에서 계정을 확인하세요.')}</p>${row.check_url?`<a href="${esc(row.check_url)}" target="_blank" rel="noopener noreferrer">제공사에서 확인 ↗</a>`:''}</details>${row.origin==='manual'?`<div class="resource-actions"><button type="button" class="mini-btn" data-resource-edit="${esc(row.id)}">수정</button><button type="button" class="mini-btn" data-resource-delete="${esc(row.id)}">삭제</button></div>`:''}</article>`;
+ return `<article class="resource-card ${esc(row.status)}" data-resource-id="${esc(row.id)}"><div class="resource-main"><h3><span class="resource-service">${esc(service)}</span> ${esc(name)}${badge}</h3><strong class="resource-value"${exact!=null&&exact!==amountText(row.amount,row.unit)?` data-tip="정확한 값 ${esc(exact)}"`:''}>${esc(resourceValue(row))}${current?'':'<small>이전 확인값</small>'}</strong></div>${expiry}${scopeText||restriction?`<p class="resource-scope">${esc(scopeText)}${row.model?' · '+esc(row.model):''}${restriction?`<span class="resource-condition">${scopeText?' · ':''}${esc(restriction)}</span>`:''}</p>`:''}${duplicate}<details data-resource-detail="${esc(row.id)}"${opened.has(row.id)?' open':''}><summary>상세 <small class="resource-checked">${esc(checkedText)}</small></summary>${conditions.length?`<p>${conditions.map(esc).join(' · ')}</p>`:''}${expiryNote?`<p>${esc(expiryNote)}</p>`:''}${pastGrants}${row.reported_total!=null&&row.reported_total!==row.amount?`<p>제공사 전체 잔액 ${esc(resourceValue(row,row.reported_total))} 중 범용 잔액만 위에 표시합니다.</p>`:''}${row.rate_per_hour!=null?`<p>최근 확인한 지출 ${esc(resourceValue(row,row.rate_per_hour))}/시간 · 같은 결제기간 원본 누적 지출 기준</p>`:''}${row.kind==='reset'&&!row.details_known&&row.origin==='auto'?'<p>초기화권별 적용 범위·만료 상세를 받지 못했습니다.</p>':''}<p>${checked?'마지막 확인 '+esc(when(checked))+' KST · ':''}${row.origin==='manual'?(row.account_scope==='independent'?'별도 API 자원 수동 기록':'수동 확인 기록 · 현재 계정의 제공사 화면에서 재확인'):(row.identity_verified?'기본 로그인 계정 기준 자동 조회':'계정 식별 미확인 · 제공사에서 계정을 확인하세요.')}</p>${row.check_url?`<a href="${esc(row.check_url)}" target="_blank" rel="noopener noreferrer">제공사에서 확인 ↗</a>`:''}</details>${row.origin==='manual'?`<div class="resource-actions"><button type="button" class="mini-btn" data-resource-edit="${esc(row.id)}">수정</button><button type="button" class="mini-btn" data-resource-delete="${esc(row.id)}">삭제</button></div>`:''}</article>`;
 }
 // Manual records can name a Claude account once there are several.
 function syncResourceRoutes(){

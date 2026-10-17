@@ -440,6 +440,10 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(subs[R_SECOND]['period_cost'], 2)
         self.assertIsNone(subs[R_SECOND]['monthly_usd'])
         self.assertEqual(subs['codex']['period_cost'], 1)
+        self.assertEqual((subs['claude-code']['period_tokens'], subs[R_SECOND]['period_tokens']), (1_000_000, 2_000_000))
+        # Without list prices each account still reports whether it was used in the period.
+        unpriced = {s['route']: s for s in self.store.usage(period='7d', subscriptions={'claude-code': 20}, names={R_SECOND: '두 번째'})['subscriptions']}
+        self.assertEqual((unpriced[R_SECOND]['period_cost'], unpriced[R_SECOND]['period_tokens']), (None, 2_000_000))
         session = next(s for s in data['sessions'] if s['session'] == 'mixed')
         self.assertEqual(session['accounts'], sorted([FAMILY, R_SECOND, UNKNOWN]))
         self.assertEqual({a['route']: a['label'] for a in data['claude_accounts']}, {FAMILY: 'Pro', R_SECOND: '두 번째'})

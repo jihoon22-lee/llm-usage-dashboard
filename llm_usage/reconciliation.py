@@ -193,7 +193,15 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         public={**e,'start':datetime.fromtimestamp(e['start'],KST).isoformat(),
                 'end_exclusive':datetime.fromtimestamp(e['end'],KST).isoformat()}
         public.pop('end');public.pop('parts')
-        if not (a<=e['start'] and e['end']<=b):overlapping.append(public);continue
+        # A subscription whose period usage is only supplemented (a Codex account residual,
+        # Claude cloud sessions) was still used; an aggregate that crosses the period edge
+        # leaves 'no usage' unknown (None) rather than 0.
+        sub=next((s for s in data.get('subscriptions') or [] if s['route']==(e.get('account') or e['route'])),None)
+        if not (a<=e['start'] and e['end']<=b):
+            overlapping.append(public)
+            if sub is not None and not sub.get('period_tokens'):sub['period_tokens']=None
+            continue
+        if sub is not None and sub.get('period_tokens') is not None:sub['period_tokens']+=e['tokens']
         accepted.append(e);add(data['totals'],e)
         label=e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
         if group=='agent':label='미귀속'

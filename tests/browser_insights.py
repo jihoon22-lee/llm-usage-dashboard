@@ -129,8 +129,10 @@ async def main():
             stats_box=await page.locator('#calendar .cal-stats').bounding_box()
             grid_box=await page.locator('#calendar .cal-grid').bounding_box()
             assert stats_box['x']>=grid_box['x']+grid_box['width']-1,(stats_box,grid_box)
-            cal_sum=await page.evaluate("fmt(lastUsage.calendar.reduce((s,r)=>s+r.tokens,0))")
+            # Totals are shortened; the exact count stays in the tooltip.
+            cal_sum,cal_exact=await page.evaluate("(()=>{const v=lastUsage.calendar.reduce((s,r)=>s+r.tokens,0);return [compact(v),fmt(v)];})()")
             await expect(page.locator('#calendar .cal-stats')).to_contain_text(cal_sum+' 토큰')
+            await expect(page.locator(f'#calendar .cal-stats [data-tip="{cal_exact} 토큰"]').first).to_be_attached()
             offsets=await page.evaluate("""()=>{const cells=[...document.querySelectorAll('#calendar .cal-grid .cal-cell')];
               return [...document.querySelectorAll('#calendar .cal-months span')].map(m=>{
                 const w=+m.className.match(/cal-m(\\d+)/)[1]-1,c=cells[w*7];
@@ -370,7 +372,7 @@ async def main():
             await view('reports')
             await expect(page.locator('#calendar .cal-grid')).to_have_attribute('aria-label',re.compile('요청 수'))
             await expect(page.locator('#calendar-caption')).to_contain_text('일별 요청 수')
-            req_sum=await page.evaluate("fmt(lastUsage.calendar.reduce((s,r)=>s+r.requests,0))+'회'")
+            req_sum=await page.evaluate("compact(lastUsage.calendar.reduce((s,r)=>s+r.requests,0))+'회'")
             await expect(page.locator('#calendar .cal-stats')).to_contain_text(req_sum)
             await view('usage')
             await page.locator('#metric').select_option('cost')
@@ -467,6 +469,11 @@ async def main():
             await expect(page.locator('#subvalue')).to_contain_text('월말 예상')
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.insights.month.alert_usd=0.0001;renderInsights(d);}""")
             await expect(page.locator('#subvalue')).to_contain_text('알림 기준')
+            # A subscription without tokens in the period is not shown as unpriced.
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.subscriptions=[{route:'codex',monthly_usd:20,period_cost:null,period_tokens:0,monthly_equiv:null},
+              {route:'devin',monthly_usd:10,period_cost:null,period_tokens:5,monthly_equiv:null}];renderInsights(d);}""")
+            await expect(page.locator('#subvalue .sub-row',has_text='Codex')).to_contain_text('기간 내 사용 기록 없음')
+            await expect(page.locator('#subvalue .sub-row',has_text='Devin')).to_contain_text('기간 내 미산정')
             await page.evaluate('()=>renderInsights(lastUsage)')
             await view('status')
             await expect(page.locator('#quality')).to_be_visible()
