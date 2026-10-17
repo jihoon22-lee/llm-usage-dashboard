@@ -94,11 +94,13 @@ function renderLimits(data){
   const decreaseSpan=decrease?` title="${esc(when(decrease.start))} → ${esc(when(decrease.end))} KST · 실제 관측 구간"`:'';
   // A current value needs no badge; an older, missing or ended one says so.
   const state=r.status!=='fresh'||r.user_ended?`<span class="badge ${esc(r.status)}">${esc(r.user_ended?'구독 종료':statuses[r.status])}</span>`:'';
-  const reset=!r.resets?'초기화 정보 미제공':r.seconds_to_reset<=0?'초기화 경과 · 재확인 대기':`초기화 ${soon(r.seconds_to_reset)} 후`;
+  // '초기화 4일 15시간 후'; the desktop row keeps the countdown under its card's caption.
+  const word=text=>`<span class="reset-word">${text}</span>`;
+  const reset=!r.resets?word('초기화 정보 ')+'미제공':r.seconds_to_reset<=0?word('초기화 경과 · ')+'재확인 대기':word('초기화 ')+esc(soon(r.seconds_to_reset))+word(' 후');
   return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges">${state}${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
    +`<div class="bucket-summary"><div class="remaining">${r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${r.status==='fresh'?'잔여':'이전 관측'}${blocked?' · 사용 불가':''}</small></div>`
    +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress></div>`)
-   +`<p class="bucket-reset">${esc(reset)}</p></div>${blockedNote}`
+   +`<p class="bucket-reset">${reset}</p></div>${blockedNote}`
    +(r.note&&!folded?`<p class="quota-note">${esc(r.note)}</p>`:'')
    +(fell?`<p class="bucket-decrease"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
    +`<details class="bucket-detail" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>상세</summary>`
@@ -205,7 +207,7 @@ function renderLimits(data){
  };
  const cardHtml=({route,name,rows})=>{
   const body=route==='claude-code'&&multiClaude()?accountGroups(rows).map(([account,list])=>accountSection(route,account,list)).join('<hr class="quota-divider">'):cardBody(route,rows,route);
-  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${body}</article>`;
+  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><small class="card-caption">잔여 · 초기화까지</small><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${body}</article>`;
  };
  $('limits').innerHTML=active.map(cardHtml).join('')
   +(folded.length?`<details class="quota-dormant"><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)+(g.rows.length&&g.rows.every(r=>r.user_ended)?' (구독 종료)':'')).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');

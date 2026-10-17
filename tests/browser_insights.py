@@ -200,9 +200,11 @@ async def main():
             agy=page.locator('.reset-item').filter(has_text='Antigravity')
             await expect(agy).to_have_count(1)
             assert (await agy.inner_text()).count('·')>=3,await agy.inner_text()
-            # A bucket without a reset time prints the fallback once, not twice.
-            devin=await page.locator('#quota-devin').inner_text()
+            # A bucket without a reset time prints the fallback once, not twice (the
+            # desktop row shows its last word under the card's 잔여 · 초기화까지 caption).
+            devin=await page.locator('#quota-devin').text_content()
             assert devin.count('초기화 정보 미제공')==1,devin
+            assert (await page.locator('#quota-devin .bucket-reset').first.inner_text())=='미제공'
             # Trend figures stay on one line via .nowrap spans.
             assert await page.locator('#quota-codex .quota-trends .nowrap').count()>=3
             antigrav=await page.locator('#quota-antigravity .quota-forecast').count()
@@ -455,6 +457,42 @@ async def main():
             await page.evaluate('''data=>{const old={...data,limits:data.limits.map(r=>r.route==='antigravity'?{...r,checked:data.now-8*86400,status:'stale'}:r)};renderLimits(old);}''',limits)
             await expect(page.locator('#limits > .quota-dormant > summary')).to_contain_text('관측 중단 2개')
             await expect(page.locator('.limit-card:visible')).to_have_count(3)
+            await page.evaluate('data=>renderLimits(data)',limits)
+            # Three columns hold down to 1121px (no empty column beside a long card at
+            # 1280), two below and one from 820px; nothing overflows a card or the page.
+            for width,columns in ((1280,3),(1100,2),(830,2),(640,1)):
+                await page.set_viewport_size({'width':width,'height':1050})
+                layout=await page.evaluate('''()=>{const cards=[...document.querySelectorAll('#limits > .limit-card')];
+                  return {columns:getComputedStyle(document.getElementById('limits')).gridTemplateColumns.split(' ').length,
+                    page:document.documentElement.scrollWidth<=innerWidth,cards:cards.every(c=>c.scrollWidth<=c.clientWidth),
+                    tops:cards.map(c=>Math.round(c.getBoundingClientRect().top))};}''')
+                assert layout['columns']==columns and layout['page'] and layout['cards'],(width,layout)
+                assert len(set(layout['tops'][:columns]))==1,(width,layout)
+            await page.set_viewport_size({'width':1440,'height':1050})
+            # A current value has no status badge; an older one says so. A measured
+            # decline is a line of its own, a measured zero stays in 상세, and too few
+            # observations add neither.
+            async def weekly(trend,status='fresh'):
+                await page.evaluate('''([data,trend,status])=>renderLimits({...data,limits:data.limits.map(r=>r.route==='codex'&&r.bucket.includes('10080')
+                  ?{...r,status,trends:[{window_minutes:30,available:true,start:data.now-1800,end:data.now,...trend}]}:r)})''',[limits,trend,status])
+                return page.locator('#quota-codex > .bucket').first
+            codex=await weekly({'decrease_pp':0,'observed_minutes':20})
+            await expect(codex.locator('.badge')).to_have_count(0)
+            await expect(codex.locator('.bucket-decrease')).to_have_count(0)
+            await expect(codex.locator('.bucket-detail .decrease-detail')).to_have_text('최근 20분 · 0.0%p 감소')
+            # It shows only with 상세 open (opened earlier in this run; renders keep it).
+            detail=codex.locator('.bucket-detail')
+            if await detail.get_attribute('open') is not None:await detail.locator(':scope > summary').click()
+            await expect(codex.locator('.decrease-detail')).to_be_hidden()
+            codex=await weekly({'decrease_pp':0,'observed_minutes':10})
+            await expect(codex.locator('.bucket-decrease, .decrease-detail')).to_have_count(0)
+            codex=await weekly({'decrease_pp':3.5,'observed_minutes':20})
+            await expect(codex.locator('.bucket-decrease')).to_have_text('최근 20분 · 3.5%p 감소')
+            await expect(codex.locator('.bucket-decrease')).to_be_visible()
+            await expect(codex.locator('.decrease-detail')).to_have_count(0)
+            codex=await weekly({'decrease_pp':3.5,'observed_minutes':20},'stale')
+            await expect(codex.locator('.badge.stale')).to_have_text('오래된 값')
+            await expect(codex.locator('.bucket-decrease, .decrease-detail')).to_have_count(0)
             await page.evaluate('data=>renderLimits(data)',limits)
             # Desktop shows every alert chip; the collapse toggle is mobile-only (M1).
             await page.evaluate('data=>renderAlerts({...data,low_percent:95},lastUsage)',limits)
