@@ -87,7 +87,8 @@ function groupSlots(group,labels){
  if(group==='provider')return {...PROVIDER_SLOTS};
  if(group!=='route'&&group!=='account')return {};
  const out={...ROUTE_SLOTS},used=new Set(Object.values(out));let next=0;
- for(const label of [...new Set(labels)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort()){
+ const name=l=>accountLabel(l)||l;
+ for(const label of [...new Set(labels)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort((a,b)=>name(a).localeCompare(name(b))||a.localeCompare(b))){
   while(used.has(next))next++;
   out[label]=next;used.add(next);
  }

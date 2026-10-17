@@ -130,4 +130,8 @@
 
 - `node --check`(web 전체), `node --test 'tests/js/*.test.mjs'`: 37개 통과. 신규: 테마 9개의 실제 CSS 색을 읽어 앞 5개 계열(서비스 색)의 색상 차이가 모두 25° 이상인지(기존 순서는 paper 등 6개 테마에서 2~7°로 실패), 서비스·계정·제작사 고정 번호, 순위 단계(최대일 하나가 있어도 다른 날이 1~5단계로 나뉨, 같은 값·한 날·빈 목록).
 - 테마별 스크린샷(forest·paper·ocean·charcoal, 합성 데이터): 범례 색이 Codex·Claude·Antigravity마다 다른 계열이고 달력이 다섯 단계를 모두 쓰는지, 빗금 줄이 밝은·어두운 테마에서 보이는지 확인했다.
+- `.venv/bin/python -m unittest discover -s tests -q`: 427개 통과. `tests/browser_ci.py`: 브라우저 검사 20개 통과.
 
+### 리뷰
+
+- 자동 리뷰 1회차 지적 1건(P2) 반영: 다른 Claude 계정의 색 번호를 내부 계정 ID 순이 아니라 화면에 보이는 이름 순으로 정한다(이름이 같으면 ID 순). 이름이 ID와 반대 순서인 계정 두 개로 실패를 먼저 확인한 테스트를 추가했다(JS 37개 통과). `browser_claude_accounts`·`browser_smoke`·`browser_model_visibility` 통과.

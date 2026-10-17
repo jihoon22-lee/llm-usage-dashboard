@@ -364,6 +364,11 @@ test('services keep their series slot; further Claude accounts follow in name or
   assert.deepEqual([routes.codex,routes['claude-code'],routes.antigravity,routes.devin,routes['opencode-go']],[0,1,2,3,4]);
   const accounts=f.groupSlots('account',['claude-code:unknown','codex','claude-code:abababababab','claude-code']);
   assert.deepEqual([accounts.codex,accounts['claude-code'],accounts['claude-code:abababababab'],accounts['claude-code:unknown']],[0,1,6,7]);
+  // The shown names decide the order, not the account IDs behind them.
+  f.setClaudeAccounts([{route:'claude-code:abababababab',label:'Zeta'},{route:'claude-code:cdcdcdcdcdcd',label:'Alpha'}]);
+  const named=f.groupSlots('account',['claude-code:abababababab','claude-code:cdcdcdcdcdcd']);
+  assert.deepEqual([named['claude-code:cdcdcdcdcdcd'],named['claude-code:abababababab']],[6,7]);
+  f.setClaudeAccounts([]);
   assert.deepEqual({...f.groupSlots('provider',['Anthropic'])},{OpenAI:0,Anthropic:1,Google:2,Cognition:3});
 });
 
