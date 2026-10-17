@@ -42,6 +42,18 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(u['totals']['requests'],2)
         self.assertTrue(self.store.rollup_matches())
 
+    def test_supplemented_subscription_usage_is_not_no_usage(self):
+        # Codex used only through its account total (no local records) was still used;
+        # an account day crossing the selected period leaves 'no usage' unknown.
+        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)
+        subs=lambda **kw:{s['route']:s for s in self.usage(subscriptions={'codex':20,'devin':10},**kw)['subscriptions']}
+        inside=subs(period='custom',start='2026-10-11',end='2026-10-12')
+        self.assertEqual((inside['codex']['period_tokens'],inside['devin']['period_tokens']),(1000,0))
+        self.assertIsNone(subs(period='today')['codex']['period_tokens'])
+        # Claude cloud supplements count toward the Claude subscription too.
+        self.event();self.evidence()
+        self.assertEqual(self.usage(period='today',subscriptions={'claude-code':20})['subscriptions'][0]['period_tokens'],100)
+
     def test_cumulative_results_are_differenced_not_summed(self):
         self.event();self.evidence()
         self.evidence(160,end='2026-10-12T11:00:00Z')
