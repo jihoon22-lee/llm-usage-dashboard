@@ -224,7 +224,7 @@ function renderUsage(data){
  renderScope(data);
  // Total tokens and cost lead, each with its change against the window before (or the
  // chosen comparison) up to the same elapsed time. Token changes compare tokens whatever
- // metric is selected; a running account day is left out of both sides (API `prior`).
+ // metric is selected; an account day still open at the cut counts on neither side (API `prior`).
  const prior=data.prior;
  const change=(current,previous)=>{const text=priorChange(prior,data.period,current,previous);return text?`<small class="stat-delta">${esc(text)}</small>`:'';};
  const card=(label,value,tip,lines)=>`<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" data-tip="${esc(tip)}">${value}</div>${lines}</div>`;

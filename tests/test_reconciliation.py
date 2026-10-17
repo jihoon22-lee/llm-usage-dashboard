@@ -68,6 +68,22 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(total(body['totals']),700)
         self.assertEqual((prior['current_tokens'],total(prior),prior['residual_tokens'],prior['complete']),(300,100,100,True))
 
+    def test_card_comparison_counts_a_finished_account_day_first_received_before_its_end(self):
+        # A day whose count stopped changing before the day ended keeps that earliest
+        # receipt; once the day is over it is a whole total like any other on both sides.
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            namespace=self.store.account_namespace(c,'codex')
+            for day,tokens,seen in (('2026-09-20',50,'2026-09-21T01:00:00Z'),('2026-10-02',100,'2026-10-02T11:00:00Z'),
+                                    ('2026-10-10',300,'2026-10-10T11:00:00Z'),('2026-10-12',400,'2026-10-12T11:00:00Z')):
+                start=stamp(day+'T00:00:00Z')
+                for checked in (stamp(seen),max(stamp(seen),min(start+86400+3600,self.now))):
+                    snapshot(self.store,c,source='codex-account',scope_id='codex-day:'+day,route='codex',provider='OpenAI',
+                             model=None,start=start,end=start+86400,tokens=tokens,checked=checked,account_key=namespace)
+        prior=self.usage(period='custom',start='2026-10-06',end='2026-10-13',sections='core')['prior']
+        # 10-02 (100) and 10-10 (300) ended by their cut; 10-12 is still open at 21:00 KST.
+        self.assertEqual((prior['current_tokens'],total(prior),prior['complete']),(300,100,True))
+
     def test_card_comparison_needs_every_counted_source_to_reach_the_earlier_window(self):
         # Local records reach back, but account days begin inside the current window: the
         # earlier window's account share is missing, not zero.
@@ -83,6 +99,14 @@ class ReconciliationTests(unittest.TestCase):
                                             (('2026-09-20',50),('2026-10-01',100),('2026-10-08',300))],self.now)
         prior=alone.usage(now=self.now,**span)['prior']
         self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,100))
+        # An older account day fully matched by local records leaves no residual, yet the
+        # account evidence still reaches the earlier window.
+        matched=Store(Path(self.tmp.name)/'matched.db')
+        with matched.connect() as c:
+            matched.event(c,'m',stamp('2026-09-20T03:00:00Z'),'OpenAI','codex','gpt-test',dict(output=100))
+            matched.account_tokens(c,'codex',[dict(startDate='2026-09-20',tokens=100),dict(startDate='2026-10-08',tokens=300)],self.now)
+        prior=matched.usage(now=self.now,**span)['prior']
+        self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,0))
 
     def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
         # The Codex account total beyond this PC's records has no model or project. Under
