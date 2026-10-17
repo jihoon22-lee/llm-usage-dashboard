@@ -257,8 +257,8 @@ function renderUsage(data){
 function renderAccountGap(gap){
  const box=$('account-gap');
  if(!gap||!gap.days||!gap.days.length){box.innerHTML='';return;}
- const days=gap.days.slice(-7).reverse();
- box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 ${esc(residualName)} <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
+ const days=gap.days.slice(-7).reverse(),opened=box.querySelector('details')?.open;
+ box.innerHTML=`<details class="source-group account-gap"${opened?' open':''}><summary>Codex 계정 합계 대비 ${esc(residualName)} <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
   +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다. 모델·프로젝트별 보기에서는 ‘${esc(residualName)}’ 한 항목으로 따로 보이며, 이름은 설정의 구독에서 바꿀 수 있습니다.</p>`
   +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>${esc(residualName)}</th></tr></thead><tbody>`
   +days.map(d=>`<tr><td>${esc(d.day)} 09:00–다음 날 09:00</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
@@ -283,20 +283,34 @@ function renderReconciliation(r){
   +'<p>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</p></div></details>';
  if(focused)box.querySelector('summary').focus({preventScroll:true});
 }
-// Collection status: a summary, problems first, grouped by provider, each with what it means.
+// Collection status, problems first: failures and values to check as cards; what is not
+// collected now (미제공·미사용) stays listed in a neutral color, never folded away; the
+// normal sources fold by provider. Fold states survive the periodic refresh.
+const SOURCE_BUCKETS={error:'bad',partial:'warn',stale:'warn',unavailable:'na',idle:'idle',ended:'idle'};
 function renderSources(list){
- const bucket=s=>s.status==='error'||s.status==='unavailable'?'bad':s.status==='partial'||s.status==='stale'?'warn':s.status==='idle'||s.status==='ended'?'idle':'ok';
- const counts={ok:0,warn:0,bad:0,idle:0};list.forEach(s=>counts[bucket(s)]++);
+ const box=$('sources'),opened=new Set([...box.querySelectorAll('details[open]')].map(el=>el.dataset.fold));
+ const bucket=s=>SOURCE_BUCKETS[s.status]||'ok';
+ const order=(a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name);
+ const counts={bad:0,warn:0,na:0,idle:0,ok:0};list.forEach(s=>counts[bucket(s)]++);
+ const action=list.filter(s=>['bad','warn'].includes(bucket(s))).sort(order);
+ const quiet=list.filter(s=>['na','idle'].includes(bucket(s))).sort(order);
  const groups=new Map();
- for(const s of [...list].sort((a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name)))
-  (groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
- const worst=items=>Math.min(...items.map(s=>SOURCE_RANK[s.status]??4));
- const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span><small>${s.checked?when(s.checked):'확인 기록 없음'}</small></p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
- const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업')||worst(a[1])-worst(b[1]));
- $('sources').innerHTML=`<div class="source-summary"><span class="ok">정상 <strong>${counts.ok}</strong></span><span class="warn">확인 필요 <strong>${counts.warn}</strong></span><span class="bad">실패·미수집 <strong>${counts.bad}</strong></span><span class="idle">미사용 <strong>${counts.idle}</strong></span></div>`
-  +ordered.map(([name,items])=>name==='내부 작업'
-   ?`<details class="source-group"><summary>${esc(name)} <small>${items.length}개 · 보정·백필 작업</small></summary><div class="source-list">${items.map(card).join('')}</div></details>`
-   :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('');
+ for(const s of list.filter(s=>bucket(s)==='ok').sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
+ const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업'));
+ const time=s=>`<small>${s.checked?when(s.checked):'확인 기록 없음'}</small>`;
+ const card=s=>`<div class="source src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${bucket(s)!=='ok'&&SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const fold=(key,summary,body)=>`<details class="source-group" data-fold="${key}"${opened.has(key)?' open':''}><summary>${summary}</summary>${body}</details>`;
+ const tally=(name,key)=>`<span class="${counts[key]?key:''}">${name} <strong>${counts[key]}</strong></span>`;
+ box.innerHTML=`<div class="source-summary">${tally('실패','bad')}${tally('확인 필요','warn')}${tally('미제공','na')}${tally('미사용','idle')}${tally('정상','ok')}</div>`
+  +(action.length?`<section class="source-group source-action"><h4>조치 필요 <small>${action.length}개</small></h4><div class="source-list">${action.map(card).join('')}</div></section>`
+   :'<p class="source-clear">조치가 필요한 수집원이 없습니다.</p>')
+  +(quiet.length?`<section class="source-group source-quiet"><h4>지금 수집하지 않는 경로 <small>${quiet.length}개</small></h4>`
+   +`<p class="source-hint">${[...new Set(quiet.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`
+   +`<ul class="source-rows">${quiet.map(s=>`<li><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${s.detail?`<span class="source-detail">${esc(s.detail)}</span>`:''}${time(s)}</li>`).join('')}</ul></section>`:'')
+  +(counts.ok?fold('ok',`정상 ${counts.ok}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
+   ordered.map(([name,items])=>name==='내부 작업'
+    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(card).join('')}</div>`)
+    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('')):'');
 }
 let modelFilter='';
 $('model-search').addEventListener('input',event=>{modelFilter=event.target.value.trim().toLowerCase();if(lastUsage)renderModelTable(lastUsage);});

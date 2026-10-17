@@ -661,10 +661,11 @@ async def main():
             assert (await pending.value).suggested_filename.startswith('llm-usage-sessions-')
             await touch.locator('#tabs [data-view="reports"]').click()
             assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
-            # The status tab's source list is a plain section — visible
-            # without unfolding anything (M4).
+            # The status tab leads with its summary and what needs action, visible
+            # without unfolding anything (M4); normal sources fold.
             await touch.locator('#tabs [data-view="status"]').click()
-            await expect(touch.locator('#sources .source').first).to_be_visible()
+            await expect(touch.locator('#sources .source-summary')).to_be_visible()
+            await expect(touch.locator('#sources .source-clear, #sources .source-action .source').first).to_be_visible()
             assert not touch_errors,touch_errors
             await touch.close()
             # Empty data: no fabricated percentages or account coverage.

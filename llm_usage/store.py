@@ -22,6 +22,7 @@ SERIES_KEYS = (*TOKENS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+ONE_TIME_SOURCES = {'session-backfill'}
 # Source detail written while a subscription is marked ended in the settings.
 USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
 SUPPORTED_ROUTES = ('codex','claude-code','antigravity','opencode-go','devin')
@@ -1190,8 +1191,10 @@ class Store:
         sources.append(self.storage_row(self.state(c,'last_local')))
         ops_rows={'수집기','일일 백업','원본 대조','데이터베이스'}
         for source in sources:
-            # Ops pseudo-rows carry daily cadences; they compute staleness themselves.
-            if source['name'] in ops_rows:continue
+            # Ops pseudo-rows carry daily cadences; they compute staleness themselves. A
+            # finished one-time job (the attribution backfill) keeps its result: its age
+            # is not an old value.
+            if source['name'] in ops_rows or source['name'] in ONE_TIME_SOURCES:continue
             # Resource reads run every 15 minutes, for every Claude account ('claude-credits:<id>').
             source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'].split(':')[0] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
             if source['status']=='ok' and now.timestamp()-source['checked']>source_stale:
