@@ -199,7 +199,8 @@ with sync_playwright() as p:
     assert page.evaluate("JSON.parse(localStorage.getItem('llmDefaults')).view")=='usage'
     expect(page.locator('#cfg-subs .cfg-row').first).to_be_visible()
     assert page.locator('#cfg-pricing tbody tr').count()>0
-    assert page.locator('#cfg-thresholds input').count()==4
+    # Four thresholds and the two of the pre-reset notice.
+    assert page.locator('#cfg-thresholds input').count()==6
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
     assert page.locator('.cfg-toggles input').count()==6
