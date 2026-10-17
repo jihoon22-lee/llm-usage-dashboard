@@ -3,6 +3,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import socket
 import sqlite3
 import time
@@ -307,24 +308,47 @@ def collect_antigravity_tokens(store,settings):
         else:store.source_changed(c,'antigravity-tokens','unavailable','토큰 관측 연결됨 · 다음 Antigravity 상태줄 수신 대기')
 
 
+def status_files(folder):
+    """(path, base route) of every status-line file; Claude homes other than the
+    default write claude-code@<home tag>.json."""
+    folder=Path(folder)
+    found=[(folder/'claude-code.json','claude-code'),(folder/'antigravity.json','antigravity')]
+    try:found+=[(p,'claude-code') for p in sorted(folder.glob('claude-code@*.json')) if re.fullmatch(r'claude-code@[0-9a-f]{12}\.json',p.name)]
+    except OSError:pass
+    return [(p,route) for p,route in found if p.exists()]
+
+
+def status_route(store,c,path,route,data):
+    """The quota route a status line reports for; None when its account is unknown."""
+    if route!='claude-code':return route
+    key=data.get('account')
+    if isinstance(key,str) and re.fullmatch('[0-9a-f]{64}',key):
+        from .claude_accounts import route_for
+        primary=store.state(c,'claude_primary_account')
+        return route_for(key,primary) if primary else 'claude-code' if path.name=='claude-code.json' else None
+    # Older wrappers did not identify the account; only the default home's file is used.
+    return 'claude-code' if path.name=='claude-code.json' else None
+
+
 def collect_status(store,settings):
     from .config import ended_routes
     collect_antigravity_tokens(store,settings)
     ended=ended_routes(settings)
     for folder in settings.get('status_inboxes',[]):
-        for route in ('claude-code','antigravity'):
-            if route in ended:continue
-            path=Path(folder)/(route+'.json')
-            if not path.exists():continue
+        for path,base in status_files(folder):
+            route=base
             try:
                 data=json.loads(path.read_text())
                 with store.connect() as c:
+                    route=status_route(store,c,path,base,data)
+                    if route is None or route in ended:continue
                     checked=data['checked']
                     if checked<=store.state(c,'status:'+str(path),0):continue
                     count=status_limits(store,c,route,data['data'],checked)
                     store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
                     store.save_state(c,'status:'+str(path),checked)
             except (OSError,ValueError,KeyError,TypeError,AttributeError):
+                if route is None or route in ended:continue
                 with store.connect() as c:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
 
 
@@ -498,7 +522,7 @@ def write_summaries(store,settings):
     (Windows homes under the read-only sandbox) are skipped."""
     from .config import ended_routes
     from .notify import brief_line
-    line=brief_line(store.limits(ended=ended_routes(settings)))
+    line=brief_line(store.limits(ended=ended_routes(settings),names=settings.get('claude_account_names')))
     for folder in settings.get('status_inboxes',[]):
         try:
             path=Path(folder);tmp=path/'summary.txt.tmp'
@@ -552,7 +576,7 @@ def run(settings,once=False):
         repair_provider_labels(store)
         retire_legacy_sources(store)
         store.rebuild_rollup()
-        last_local=last_limits=0
+        last_local=last_limits=last_accounts=0
         with store.connect() as c:
             backup=store.state(c,'backup',{}) or {};verify=store.state(c,'verify',{}) or {}
         last_backup,backup_ok=backup.get('ts',0),backup.get('ok',True)
@@ -568,6 +592,11 @@ def run(settings,once=False):
             # Web-edited keys (ended subscriptions, account names) apply without a restart.
             current_settings=with_local(settings)
             collect_status(store,current_settings)
+            # Often enough to see short-lived processes (a commit review lives ~20 s).
+            if time.time()-last_accounts>=5:
+                # Which Claude account handles each session: hook markers and live processes.
+                from .claude_attribution import refresh as attribute_accounts
+                attribute_accounts(store,current_settings);last_accounts=time.time()
             with store.connect() as c:
                 request=store.state(c,'refresh_request_id',0)
                 requested_at=store.state(c,'refresh_requested',0)
@@ -581,6 +610,8 @@ def run(settings,once=False):
                     collect_local(store,settings)
                     from .telemetry import resolve
                     with store.connect() as c:resolve(store,c)
+                    from .claude_attribution import refresh as attribute_accounts
+                    attribute_accounts(store,current_settings,evidence=False)
                 last_local=time.time()
             if once or manual or now-last_limits>=300:
                 poll_limits(store,current_settings,manual=manual);last_limits=time.time()
@@ -596,7 +627,8 @@ def run(settings,once=False):
                             sources=[dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
                             month=store.project_month(c,current,load_pricing(local))
                         from .config import ended_routes
-                        notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local)),spike,sources,month,local.get('project_budgets'))
+                        notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local),local.get('claude_account_names')),
+                                        spike,sources,month,local.get('project_budgets'))
                         from .reports import ensure_report,summary as report_summary
                         weekly=ensure_report(store,current,load_pricing(local))
                         if weekly:

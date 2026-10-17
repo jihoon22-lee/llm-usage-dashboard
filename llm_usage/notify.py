@@ -111,7 +111,10 @@ WINDOWS={'five_hour':'5시간','seven_day':'주간','seven_day_opus':'Opus 주�
 
 def _label(row):
     """The same names the dashboard shows (bucketName/quotaLabel in web/format.js)."""
-    bucket=row['bucket'];service=SERVICE.get(row['route'],row['route'])
+    from .claude_accounts import family
+    bucket=row['bucket'];service=SERVICE.get(family(row['route']),row['route'])
+    # Several Claude accounts: 'Claude(Max 5x) 5시간'.
+    if row.get('account_label'):service+=f"({row['account_label']})"
     agy=re.fullmatch(r'(gemini|3p)-(5h|weekly)(?:-(\d+))?',bucket) if row['route']=='antigravity' else None
     if agy:
         return f"{service} {'5시간' if agy[2]=='5h' else '주간'} {'3rd party' if agy[1]=='3p' else 'Gemini'}"+(f' {agy[3]}' if agy[3] else '')

@@ -139,7 +139,8 @@ def supplements(c):
             if missing or (detail and detail.get('reasoning')):
                 out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
                                 model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
-                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:')))
+                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
+                                account=_account(c,r)))
             previous=r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence
@@ -148,6 +149,13 @@ def supplements(c):
     out=[x for x in out if x['route']!='codex' or x['source']=='codex-account' or
          not any(a['start']<x['end'] and x['start']<a['end'] for a in account_days)]
     return out,conflicts
+
+
+def _account(c,row):
+    """Subscription account of an aggregate: the Claude account whose login read it."""
+    if row['route']!='claude-code':return row['route']
+    found=c.execute('SELECT data FROM state WHERE key=?',('claude_cloud_account:'+str(row['account_key']),)).fetchone() if row['account_key'] else None
+    return json.loads(found[0]) if found else 'claude-code'
 
 
 def matches(row,scope):
@@ -217,8 +225,9 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                 data[collection].append(target)
                 if collection=='sessions':data['sessions_total']=data.get('sessions_total',0)+1
             if target is not None:add(target,e)
-        for kind in ('route','provider','model','project'):
+        for kind in ('route','provider','model','project','account'):
             value=e.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None)
+            if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
             if options is not None and value and value not in options:options.append(value)
     for e in entries:add(data['lifetime'],e)
@@ -250,8 +259,10 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     where='e.ts>=? AND e.ts<?';args=[a,b]
     if scope:
         kind,_,value=scope.partition(':')
-        if kind in ('route','provider','model','project'):
-            where+=' AND '+('COALESCE(e.project,\'미분류\')' if kind=='project' else 'e.'+kind)+'=?';args.append(value)
+        if kind in ('route','provider','model','project','account'):
+            column=("COALESCE(e.project,'미분류')" if kind=='project' else
+                    "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
+            where+=' AND '+column+'=?';args.append(value)
     origins=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
                       "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
                       'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)

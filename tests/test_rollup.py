@@ -14,7 +14,7 @@ PRICING={'m1':dict(input=1,cached=0.1,output=10,cache_write=1),
 def fresh_rollup(c):
     return sorted((tuple(r) for r in c.execute(
         'SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-        +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*) FROM events GROUP BY 1,2,3,4,5,6')),key=repr)
+        +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*),account FROM events GROUP BY 1,2,3,4,5,6,account')),key=repr)
 
 
 class RollupTests(unittest.TestCase):
@@ -30,12 +30,16 @@ class RollupTests(unittest.TestCase):
                 self.store.event(c,f'e{i}',ts,rng.choice(['OpenAI','Anthropic']),route,rng.choice(['m1','m2','m3']),
                                  {k:rng.randint(0,5000) for k in TOKENS},
                                  session=rng.choice([None,'s1','s2','s3']),project=rng.choice([None,'p1','p2']),
-                                 agent_kind=rng.choice([None,'main','sub']))
+                                 agent_kind=rng.choice([None,'main','sub']),
+                                 account=rng.choice([None,'claude-code','claude-code:0123456789ab']) if route=='claude-code' else None)
             # Streaming maxima (update), attribution backfill (update), removals (delete).
             for i in range(0,1500,7):
                 self.store.event(c,f'e{i}',0,'OpenAI','codex','m1',{k:9000 for k in TOKENS})
             c.execute("UPDATE events SET project='p9',session='s9' WHERE project IS NULL AND id LIKE 'e1%'")
             c.execute("DELETE FROM events WHERE id LIKE 'e2%'")
+            # Account attribution moves events between accounts (update).
+            c.execute("UPDATE events SET account='claude-code:unknown' WHERE route='claude-code' AND account IS NULL AND id LIKE 'e4%'")
+            c.execute("UPDATE events SET account=NULL WHERE route='claude-code' AND account='claude-code' AND id LIKE 'e5%'")
             # Antigravity merges replace whole rows.
             c.execute("INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning) "
                       "SELECT id,ts+7200,provider,'antigravity',model,1,2,3,4,0 FROM events WHERE id LIKE 'e3%'")

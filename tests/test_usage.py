@@ -24,6 +24,13 @@ from llm_usage.statusline import sanitize
 from llm_usage.webapp import create_app
 
 
+
+
+def default_home_env(home):
+    """The wrapper as run by the default Claude home of a disposable HOME; the
+    developer's CLAUDE_CONFIG_DIR and real login are never inherited."""
+    return {**{k:v for k,v in os.environ.items() if k!='CLAUDE_CONFIG_DIR'},'HOME':str(home)}
+
 class UsageTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -211,14 +218,14 @@ class UsageTests(unittest.TestCase):
         from llm_usage import statusline
         (self.root/'claude-code-original.json').write_text(json.dumps({'command':f'{sys.executable} -c "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(7)"'}))
         raw=b'{"rate_limits":{"five_hour":{"used_percentage":25}},"content":"PRIVATE BODY"}\n'
-        result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True)
+        result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True,env=default_home_env(self.root))
         self.assertEqual(result.returncode,7);self.assertEqual(result.stdout,raw)
         self.assertNotIn('PRIVATE BODY',(self.root/'claude-code.json').read_text())
 
     def test_status_wrapper_appends_a_fresh_opt_in_summary_only(self):
         from llm_usage import statusline
         (self.root/'claude-code-original.json').write_text(json.dumps({'command':f'{sys.executable} -c "print(1)"'}))
-        run=lambda:subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=b'{}',capture_output=True).stdout
+        run=lambda:subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=b'{}',capture_output=True,env=default_home_env(self.root)).stdout
         self.assertEqual(run(),b'1\n')
         (self.root/'summary.txt').write_text('Codex 주간 44%\n')
         self.assertEqual(run().decode(),'1\nCodex 주간 44%\n')
@@ -239,7 +246,7 @@ class UsageTests(unittest.TestCase):
         raw=b'{"rate_limits":{"five_hour":{"used_percentage":25}}}'
         for broken in (None,'{not json'):
             if broken is not None:(self.root/'claude-code-original.json').write_text(broken)
-            result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True)
+            result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True,env=default_home_env(self.root))
             self.assertEqual((result.returncode,result.stdout,result.stderr),(0,b'',b''))
         self.assertIn('five_hour',json.loads((self.root/'claude-code.json').read_text())['data']['rate_limits'])
 

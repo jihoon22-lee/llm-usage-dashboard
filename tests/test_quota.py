@@ -192,6 +192,7 @@ class QuotaTests(unittest.TestCase):
         auth=self.root/'opencode.json';auth.write_text(json.dumps({'opencode-go':{'type':'api','key':'TEST-ONLY-PRIVATE'}}))
         url=f'http://127.0.0.1:{server.server_port}/usage'
         with patch('llm_usage.limits.OPENCODE_GO_USAGE_URL',url),patch('llm_usage.limits.poll_claude'),patch('llm_usage.limits.collect_claude_cloud'),\
+             patch('llm_usage.limits.claude_contexts',return_value=[]),\
              patch('llm_usage.limits.poll_devin'),patch('llm_usage.limits.read_codex',side_effect=OSError('offline')):
             poll_limits(self.store,{'opencode_auth':str(auth),'codex_binary':'codex'})
         self.assertEqual(seen,[])
@@ -214,6 +215,7 @@ class QuotaTests(unittest.TestCase):
         url=f'http://127.0.0.1:{server.server_port}/usage'
         settings={'opencode_auth':str(auth),'codex_binary':'codex'}
         with patch('llm_usage.limits.OPENCODE_GO_USAGE_URL',url),patch('llm_usage.limits.poll_claude'),patch('llm_usage.limits.collect_claude_cloud'),\
+             patch('llm_usage.limits.claude_contexts',return_value=[]),\
              patch('llm_usage.limits.poll_devin'),patch('llm_usage.limits.read_codex',side_effect=OSError('offline')):
             poll_limits(self.store,settings)
             self.assertEqual(len(calls),1)
@@ -435,6 +437,7 @@ class QuotaTests(unittest.TestCase):
         called=[]
         with patch.object(limits,'agy_app_servers',side_effect=OSError),\
              patch.object(limits,'poll_claude'),patch.object(limits,'poll_devin'),patch.object(limits,'collect_claude_cloud'),\
+             patch.object(limits,'claude_contexts',return_value=[]),\
              patch.object(limits,'read_codex',side_effect=lambda _,**kw:called.append('codex') or {}),\
              patch.object(limits,'codex_limits',return_value=0):
             limits.poll_limits(self.store,{'codex_binary':'codex','opencode_auth':str(self.root/'missing.json')})

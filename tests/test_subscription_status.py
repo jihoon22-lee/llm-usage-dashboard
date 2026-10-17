@@ -59,7 +59,8 @@ class EndedSubscriptionTests(unittest.TestCase):
     def test_poll_skips_ended_subscriptions_and_marks_their_sources(self):
         settings = dict(database=str(self.root/'usage.db'), ended_subscriptions={'devin': {'since': NOW}, 'codex': {'since': NOW}})
         called = []
-        with patch.object(limits, 'poll_claude', lambda *a: called.append('claude')), \
+        with patch.object(limits, 'claude_contexts', return_value=[None]), \
+             patch.object(limits, 'poll_claude', lambda *a: called.append('claude')), \
              patch.object(limits, 'poll_claude_resources', lambda *a: called.append('claude-resources')), \
              patch.object(limits, 'collect_claude_cloud', lambda *a: called.append('cloud')), \
              patch.object(limits, 'poll_devin', lambda *a: called.append('devin')), \
@@ -143,9 +144,9 @@ class EndedSubscriptionApiTests(unittest.TestCase):
         for body in ({'prices': {}, 'ended': 'devin'}, {'prices': {}, 'ended': ['Devin!']}, {'prices': {}, 'ended': ['devin\n']},
                      {'prices': {'codex\n': 1}}):
             self.assertEqual(self.post('/api/config/subscription-prices', body).status_code, 400, body)
-        response = self.post('/api/config/subscription-prices', {'prices': {'claude-code:746dd27df00e': 100}})
+        response = self.post('/api/config/subscription-prices', {'prices': {'claude-code:a1b2c3d4e5f6': 100}})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json['subscription_prices'], {'claude-code:746dd27df00e': 100})
+        self.assertEqual(response.json['subscription_prices'], {'claude-code:a1b2c3d4e5f6': 100})
 
 
 if __name__ == '__main__':
