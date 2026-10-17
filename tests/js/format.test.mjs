@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -308,6 +308,16 @@ test('several Claude accounts stay one service with account labels',()=>{
  assert.equal(f.sourceName('claude-oauth'),'claude-oauth');
  assert.equal(f.sourceName('claude-oauth:000000000000'),'claude-oauth:000000000000');
  assert.equal(f.accountWhere({homes:[{kind:'zerosub',name:'claude-0123abcd4567'},{kind:'windows',name:'Windows'}]}),'zerosub 관리 홈 claude-0123abcd4567');
+ // An exhausted account names the other accounts' current value in the same window only.
+ const rows=[{route:'claude-code',bucket:'five_hour',status:'fresh',remaining:0},
+  {route:'claude-code:abababababab',bucket:'five_hour',status:'fresh',remaining:92,account_label:'Max 5x'},
+  {route:'claude-code:abababababab',bucket:'seven_day',status:'fresh',remaining:97,account_label:'Max 5x'},
+  {route:'claude-code:unknown',bucket:'five_hour',status:'fresh',remaining:50},
+  {route:'claude-code:cdcdcdcdcdcd',bucket:'five_hour',status:'stale',remaining:80},
+  {route:'codex',bucket:'five_hour',status:'fresh',remaining:70}];
+ assert.deepEqual([...f.otherAccounts(rows,rows[0])],['Claude(Max 5x) 5시간 92.0%']);
+ assert.deepEqual([...f.otherAccounts([{...rows[1],remaining:40,blocked_by:{bucket:'seven_day'}},rows[0]],rows[0])],['Claude(Max 5x) 5시간 사용 불가']);
+ assert.deepEqual([...f.otherAccounts(rows,rows[5])],[]);
  f.setClaudeAccounts(undefined);
  assert.equal(f.multiClaude(),false);
 });

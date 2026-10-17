@@ -23,24 +23,41 @@ def _totals(usage):
     return dict(unallocated_tokens=(usage.get('reconciliation') or {}).get('unallocated_tokens',0),supplemental_tokens=(usage.get('reconciliation') or {}).get('supplemental_tokens',0),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'))
 
 
-def exhaustions(c,start,end):
-    """Quota exhaustions (remaining reaching 0 from above) observed in [start, end),
-    per route and bucket, in each bucket's own source stream."""
-    counts={}
-    # One bucket is often observed by two streams (account poll and local status line,
-    # 'codex' and 'codex-local'); each sees the same exhaustion. Count one stream per
-    # bucket, preferring the account poll as quota_history does, else the busiest one.
+def _streams(c,start,end):
+    """(route, bucket, source) observed in [start, end), one source stream per bucket.
+
+    One bucket is often observed by two streams (account poll and local status line,
+    'codex' and 'codex-local'); each sees the same exhaustion. Use one stream per
+    bucket, preferring the account poll as quota_history does, else the busiest one."""
+    from .claude_accounts import account_source
     streams={}
     for route,bucket,source,n in c.execute('SELECT route,bucket,source,COUNT(*) FROM limit_history WHERE checked>=? AND checked<? '
                                            'GROUP BY route,bucket,source',(start,end)).fetchall():
         streams.setdefault((route,bucket),[]).append((source,n))
     chosen=[]
     for (route,bucket),items in streams.items():
-        from .claude_accounts import account_source
         account=account_source(route)
         source=account if any(s==account for s,_ in items) else max(items,key=lambda item:(item[1],item[0]))[0]
         chosen.append((route,bucket,source))
-    for route,bucket,source in chosen:
+    return sorted(chosen)
+
+
+def _names(c):
+    """The provider's own bucket label and, with several Claude accounts, account names."""
+    def label(route,bucket):
+        row=c.execute('SELECT data FROM state WHERE key=?',('label:'+route+':'+bucket,)).fetchone()
+        return json.loads(row[0]) if row else None
+    from .claude_accounts import describe
+    accounts=describe(c)
+    names={a['route']:a['label'] for a in accounts} if len(accounts)>1 else {}
+    return label,names
+
+
+def exhaustions(c,start,end):
+    """Quota exhaustions (remaining reaching 0 from above) observed in [start, end),
+    per route and bucket, in each bucket's own source stream."""
+    counts={}
+    for route,bucket,source in _streams(c,start,end):
         previous=c.execute('SELECT remaining FROM limit_history WHERE route=? AND bucket=? AND source=? AND checked<? ORDER BY checked DESC LIMIT 1',
                            (route,bucket,source,start)).fetchone()
         before=previous[0] if previous else None
@@ -49,16 +66,78 @@ def exhaustions(c,start,end):
             if remaining is None:continue
             if before is not None and remaining<=0<before:counts[(route,bucket)]=counts.get((route,bucket),0)+1
             before=remaining
-    # The provider's own label (Codex 'Title · 주간') where one was recorded.
-    def label(route,bucket):
-        row=c.execute('SELECT data FROM state WHERE key=?',('label:'+route+':'+bucket,)).fetchone()
-        return json.loads(row[0]) if row else None
-    # Several Claude accounts: each entry names its account ('Claude(Max 5x) 5시간').
-    from .claude_accounts import describe
-    accounts=describe(c)
-    names={a['route']:a['label'] for a in accounts} if len(accounts)>1 else {}
+    # The provider's own label (Codex 'Title · 주간') where one was recorded; several
+    # Claude accounts: each entry names its account ('Claude(Max 5x) 5시간').
+    label,names=_names(c)
     return [dict(route=r,bucket=b,count=n,display_name=label(r,b),**({'account_label':names[r]} if r in names else {}))
             for (r,b),n in sorted(counts.items())]
+
+
+def quota_use(c,start,end):
+    """How each quota window was used in [start, end), from observations only.
+
+    observed_hours: time covered by consecutive observations (no gap over 10 minutes).
+    zero_hours: the part of it where two consecutive observations were both 0%.
+    before_reset: the last observed remaining of each window that reset in the week,
+    counted only when the reset was seen as it happened: a reading before the window's
+    reset time and the next one at most 10 minutes later, after it. A window that reset
+    unobserved is not guessed; a reset time that moves while a window is idle, or a grant
+    that resets a window early, is not a reset. Windows observed for under a minute are
+    left out, as are observations of a previous account (before its current epoch)."""
+    from .insights import segment
+    since={r[0]:r[1] for r in c.execute('SELECT route,since FROM resource_accounts')}
+    out=[]
+    for route,bucket,source in _streams(c,start,end):
+        rows=[dict(r) for r in c.execute('SELECT checked,remaining,resets FROM limit_history WHERE route=? AND bucket=? AND source=? '
+                                         'AND checked>=? AND checked<? ORDER BY checked',
+                                         (route,bucket,source,max(start,since.get(route) or 0),end))]
+        interruptions=[r[0] for r in c.execute('SELECT checked FROM quota_interruptions WHERE source=? AND checked>=? AND checked<?',
+                                               (source,start,end))]
+        points=segment(rows,interruptions)
+        observed=zero=0.0;before=[];epoch_reset=None
+        for previous,point in zip(points,points[1:]):
+            if previous['break_before']:epoch_reset=previous['resets']
+            span=point['checked']-previous['checked']
+            if span<=600 and previous['remaining'] is not None and point['remaining'] is not None:
+                observed+=span
+                if previous['remaining']<=0 and point['remaining']<=0:zero+=span
+            # The window's reset time passed between two consecutive readings: whatever the
+            # next reading says (a new window, no window yet, the old time), the reset was seen.
+            # A new window read up to a minute early (clock skew) counts as well.
+            skew=60 if point['break_reason']=='reset' else 0
+            if (span<=600 and epoch_reset is not None and start<=epoch_reset<end
+                    and previous['checked']<epoch_reset<=point['checked']+skew and previous['remaining'] is not None):
+                before.append(previous['remaining'])
+        if observed<60 and not before:continue
+        out.append(dict(route=route,bucket=bucket,observed_hours=round(observed/3600,2),zero_hours=round(zero/3600,2),
+                        resets_observed=len(before),
+                        before_reset=dict(avg=round(sum(before)/len(before),1),min=round(min(before),1),max=round(max(before),1)) if before else None))
+    label,names=_names(c)
+    for row in out:
+        row['display_name']=label(row['route'],row['bucket'])
+        if row['route'] in names:row['account_label']=names[row['route']]
+    return out
+
+
+def quota_covered(store,c,start):
+    """Whether quota history from `start` on is still kept (history is pruned after
+    retention_days); a rebuilt older week keeps the figures computed back then."""
+    pruned=store.state(c,'history_pruned')
+    return not pruned or start>=pruned-store.thresholds['retention_days']*86400
+
+
+def streaks(store,c,monday,exhausted):
+    """{(route, bucket): consecutive weeks ending with this one that had an exhaustion},
+    from the stored reports of the previous weeks; a missing week ends a run."""
+    out={}
+    for e in exhausted or []:
+        key=(e['route'],e['bucket']);run=1
+        for back in range(1,KEEP):
+            report=store.state(c,'report:'+(monday-timedelta(days=7*back)).strftime('%Y-%m-%d'))
+            if not report or not any((x['route'],x['bucket'])==key and x.get('count',0)>0 for x in report.get('exhausted') or []):break
+            run+=1
+        out[key]=run
+    return out
 
 
 def build(store,now,pricing=None):
@@ -80,15 +159,23 @@ def build(store,now,pricing=None):
         e['change_pct']=(e['tokens']-before[e['route']])/before[e['route']]*100 if before.get(e['route']) else None
     top=sorted(models['rows'],key=lambda r:-token_total(r))[:5]
     totals,prior=_totals(current),_totals(previous)
+    # Quota figures need the week's quota history; once it is pruned they are None
+    # (not 0) and ensure_report keeps the values an earlier build computed.
     with store.connect() as c:
-        exhausted=exhaustions(c,monday.timestamp(),next_monday.timestamp())
+        covered=quota_covered(store,c,monday.timestamp())
+        exhausted=exhaustions(c,monday.timestamp(),next_monday.timestamp()) if covered else None
+        use=quota_use(c,monday.timestamp(),next_monday.timestamp()) if covered else None
+        runs=streaks(store,c,monday,exhausted)
+    counts={(e['route'],e['bucket']):e['count'] for e in exhausted or []}
+    for row in use or []:
+        row['exhausted']=counts.get((row['route'],row['bucket']),0);row['streak']=runs.get((row['route'],row['bucket']),0)
     busiest=max(current['series'],key=lambda p:sum(token_total(v) for v in p['values'].values()),default=None)
     return dict(week=day(monday),start=day(monday),end=day(next_monday-timedelta(days=1)),built=now,
                 totals=totals,previous=prior,
                 change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if prior['tokens'] else None,
                 routes=sorted(routes.values(),key=lambda e:-e['tokens']),
                 models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost')) for r in top],
-                exhausted=exhausted,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
+                exhausted=exhausted,quota_use=use,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
 
 
 def recount_exhaustions(store,now):
@@ -130,10 +217,15 @@ def ensure_report(store,now,pricing=None):
         revision=identity(json.dumps([records,additions,pricing],sort_keys=True))
         refresh=revision!=store.state(c,'reports:usage-revision')
         old_weeks=[r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%'")] if refresh else []
-    for key in old_weeks:
+    # Oldest first, so a week's consecutive-exhaustion count reads the rebuilt week before it.
+    for key in sorted(old_weeks):
         week=datetime.strptime(key[7:],'%Y-%m-%d').replace(tzinfo=KST)
         rebuilt=build(store,(week+timedelta(days=7)).timestamp(),pricing);rebuilt['built']=now
-        with store.connect() as c:store.save_state(c,key,rebuilt)
+        with store.connect() as c:
+            old=store.state(c,key) or {}
+            for field in ('exhausted','quota_use'):
+                if rebuilt.get(field) is None and old.get(field) is not None:rebuilt[field]=old[field]
+            store.save_state(c,key,rebuilt)
     if refresh:
         with store.connect() as c:store.save_state(c,'reports:usage-revision',revision)
     with store.connect() as c:
@@ -167,5 +259,17 @@ def summary(report):
            +(f" · 전주 대비 {report['change_pct']:+.0f}%" if report['change_pct'] is not None else '')]
     if report['totals']['cost'] is not None:lines.append(f"공개 단가 환산 ${report['totals']['cost']:,.0f}")
     lines+= [f"{SERVICE.get(r['route'],r['route'])} {tokens(r['tokens'])}"+(f" ({r['change_pct']:+.0f}%)" if r['change_pct'] is not None else '') for r in report['routes'][:5]]
-    if report['exhausted']:lines.append('한도 소진 '+', '.join(f"{_label(e)} {e['count']}회" for e in report['exhausted']))
+    if report['exhausted']:lines.append('한도 소진 '+', '.join(f"{_label(e)} {e['count']}회"+(f" ({e['streak']}주 연속)" if e.get('streak',0)>1 else '')
+                                                         for e in _with_streaks(report)))
+    zero=sorted((q for q in report.get('quota_use') or [] if q['zero_hours']>0),key=lambda q:-q['zero_hours'])
+    if zero:lines.append('0%로 머문 시간 '+', '.join(f"{_label(q)} {_hours(q['zero_hours'])}" for q in zero[:3]))
     return '\n'.join(lines)
+
+
+def _with_streaks(report):
+    runs={(q['route'],q['bucket']):q.get('streak',0) for q in report.get('quota_use') or []}
+    return [{**e,'streak':runs.get((e['route'],e['bucket']),0)} for e in report['exhausted']]
+
+
+def _hours(value):
+    return f'{round(value*60)}분' if value<1 else f'{value:.1f}시간'.replace('.0시간','시간')

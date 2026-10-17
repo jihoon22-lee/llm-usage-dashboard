@@ -151,6 +151,23 @@ class NotifyTests(unittest.TestCase):
         # An account without a known label keeps its source name.
         self.assertEqual(sorted(m[1] for m in sent),['claude-credits:cdcdcdcdcdcd 수집 실패 지속','claude-oauth · Max 5x 수집 실패 지속'])
 
+    def test_exhaustion_names_other_accounts_current_value(self):
+        self.sent=[]
+        def limits(pro):
+            return dict(low_percent=15,limits=[
+                dict(route='claude-code',bucket='five_hour',remaining=pro,resets=NOW+3600,status='fresh',account_label='Pro'),
+                dict(route='claude-code:abababababab',bucket='five_hour',remaining=92,resets=NOW+900,status='fresh',account_label='Max 5x'),
+                dict(route='claude-code:abababababab',bucket='seven_day',remaining=97,resets=NOW+86400,status='fresh',account_label='Max 5x'),
+                dict(route='claude-code:unknown',bucket='five_hour',remaining=50,resets=NOW+900,status='fresh'),
+                dict(route='claude-code:cdcdcdcdcdcd',bucket='five_hour',remaining=80,resets=NOW+900,status='stale',account_label='Team')])
+        self.run_eval(limits(40))
+        sent=self.run_eval(limits(0))
+        exhausted=[m for m in sent if m[0]=='exhausted']
+        self.assertEqual(len(exhausted),1)
+        self.assertTrue(exhausted[0][2].endswith('· 다른 계정 Claude(Max 5x) 5시간 92.0%'),exhausted[0][2])
+        # Another service never lists accounts.
+        self.assertEqual(notify.other_accounts([dict(route='codex',bucket='x',remaining=0,status='fresh')],dict(route='codex',bucket='x')),[])
+
     def test_labels_name_pool_and_optional_buckets(self):
         self.assertEqual(notify._label(dict(route='antigravity',bucket='gemini-argon-wtu-weekly')),'Antigravity 주간 Gemini argon-wtu')
         self.assertEqual(notify._label(dict(route='antigravity',bucket='3p-5h-2')),'Antigravity 5시간 3rd party 2')

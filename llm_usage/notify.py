@@ -125,6 +125,16 @@ def _label(row):
     return name if name.startswith(service) else f'{service} {name}'
 
 
+def other_accounts(rows,row):
+    """When one Claude account's window is exhausted, the other accounts' current value in
+    the same window ('Claude(Max 5x) 5시간 92.0%'), as on the dashboard. No recommendation."""
+    from .claude_accounts import FAMILY,UNKNOWN,family
+    if family(row['route'])!=FAMILY:return []
+    return [f"{_label(r)} {'사용 불가' if r.get('blocked_by') else format(r['remaining'],'.1f')+'%'}" for r in rows
+            if r['route'] not in (row['route'],UNKNOWN) and family(r['route'])==FAMILY and r['bucket']==row['bucket']
+            and r.get('status')=='fresh' and r.get('remaining') is not None]
+
+
 def quota_messages(rows,previous,low_percent):
     """(messages, new state) from quota rows; the first sight of a bucket only records it."""
     state={};messages=[]
@@ -136,7 +146,8 @@ def quota_messages(rows,previous,low_percent):
         if before is None:continue
         label=_label(row)
         if now_state['zero'] and not before['zero']:
-            messages.append(('exhausted',f'{label} 소진',f"잔여 0% · 초기화 {_when(row.get('resets'))}"))
+            others=other_accounts(rows,row)
+            messages.append(('exhausted',f'{label} 소진',f"잔여 0% · 초기화 {_when(row.get('resets'))}"+(' · 다른 계정 '+', '.join(others) if others else '')))
         elif now_state['low'] and not before['low']:
             messages.append(('low',f'{label} 잔여 {remaining:.1f}%',f"잔여 적음 기준 {low_percent}% 이하 · 초기화 {_when(row.get('resets'))}"))
         elif before['low'] and not now_state['low'] and before.get('resets')!=now_state['resets']:

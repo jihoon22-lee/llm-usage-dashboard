@@ -279,7 +279,10 @@ function renderAlerts(limits,usage){
  const items=[];
  (limits.limits||[]).forEach(r=>{
   const label=quotaLabel(r);
-  if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15))items.push({text:`${label} 잔여 ${percent(r.remaining)}`,route:familyOf(r.route)});
+  if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15)){
+   const others=r.remaining<=0?otherAccounts(limits.limits,r):[];
+   items.push({text:`${label} 잔여 ${percent(r.remaining)}${others.length?' · 다른 계정 '+others.join(', '):''}`,route:familyOf(r.route)});
+  }
  });
  // Balances and reset grants ending within a day; the chip jumps to the resource card.
  expiringResources(limits.resources?.items,limits.now).forEach(e=>items.push({text:expiryText(e,limits.now),resource:e.id}));
