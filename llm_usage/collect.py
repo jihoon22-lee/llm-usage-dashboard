@@ -636,10 +636,16 @@ def run(settings,once=False):
                         notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local),local.get('claude_account_names')),
                                         spike,sources,month,local.get('project_budgets'))
                         from .reports import ensure_report,summary as report_summary
-                        weekly=ensure_report(store,current,load_pricing(local))
-                        if weekly:
-                            from .notify import deliver
-                            deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label'),local.get('claude_account_names')))],current)
+                        from .monthly import ensure_months
+                        from .reconciliation import held
+                        pricing=load_pricing(local)
+                        # The weekly and monthly checks read the same supplements.
+                        with held():
+                            weekly=ensure_report(store,current,pricing)
+                            if weekly:
+                                from .notify import deliver
+                                deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label'),local.get('claude_account_names')))],current)
+                            ensure_months(store,current,pricing,local.get('subscription_prices'),local.get('ended_subscriptions'))
                     except Exception as exc:notify_failure(store,exc)  # never stops collection
             sd_notify('WATCHDOG=1')
             if not once and due(last_backup,backup_ok,now):

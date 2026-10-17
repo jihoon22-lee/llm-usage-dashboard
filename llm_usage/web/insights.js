@@ -1,5 +1,17 @@
 'use strict';
 // Insights: subscription value, sessions, reports, projects, calendar and cache trend.
+// Ratios span 1x to 100x+, so bars use a log scale with the 1x break-even marked.
+function valueBar(ratio,top){
+ const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
+ const ticks=[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join('');
+ return `<span class="value-bar${ratio<1?' under':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
+}
+// Claude accounts sit together under their one service, the original account first.
+function subscriptionOrder(subs){
+ const order=claudeAccounts.list.map(a=>a.route);
+ const rank=s=>[routeNames[familyOf(s.route)]||s.route,order.includes(s.route)?order.indexOf(s.route):-1];
+ return [...subs].sort((a,b)=>{const x=rank(a),y=rank(b);return compareText.compare(x[0],y[0])||x[1]-y[1];});
+}
 function renderInsights(data){
  const subs=data.subscriptions||[];
  const month=data.insights&&data.insights.month;
@@ -11,16 +23,9 @@ function renderInsights(data){
  const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
  const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
   ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';
- // Ratios span 1x to 100x+, so bars use a log scale with the 1x break-even marked.
  const ratios=subs.map(s=>s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null).filter(v=>v!=null);
- const top=Math.max(10,...ratios);
- const bar=ratio=>{const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
-  const ticks=[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join('');
-  return `<span class="value-bar${ratio<1?' under':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;};
- // Claude accounts sit together under their one service, the original account first.
- const order=claudeAccounts.list.map(a=>a.route);
- const rank=s=>[routeNames[familyOf(s.route)]||s.route,order.includes(s.route)?order.indexOf(s.route):-1];
- const ordered=[...subs].sort((a,b)=>{const x=rank(a),y=rank(b);return compareText.compare(x[0],y[0])||x[1]-y[1];});
+ const top=Math.max(10,...ratios),bar=ratio=>valueBar(ratio,top);
+ const ordered=subscriptionOrder(subs);
  $('subvalue').innerHTML=monthLine+monthAlert+(ordered.length?ordered.map(s=>{
   const ratio=s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null;
   const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
@@ -100,19 +105,19 @@ let openSession=null;const sessionDetails=new Map();
 let reportsLoaded=0;
 async function loadReports(){
  if(Date.now()-reportsLoaded<300000)return;
- try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[],d.this_week||null);}
+ try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[],d.this_week||null);renderMonths(d.months||[]);}
  catch(e){$('reports').innerHTML=`<p class="hint">주간 리포트를 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
 // Quota use of the week from observations only: no verdicts, and no zeros for what was not
 // observed. Reports built before this field existed show only the exhaustion line.
 const hoursText=v=>v==null?'—':v>0&&v<1?Math.round(v*60)+'분':(Math.round(v*10)/10)+'시간';
-function quotaUseHtml(r){
+function quotaUseHtml(r,unit='주',from=''){
  if(!('quota_use' in r))return '';
- if(r.quota_use==null)return '<p class="hint">이 주의 한도 이력은 보존 기간이 지나 한도 활용·소진 횟수를 다시 계산하지 않았습니다.</p>';
- if(!r.quota_use.length)return '<p class="hint">이 주에 관측된 한도 이력이 없습니다.</p>';
+ if(r.quota_use==null)return `<p class="hint">이 ${unit}의 한도 이력은 보존 기간이 지나 한도 활용·소진 횟수를 계산하지 않았습니다.</p>`;
+ if(!r.quota_use.length)return `<p class="hint">이 ${unit}에 관측된 한도 이력이 없습니다.${from}</p>`;
  const rows=[...r.quota_use].sort((a,b)=>b.zero_hours-a.zero_hours||b.exhausted-a.exhausted||b.observed_hours-a.observed_hours||compareText.compare(quotaLabel(a),quotaLabel(b)));
  const before=q=>!q.before_reset?'미관측':q.resets_observed>1?`평균 ${percent(q.before_reset.avg)} · 최소 ${percent(q.before_reset.min)} · ${q.resets_observed}회`:`${percent(q.before_reset.avg)} · 1회`;
- return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만</p>`
+ return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만${from}</p>`
   +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hoursText(q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hoursText(q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 // Claude Code by account (계정 미확인 included): the names set now, else the ones stored.
@@ -140,6 +145,41 @@ function renderReports(list,week=lastWeek){
  lastReports=list;lastWeek=week;
  $('reports').innerHTML=thisWeekHtml(week)+(list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
   :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>');
+}
+// Monthly subscription settlements (finished KST months): each subscription's list-price
+// value against the monthly price set when the month was first settled.
+const monthStart=m=>Date.parse(m.start+'T00:00:00+09:00')/1000;
+function monthHtml(m){
+ const subs=subscriptionOrder(m.subscriptions),top=Math.max(10,...subs.map(s=>s.ratio||0));
+ const rows=subs.map(s=>{
+  const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
+  const value=s.value!=null?`환산 ${usd(s.value)}`:s.tokens===0?'사용 기록 없음':'환산 미산정';
+  const result=s.ratio!=null?`${s.ratio.toFixed(1)}배`:s.monthly_usd===0?'무료 프리뷰':'—';
+  const name=familyOf(s.route)==='claude-code'&&!accountLabel(s.route)&&s.label?`${routeNames['claude-code']} · ${s.label}`:serviceFull(s.route);
+  return `<div class="sub-row${s.ratio!=null?' with-bar':''}"><strong>${esc(name)}</strong><span>${value} · ${price}${s.tokens?` · <span data-tip="${fmt(s.tokens)} 토큰">${compact(s.tokens)}</span> 토큰`:''}</span><strong>${esc(result)}</strong>${s.ratio!=null?valueBar(s.ratio,top):''}</div>`;
+ }).join('');
+ const codex=subs.some(s=>s.route==='codex')&&m.totals.residual_tokens;
+ const from=m.quota_from!=null&&m.quota_from>monthStart(m)?` · ${esc(when(m.quota_from))}부터 보존된 이력`:'';
+ return `<p class="report-head"><strong>${esc(m.month)}</strong> · ${esc(m.start.slice(5))} ~ ${esc(m.end.slice(5))} · ${compact(m.totals.tokens)} 토큰 · ${fmt(m.totals.requests)}회${m.totals.cost!=null?' · 공개 단가 환산 '+usd(m.totals.cost):''}${m.partial?` · 부분 월(기록 ${esc(m.records_from.slice(5))}부터)`:''}</p>`
+  +(rows||'<p class="hint">이 달에 결산할 구독이 없습니다.</p>')
+  +(codex?`<p class="hint">Codex 토큰에는 이 PC에 기록이 없는 ${esc(residualName)} <span data-tip="${fmt(m.totals.residual_tokens)} 토큰">${compact(m.totals.residual_tokens)}</span> 토큰이 들어 있고, 환산 가치는 요청 기록만 계산합니다.</p>`:'')
+  +`<p class="hint">상위 모델: ${m.models.map(x=>`${esc(x.model)} ${compact(x.tokens)}`).join(' · ')||'—'}</p>`
+  +(m.accounts?`<p class="hint">Claude 계정별: ${accountParts(m.accounts)}</p>`:'')
+  +(m.projects.length?`<p class="hint">상위 프로젝트: ${m.projects.map(x=>`${esc(x.project)} ${compact(x.tokens)}`).join(' · ')}</p>`:'')
+  +quotaUseHtml(m,'달',from);
+}
+// Month by month: the total, its list-price value and each priced subscription's ratio.
+function monthTrendHtml(list){
+ const ratios=m=>subscriptionOrder(m.subscriptions).filter(s=>s.ratio!=null).map(s=>`<span class="ratio-item">${esc(serviceShort(s.route,accountLabel(s.route)||s.label))} ${s.ratio.toFixed(1)}배</span>`).join(' · ')||'—';
+ return `<div class="table-wrap"><table class="report-table month-trend"><thead><tr><th>월</th><th>토큰</th><th>환산</th><th>구독료 대비</th></tr></thead><tbody>${list.map(m=>`<tr><td>${esc(m.month)}${m.partial?' <small>부분</small>':''}</td><td data-tip="${fmt(m.totals.tokens)}">${compact(m.totals.tokens)}</td><td>${usd(m.totals.cost)}</td><td>${ratios(m)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+let lastMonths=null;
+function renderMonths(list=lastMonths){
+ lastMonths=list;if(!list)return;
+ $('monthly').innerHTML=list.length?monthHtml(list[0])
+  +(list.length>1?`<p class="report-head report-sub"><strong>월별 추이</strong></p>${monthTrendHtml(list)}<details class="report-older"><summary>이전 결산 ${list.length-1}개</summary>${list.slice(1).map(m=>`<details><summary>${esc(m.month)} · ${compact(m.totals.tokens)} 토큰${m.totals.cost!=null?' · 환산 '+usd(m.totals.cost):''}</summary>${monthHtml(m)}</details>`).join('')}</details>`:'')
+  :'<p class="hint">첫 결산은 수집기가 다음 달 첫 수집 주기에 지난달 기록으로 작성합니다.</p>';
+ applyGeometry($('monthly'));
 }
 function sessionDetailHtml(d){
  if(!d.models.length)return '<tr class="sess-detail-row"><td colspan="8"><p class="hint">이 세션의 기록이 더 이상 없습니다.</p></td></tr>';

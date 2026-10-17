@@ -50,6 +50,22 @@ THIS_WEEK = dict(start='2026-09-28', end='2026-10-04', tokens=1.5e9, requests=20
                             cost=300.0, uncached_input=1.2e9, cached_input=0, output=0, cache_creation=0),
                  accounts=None, routes=[dict(route='codex', tokens=1e9), dict(route='claude-code', tokens=5e8)])
 
+# Settled months: September whole, August partial with its quota history already pruned.
+MONTHS = [dict(month='2026-09', start='2026-09-01', end='2026-09-30', built=now, partial=False, records_from=None,
+               totals=dict(tokens=5.2e9, requests=40000, cost=4100.0, residual_tokens=3e8),
+               subscriptions=[dict(route='codex', monthly_usd=200, value=3600.0, tokens=4.5e9, ratio=18.0),
+                              dict(route='claude-code', monthly_usd=100, value=500.0, tokens=7e8, ratio=5.0),
+                              dict(route='devin', monthly_usd=None, value=20.0, tokens=1e8, ratio=None)],
+               models=[dict(model='gpt-fixture', route='codex', tokens=4.5e9, cost=3600.0)],
+               projects=[dict(project='fixture-project', tokens=3e9, cost=2000.0)], accounts=None, residual=None,
+               quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=600, zero_hours=12.5,
+                               resets_observed=4, before_reset=dict(avg=10.0, min=0.0, max=30.0), exhausted=2)],
+               quota_from=1788222600),
+          dict(month='2026-08', start='2026-08-01', end='2026-08-31', built=now, partial=True, records_from='2026-08-20',
+               totals=dict(tokens=1e8, requests=900, cost=100.0, residual_tokens=0),
+               subscriptions=[dict(route='codex', monthly_usd=200, value=100.0, tokens=1e8, ratio=0.5)],
+               models=[], projects=[], accounts=None, residual=None, quota_use=None, quota_from=None)]
+
 
 def preview(page):
     def serve(route):
@@ -82,7 +98,7 @@ def preview(page):
             data['sessions_total'] = 1
             route.fulfill(json=data)
         elif path == '/api/reports':
-            route.fulfill(json=dict(reports=[REPORT], this_week=THIS_WEEK))
+            route.fulfill(json=dict(reports=[REPORT], this_week=THIS_WEEK, months=MONTHS))
         elif path == '/api/session':
             route.fulfill(json=SESSION)
         elif path == '/api/config':
@@ -204,6 +220,32 @@ with sync_playwright() as p:
     expect(week).to_contain_text('지난주 같은 시점 기록 부족')
     expect(week).to_contain_text('이번 주에는 아직 사용 기록이 없습니다.')
     page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(THIS_WEEK)))
+    # Monthly settlements: the last month in full, each subscription against the price it
+    # was settled with; the month-by-month table; older months folded.
+    monthly = page.locator('#monthly')
+    expect(monthly).to_contain_text('2026-09 · 09-01 ~ 09-30 · 5.2B 토큰 · 40,000회 · 공개 단가 환산 $4,100')
+    expect(monthly.locator(':scope > .sub-row')).to_have_count(3)
+    expect(monthly.locator(':scope > .sub-row .value-bar')).to_have_count(2)
+    codex = monthly.locator(':scope > .sub-row', has_text='OpenAI / Codex')
+    expect(codex).to_contain_text('환산 $3,600 · 월 구독료 $200 · 4.5B 토큰')
+    expect(codex).to_contain_text('18.0배')
+    expect(monthly).to_contain_text('환산 $20 · 월 구독료 미설정 · 100M 토큰')
+    expect(monthly).to_contain_text('Codex 토큰에는 이 PC에 기록이 없는')
+    expect(monthly).to_contain_text('09. 01. 09:30부터 보존된 이력')
+    expect(monthly.locator(':scope > .table-wrap .quota-use tbody tr')).to_have_count(1)
+    trend = monthly.locator('.month-trend tbody tr')
+    expect(trend).to_have_count(2)
+    expect(trend.first).to_contain_text('Claude 5.0배 · Codex 18.0배')
+    expect(trend.nth(1)).to_contain_text('2026-08 부분')
+    older = monthly.locator('.report-older')
+    expect(older.locator(':scope > summary')).to_have_text('이전 결산 1개')
+    older.locator(':scope > summary').click()
+    older.locator('details > summary').click()
+    expect(older).to_contain_text('부분 월(기록 08-20부터)')
+    expect(older).to_contain_text('이 달의 한도 이력은 보존 기간이 지나')
+    page.evaluate("renderMonths([])")
+    expect(monthly).to_contain_text('첫 결산은 수집기가 다음 달 첫 수집 주기에')
+    page.evaluate("renderMonths(%s)" % json.dumps(MONTHS))
     # Settings: secrets are write-only; save, clear and test go through the API only.
     page.locator('#settings-open').click()
     expect(page.locator('#ntfy-state')).to_have_text('설정됨 · ntfy.sh')

@@ -496,6 +496,17 @@ class AccountTests(unittest.TestCase):
         week = reports.this_week(self.store, NOW)
         self.assertEqual([(a['account'], a['tokens']) for a in week['accounts']], [(R_SECOND, 10)])
 
+    def test_monthly_settlement_names_accounts_and_skips_ones_not_seen_yet(self):
+        from llm_usage import monthly
+        accounts(self.store, self.cfg, NOW)
+        last = monthly.shift(monthly.month_start(NOW), -1)
+        with self.store.connect() as c:
+            self.store.event(c, 'm1', last.timestamp() + 86400, 'Anthropic', 'claude-code', 'claude-test',
+                             dict(uncached_input=1_000_000), account=FAMILY)
+        settled = monthly.build(self.store, last, NOW, {'claude-test': dict(input=1, output=1)}, {'claude-code': 20, R_SECOND: 100}, {})
+        # The second account was first seen this month: last month has nothing to settle for it.
+        self.assertEqual([(s['route'], s.get('label'), s['value']) for s in settled['subscriptions']], [(FAMILY, 'Pro', 1.0)])
+
     def test_hook_installer_merges_with_existing_hooks_once(self):
         settings_file = self.h.default / 'settings.json'
         existing = {'statusLine': {'type': 'command', 'command': 'echo x'},
