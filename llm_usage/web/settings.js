@@ -13,6 +13,7 @@ function draftKey(input){
  if(input.id)return '#'+CSS.escape(input.id);
  if(input.dataset.model)return `input[data-model="${CSS.escape(input.dataset.model)}"][data-key="${input.dataset.key}"]`;
  if(input.dataset.route)return `input[data-route="${CSS.escape(input.dataset.route)}"]`;
+ if(input.dataset.ended)return `input[data-ended="${CSS.escape(input.dataset.ended)}"]`;
  if(input.dataset.budgetKey)return `[data-budget="${CSS.escape(input.closest('[data-budget]').dataset.budget)}"] input[data-budget-key="${input.dataset.budgetKey}"]`;
  if(input.dataset.notifyEvent)return `input[data-notify-event="${input.dataset.notifyEvent}"]`;
  return null;
@@ -101,10 +102,16 @@ async function loadConfig(){
  if(epoch!==settingsEpoch||version!==configVersion)return;
  const drafts=settingsOnline?settingsDrafts():[];
  settingsAvailable(true);
- const prices=cfg.subscription_prices||{};
- const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
- $('cfg-subs').innerHTML=(routes.map(r=>`<label class="cfg-row"><span>${esc(routeNames[r]||r)}<small>${esc(r)}</small></span><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정"></label>`).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
-  +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="월 구독료 저장">저장</button>';
+ const prices=cfg.subscription_prices||{},ended=cfg.ended_subscriptions||{};
+ const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...Object.keys(ended),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
+ // One row per subscription: its monthly price and whether it has ended.
+ $('cfg-subs').innerHTML=(routes.map(r=>{
+  const name=routeNames[r]||r,since=ended[r]?.since;
+  return `<div class="cfg-row cfg-sub${ended[r]?' ended':''}"><span>${esc(name)}<small>${esc(r)}${since?' · '+esc(when(since))+' 종료 표시':''}</small></span>`
+   +`<span class="cfg-sub-controls"><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정" aria-label="${esc(name)} 월 구독료 (USD)">`
+   +`<label class="cfg-check"><input type="checkbox" data-ended="${esc(r)}"${ended[r]?' checked':''}> 구독 종료</label></span></div>`;
+ }).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
+  +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="구독 설정 저장">저장</button>';
  $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
  renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});
@@ -124,7 +131,8 @@ $('cfg-subs').addEventListener('click',async e=>{
   if(!Number.isFinite(v)||v<0){cfgMsg('cfg-subs-msg','금액을 확인하세요: '+i.dataset.route);return;}
   prices[i.dataset.route]=v;
  }
- try{await settingsApi('/api/config/subscription-prices',{prices});savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다.');refresh();}
+ const ended=[...$('cfg-subs').querySelectorAll('input[data-ended]:checked')].map(i=>i.dataset.ended);
+ try{await settingsApi('/api/config/subscription-prices',{prices,ended});savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다. 구독 종료 변경은 한도 화면에 바로, 수집에는 다음 갱신부터 반영됩니다.');loadConfig();refresh();}
  catch(err){cfgMsg('cfg-subs-msg',err.message);}
 });
 function priceBody(model){

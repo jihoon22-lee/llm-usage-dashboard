@@ -118,7 +118,7 @@ function renderLimits(data){
  $('quota-strip').hidden=true;$('quota-strip').replaceChildren();
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
  // a window blocked by its exhausted parent is left out because its reset frees nothing.
- const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by);
+ const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by&&r.status!=='ended');
  const exhausted=r=>r.remaining!=null&&r.remaining<=0;
  const exhaustedUpcoming=validUpcoming.filter(exhausted);
  const regularUpcoming=validUpcoming.filter(r=>!exhausted(r)).sort((a,b)=>a.resets-b.resets);

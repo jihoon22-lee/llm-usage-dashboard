@@ -126,14 +126,16 @@ def main():
         if args.command=='telemetry':
             from .telemetry import serve
             serve(store,args.port,args.token_file);return
+        from .config import ended_routes
+        ended=ended_routes(config)
         if args.command=='brief':
             from .notify import brief_line
-            print(brief_line(store.limits()));return
-        if args.command=='limits':data=store.limits()
+            print(brief_line(store.limits(ended=ended)));return
+        if args.command=='limits':data=store.limits(ended=ended)
         else:
             from .pricing import load_pricing
             data=store.usage(**{k:v for k,v in vars(args).items() if k!='command'},pricing=load_pricing(config),
-                             subscriptions=config.get('subscription_prices'))
+                             subscriptions={k:v for k,v in (config.get('subscription_prices') or {}).items() if k not in ended})
     except (ValueError,TypeError,OverflowError) as exc:parser.error(str(exc))
     print(json.dumps(data,ensure_ascii=False,indent=2))
 

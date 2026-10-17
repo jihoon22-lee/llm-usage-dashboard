@@ -319,6 +319,10 @@ tr[data-scope]:hover{background:var(--raised)}
 .cfg-row>span{min-width:150px}
 .cfg-row>span small{display:block;color:var(--muted);font-size:var(--fs-meta)}
 .cfg-row input{width:130px}
+.cfg-sub-controls{display:flex;align-items:center;gap:12px}
+.cfg-check{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.cfg-row .cfg-check input,#cfg-subs .cfg-check input{width:auto;min-height:0;padding:0}
+.cfg-sub.ended>span:first-child{color:var(--muted)}
 .cfg-toggles{display:flex;gap:12px;font-size:12px}
 .cfg-toggles input{width:auto}
 .cfg-num{width:90px}

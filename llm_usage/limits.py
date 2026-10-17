@@ -712,15 +712,31 @@ def poll_codex_thread(store,settings):
             store.source(c,'codex-thread-usage','error',f'스레드 누계 조회 실패 ({type(exc).__name__}) · 계정 합계 유지')
 
 
+def mark_ended(store,*names):
+    """A subscription marked ended in the settings is not polled; its sources say why."""
+    from .store import USER_ENDED_DETAIL
+    with store.connect() as c:
+        for name in names:store.source_changed(c,name,'ended',USER_ENDED_DETAIL)
+
+
 def poll_limits(store,settings,manual=False):
-    poll_claude(store,settings)
-    poll_claude_resources(store,settings)
-    try:collect_claude_cloud(store,settings)
-    except Exception as exc:  # never stops the other reads
-        with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 수집 실패 ({type(exc).__name__})')
-    poll_devin(store,settings)
-    poll_antigravity_app(store,settings)
+    from .config import ended_routes
+    ended=ended_routes(settings)
+    if 'claude-code' in ended:mark_ended(store,'claude-oauth','claude-credits','claude-resets','claude-cloud','claude-cloud-supplement')
+    else:
+        poll_claude(store,settings)
+        poll_claude_resources(store,settings)
+        try:collect_claude_cloud(store,settings)
+        except Exception as exc:  # never stops the other reads
+            with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 수집 실패 ({type(exc).__name__})')
+    if 'devin' in ended:mark_ended(store,'devin')
+    else:poll_devin(store,settings)
+    if 'antigravity' in ended:mark_ended(store,'antigravity-app')
+    else:poll_antigravity_app(store,settings)
     for route in ('codex','opencode-go'):
+        if route in ended:
+            mark_ended(store,route,*(('codex-account-usage','codex-thread-usage') if route=='codex' else ()))
+            continue
         if route=='opencode-go' and not manual:
             with store.connect() as c:
                 pause=store.state(c,'opencode_go_poll',{})
