@@ -81,6 +81,14 @@ class ReconciliationTests(unittest.TestCase):
         self.assertNotIn('unknown',model['scope_options']['model'])
         with self.store.connect() as c:month=self.store.project_month(c,self.now)
         self.assertEqual((month['residual_tokens'],{k:v['tokens'] for k,v in month['projects'].items()}),(850,{'미분류':150}))
+        # Narrowing to '미분류' or 'unknown' leaves it out; its service and provider keep it.
+        scoped=lambda scope:self.usage(scope=scope,group='model',**span)
+        unassigned=scoped('project:미분류')
+        self.assertEqual((total(unassigned['totals']),unassigned['totals'].get('residual_tokens',0)),(150,0))
+        self.assertEqual([r['model'] for r in unassigned['rows']],['gpt-test'])
+        self.assertEqual(total(scoped('model:unknown')['totals']),0)
+        self.assertEqual((total(scoped('route:codex')['totals']),total(scoped('provider:OpenAI')['totals'])),(1000,1000))
+        self.assertEqual(sum(m['tokens'] for m in self.store.project_detail('미분류',now=self.now)['models']),150)
 
     def test_cumulative_results_are_differenced_not_summed(self):
         self.event();self.evidence()

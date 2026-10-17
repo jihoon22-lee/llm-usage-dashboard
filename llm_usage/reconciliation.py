@@ -180,6 +180,8 @@ def _account(c,row):
 def matches(row,scope):
     if not scope:return True
     kind,_,value=scope.partition(':')
+    # The Codex account residual is no model and no project: not 'unknown' or '미분류'.
+    if row.get('source')=='codex-account' and kind in ('model','project'):return False
     return (row.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None))==value
 
 

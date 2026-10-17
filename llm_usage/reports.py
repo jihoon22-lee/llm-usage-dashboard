@@ -9,6 +9,9 @@ import json
 from .store import KST
 
 KEEP=12
+# Bumped when what a report holds changes, so the stored weeks are rebuilt once (not
+# announced again). 2: the Codex account residual left the top models for its own line.
+REPORT_FORMAT=2
 
 
 def last_week(now):
@@ -265,7 +268,7 @@ def ensure_report(store,now,pricing=None):
             ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3',(low,high))]
         additions,_=supplements(c)
         additions=[e for e in additions if e['start']<high and e['end']>low]
-        revision=identity(json.dumps([records,additions,pricing],sort_keys=True))
+        revision=identity(json.dumps([records,additions,pricing,REPORT_FORMAT],sort_keys=True))
         refresh=revision!=store.state(c,'reports:usage-revision')
         old_weeks=[r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'report:%'")] if refresh else []
     # Oldest first, so a week's consecutive-exhaustion count reads the rebuilt week before it.

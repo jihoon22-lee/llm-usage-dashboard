@@ -232,6 +232,25 @@ class ReportTests(unittest.TestCase):
         self.assertNotEqual(after['built'],before['built'])
         self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
 
+    def test_report_format_change_rebuilds_stored_weeks_once(self):
+        from llm_usage.reconciliation import RESIDUAL
+        later=stamp('2026-10-05T01:00:00Z')
+        with self.store.connect() as c:
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-09-29',tokens=4000)],NOW)
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            # A week stored by an earlier version: the residual among the models, no own line.
+            old=self.store.state(c,'report:2026-09-28')
+            self.store.save_state(c,'report:2026-09-28',{**old,'models':[dict(model='unknown',route='codex',tokens=2000,cost=None)],'residual':None})
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:self.assertEqual(self.store.state(c,'report:2026-09-28')['residual'],None)
+        with patch.object(reports,'REPORT_FORMAT',reports.REPORT_FORMAT+1):
+            self.assertIsNone(reports.ensure_report(self.store,later+120,PRICING))
+        with self.store.connect() as c:rebuilt=self.store.state(c,'report:2026-09-28')
+        self.assertEqual((rebuilt['built'],rebuilt['residual']['tokens']),(later+120,2000))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in rebuilt['models']])
+        self.assertNotIn('unknown',[m['model'] for m in rebuilt['models']])
+
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')
         self.assertIsNotNone(reports.ensure_report(self.store,later,PRICING))

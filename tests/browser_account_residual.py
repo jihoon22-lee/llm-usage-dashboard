@@ -125,6 +125,15 @@ with sync_playwright() as p:
     expect(projects.locator(f'tr[data-scope="project:{RESIDUAL}"]')).to_have_count(0)
     expect(projects.locator('tr[data-scope="project:미분류"]')).to_have_count(1)
     expect(page.locator('#scope optgroup[label="모델"] option', has_text=RESIDUAL)).to_have_count(0)
+    # Narrowing to the '미분류' project leaves the residual out of its totals and tables.
+    projects.locator('tr[data-scope="project:미분류"]').click()
+    expect(page.locator('#scope')).to_have_value('project:미분류')
+    expect(page.locator('#cards .stat', has_text='전체 토큰').locator('.stat-value')).to_have_attribute('data-tip', '156,000')
+    expect(page.locator('#rows tr.residual-row')).to_have_count(0)
+    expect(projects.locator('tr.residual-row')).to_have_count(0)
+    page.locator('#scope-chip').click()
+    expect(page.locator('#scope')).to_have_value('')
+    expect(page.locator('#rows tr.residual-row')).to_have_count(1)
     with page.expect_download() as download:
         page.locator('#csv-export').click()
     models_csv = Path(download.value.path()).read_text(encoding='utf-8-sig')
@@ -135,6 +144,9 @@ with sync_playwright() as p:
     expect(line).to_contain_text('요청 수 없음')
     expect(line.locator('svg')).to_have_count(0)
     page.select_option('#metric', 'tokens')
+    # The weekly report, drawn before the name changes, is drawn again with the new name.
+    page.locator('#tab-reports').click()
+    expect(page.locator('#reports')).to_contain_text('Codex 로컬 미기록')
     # Settings: the user names it; reports, the status tab and the views follow.
     page.locator('#settings-open').click()
     label = page.locator('#cfg-residual-label')
