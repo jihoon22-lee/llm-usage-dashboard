@@ -3,7 +3,7 @@
 const $=id=>document.getElementById(id);
 // Scrolling animates only when the system does not ask for reduced motion.
 const motion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';
-const seriesLabel=label=>$('group').value==='route'?(routeNames[label]||label):$('group').value==='agent'?(KIND_NAMES[label]||label):(['Unknown','Other'].includes(label)?'제작사 미확인':label);
+const seriesLabel=label=>label===RESIDUAL?residualName:$('group').value==='route'?(routeNames[label]||label):$('group').value==='account'?serviceFull(label):$('group').value==='agent'?(KIND_NAMES[label]||label):(['Unknown','Other'].includes(label)?'제작사 미확인':label);
 const missingRoutes=data=>$('group').value==='route'?(data.unavailable_routes||[]).filter(r=>!data.labels.includes(r.route)):[];
 const gapLabel=row=>row.observed?(row.observation_stale?'토큰 관측 있음 · 합계 검증 대기':'토큰 수신 중 · 합계 검증 대기'):'토큰 상세 미수집';
 // Short numbers (1.2M) are a per-browser reading preference; exact values stay in the tooltip.
@@ -17,7 +17,7 @@ const tableCells=(row,denom)=>fields.map(k=>{
  return k==='total'?cell+`<td class="share-cell">${denom?percent(modelTotal(row)/denom*100):'—'}</td>`:cell;
 }).join('');
 let colors=[],mutedColor='#888';
-function updateColors(){const style=getComputedStyle(document.documentElement);colors=Array.from({length:8},(_,i)=>style.getPropertyValue('--chart-'+i).trim());mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;}
+function updateColors(){const style=getComputedStyle(document.documentElement);colors=chartOrder(document.documentElement.dataset.theme).map(i=>style.getPropertyValue('--chart-'+i).trim());mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;}
 // The browser chrome color follows the active theme's page background.
 // theme.js fires llm-theme-change before this deferred script registers its
 // listener, so sync once at startup too.
@@ -201,6 +201,6 @@ function quotaTrends(row){
 function quotaHistory(row,opened,now){
  const key=row.route+':'+row.bucket,history=row.history||[];
  const visible=history.filter(p=>p.checked>=(now||Date.now()/1000)-86400);
- const source=({'codex':'계정 조회','claude-oauth':'계정 조회','codex-local':'로컬 사용 기록','claude-code':'상태줄 수신','antigravity':'상태줄 수신','antigravity-app':'앱 조회','opencode-go':'계정 조회','devin':'계정 조회'})[row.history_source]||'원본 관측';
+ const source=({'codex':'계정 조회','claude-oauth':'계정 조회','codex-local':'로컬 사용 기록','claude-code':'상태줄 수신','antigravity':'상태줄 수신','antigravity-app':'앱 조회','opencode-go':'계정 조회','devin':'계정 조회'})[sourceBase(row.history_source)]||'원본 관측';
  return `${quotaTrends(row)}<details class="quota-history" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>한도 변화 이력 <small>선 그래프 · 감소량</small></summary>${quotaLine(visible,row)}<p>최근 24시간 · ${source}${visible.length?' · 마지막 '+esc(when(visible.at(-1).checked))+' KST':''}<br>선은 관측값 연결이며 공백·초기화는 구분합니다.</p>${quotaBars(row.decreases||[])}<p>최근 12시간 · 관측이 끝난 시각에 감소량을 합산합니다. 미관측 구간은 —.</p>${history.length?`<details data-history="${esc(key+':values')}"${opened.has(key+':values')?' open':''}><summary>최근 관측값 ${Math.min(40,history.length)}개</summary><div class="table-wrap insight-table"><table><thead><tr><th>확인 KST</th><th>잔여</th><th>초기화 KST</th></tr></thead><tbody>${history.slice(-40).reverse().map(p=>`<tr><td>${esc(when(p.checked))}</td><td>${percent(p.remaining)}</td><td>${p.resets?esc(when(p.resets)):'미제공'}</td></tr>`).join('')}</tbody></table></div></details>`:'<p>수신된 원본 관측부터 이력이 쌓입니다.</p>'}</details>`;
 }

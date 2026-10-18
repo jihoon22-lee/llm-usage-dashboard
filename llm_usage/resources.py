@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from .claude_accounts import family, is_claude, suffix
+
 ROUTES = ('codex', 'claude-code', 'antigravity', 'opencode-go', 'devin')
 KINDS = ('usage_credit', 'api_credit', 'reset')
 SCOPES = ('subscription', 'cloud', 'api', 'five_hour', 'weekly', 'model', 'unknown')
@@ -207,11 +209,12 @@ def money(value):
     return raw / 10**exponent, currency
 
 
-def claude_spend(c, data, checked):
+def claude_spend(c, data, checked, route='claude-code'):
+    tag = suffix(route)
     extra = data.get('extra_usage')
     spend = data.get('spend')
     if not isinstance(extra, dict) and not isinstance(spend, dict):
-        resource_error(c, 'claude-code', 'spending-allowance', 'usage_credit', checked, 'claude-oauth')
+        resource_error(c, route, 'spending-allowance', 'usage_credit', checked, 'claude-oauth' + tag)
         return 0
     extra = extra or {}; spend = spend or {}
     used, currency = money(spend.get('used'))
@@ -233,74 +236,77 @@ def claude_spend(c, data, checked):
         limit = None
     remaining = max(0, limit - used) if limit is not None and used is not None else None
     balance, balance_currency = money(spend.get('balance'))
-    save_auto(c, 'claude-code', 'spending-allowance', 'usage_credit', checked,
+    save_auto(c, route, 'spending-allowance', 'usage_credit', checked,
               dict(label='Claude 추가 사용 지출 한도', amount=remaining, unit=currency or 'minor', scope='subscription',
                    allowance=True, limit=limit, spent=used, spend_remaining=remaining,
                    spend_unlimited=False if limit is not None else None,
                    enabled=enabled if isinstance(enabled, bool) else None,
                    observation='observed', expires=None, expiry_known=False,
                    # A null limit is not interpreted as unlimited without an explicit flag.
-                   period_reset=timestamp(spend.get('resets_at'))), 'claude-oauth')
+                   period_reset=timestamp(spend.get('resets_at'))), 'claude-oauth' + tag)
     if balance is not None:
-        save_auto(c, 'claude-code', 'prepaid-credits', 'usage_credit', checked,
+        save_auto(c, route, 'prepaid-credits', 'usage_credit', checked,
                   dict(label='Claude 사용 크레딧', amount=balance, unit=balance_currency, scope='subscription',
-                       enabled=None, observation='observed', expires=None, expiry_known=False), 'claude-oauth')
+                       enabled=None, observation='observed', expires=None, expiry_known=False), 'claude-oauth' + tag)
     return 1
 
 
-def claude_cloud_credits(c, data, checked):
+def claude_cloud_credits(c, data, checked, route='claude-code'):
     """Cloud-session promotion from the account usage response, in explicit USD.
 
     This pool does not fund local Code, chat, Cowork, or API requests. A missing
     promotion is not a zero balance, and its expiry is not a quota reset.
     """
     pool = 'cloud-session-credits'
+    tag = suffix(route)
     row = data.get('iguana_necktie')
     if not isinstance(row, dict):
         if c.execute('SELECT 1 FROM resource_items WHERE route=? AND pool_key=? AND account_key IS ?',
-                     ('claude-code', pool, (account(c, 'claude-code') or {}).get('account_key'))).fetchone():
-            resource_error(c, 'claude-code', pool, 'usage_credit', checked, 'claude-oauth')
+                     (route, pool, (account(c, route) or {}).get('account_key'))).fetchone():
+            resource_error(c, route, pool, 'usage_credit', checked, 'claude-oauth' + tag)
         return 0
     remaining, limit, used = (amount(row.get(k)) for k in ('remaining_dollars', 'limit_dollars', 'used_dollars'))
     conflict = remaining is not None and limit is not None and (remaining > limit or
                (used is not None and not math.isclose(remaining, max(0, limit-used), abs_tol=0.000001)))
-    save_auto(c, 'claude-code', pool, 'usage_credit', checked,
+    save_auto(c, route, pool, 'usage_credit', checked,
               dict(label='Claude 클라우드 전용 크레딧', amount=remaining, unit='USD', scope='cloud',
                    limit=limit, spent=used, enabled=not bool(row['locked_reason']) if 'locked_reason' in row else None,
                    expires=timestamp(row.get('resets_at')), expiry_known=timestamp(row.get('resets_at')) is not None,
-                   observation='conflict' if conflict else 'observed' if remaining is not None else 'unavailable'), 'claude-oauth')
+                   observation='conflict' if conflict else 'observed' if remaining is not None else 'unavailable'), 'claude-oauth' + tag)
     return int(remaining is not None and not conflict)
 
 
-def claude_balance(c, data, checked):
+def claude_balance(c, data, checked, route='claude-code'):
+    tag = suffix(route)
     raw = amount(data.get('amount'))
     currency = data.get('currency')
     divisor = 100 if currency in ('USD', 'EUR', 'GBP', 'CAD', 'AUD') else 1 if currency in ('JPY', 'KRW') else None
     if raw is None:
-        resource_error(c, 'claude-code', 'prepaid-credits', 'usage_credit', checked, 'claude-credits')
+        resource_error(c, route, 'prepaid-credits', 'usage_credit', checked, 'claude-credits' + tag)
         return 0
     auto = data.get('auto_reload_settings')
     unscoped = amount(data.get('amount_without_scoped_credits'))
     restricted = bool(data.get('promo_tranches') or data.get('tranches')) and unscoped is None
     available = unscoped if unscoped is not None and unscoped <= raw else raw
-    save_auto(c, 'claude-code', 'prepaid-credits', 'usage_credit', checked,
+    save_auto(c, route, 'prepaid-credits', 'usage_credit', checked,
               dict(label='Claude 사용 크레딧', amount=available / divisor if divisor else available,
                    reported_total=raw / divisor if divisor else raw,
                    unit=currency if divisor else 'minor', scope='unknown' if restricted else 'subscription', enabled=None,
                    auto_reload=auto.get('enabled') if isinstance(auto, dict) and isinstance(auto.get('enabled'), bool) else None,
                    expires=timestamp(data.get('next_expires_at')), expiry_known=bool(data.get('next_expires_at')),
-                   expiry_is_partial=True, observation='observed'), 'claude-credits')
+                   expiry_is_partial=True, observation='observed'), 'claude-credits' + tag)
     return 1
 
 
-def claude_resets(c, data, checked):
+def claude_resets(c, data, checked, route='claude-code'):
+    tag = suffix(route)
     reset = data.get('cedar_ember')
     if not isinstance(reset, dict) or not isinstance(reset.get('eligible'), bool):
-        resource_error(c, 'claude-code', 'reset-grants', 'reset', checked, 'claude-resets')
+        resource_error(c, route, 'reset-grants', 'reset', checked, 'claude-resets' + tag)
         return 0
     if reset.get('ineligible_reason') == 'surface':
         # An unsupported view cannot establish whether the account owns grants.
-        resource_error(c, 'claude-code', 'reset-grants', 'reset', checked, 'claude-resets')
+        resource_error(c, route, 'reset-grants', 'reset', checked, 'claude-resets' + tag)
         return 0
     grants = []; complete = isinstance(reset.get('grants'), list)
     for row in reset.get('grants') or []:
@@ -313,11 +319,11 @@ def claude_resets(c, data, checked):
                            targets=targets, scope='buckets', usable=row.get('usable_now') if isinstance(row.get('usable_now'), bool) else None,
                            requires_limit=row.get('use_requires_limit') if isinstance(row.get('use_requires_limit'), bool) else None,
                            paused=row.get('paused') is True))
-    save_auto(c, 'claude-code', 'reset-grants', 'reset', checked,
+    save_auto(c, route, 'reset-grants', 'reset', checked,
               dict(label='Claude 초기화권', amount=sum(g['amount'] for g in grants) if complete else None,
                    unit='count', scope='unknown', enabled=reset['eligible'], observation='observed' if complete else 'unavailable',
                    grants=grants, details_known=complete, expires=None, expiry_known=False,
-                   cooldown_until=timestamp(reset.get('cooldown_until'))), 'claude-resets')
+                   cooldown_until=timestamp(reset.get('cooldown_until'))), 'claude-resets' + tag)
     return 1
 
 
@@ -333,7 +339,8 @@ def manual_data(body, now):
     if body.keys() - allowed:
         raise ValueError('지원하지 않는 자원 필드입니다.')
     route, kind, scope = body.get('route'), body.get('kind'), body.get('scope')
-    if route not in ROUTES or kind not in KINDS or scope not in SCOPES:
+    claude_account = is_claude(route) and re.fullmatch('claude-code:[0-9a-f]{12}', route) is not None
+    if (route not in ROUTES and not claude_account) or kind not in KINDS or scope not in SCOPES:
         raise ValueError('서비스·자원 종류·적용 범위를 확인하세요.')
     label = body.get('label', '')
     if not isinstance(label, str) or not 1 <= len(label.strip()) <= 80 or any(ord(ch) < 32 for ch in label):
@@ -443,7 +450,8 @@ def inventory(c, now, sources):
         row.pop('creation_fingerprint',None)
         row['active_account'] = active
         row['identity_verified'] = row['account_key'] is not None
-        row['ttl'] = MANUAL_TTL if row['origin'] == 'manual' else 600 if row.get('source') in ('codex','claude-oauth') else AUTO_TTL
+        polled = row.get('source') in ('codex', 'claude-oauth') or str(row.get('source') or '').startswith('claude-oauth:')
+        row['ttl'] = MANUAL_TTL if row['origin'] == 'manual' else 600 if polled else AUTO_TTL
         row['status'] = 'manual' if row['origin'] == 'manual' else 'fresh'
         observed = row.get('value_checked') or row['checked']
         source = sources.get(row.get('source'), {})
@@ -459,7 +467,7 @@ def inventory(c, now, sources):
             row['status'] = 'expired'
         elif row.get('expires') and row['expires'] <= now:
             row['status'] = 'stale'  # next expiry may cover only part of a balance
-        row['check_url'] = SOURCE_LINKS.get(row['route'])
+        row['check_url'] = SOURCE_LINKS.get(family(row['route']))
         row['rate_per_hour'] = None
         # Only an explicit cumulative spending counter in the same provider period
         # can establish credit burn. Balance deltas cannot distinguish purchases.

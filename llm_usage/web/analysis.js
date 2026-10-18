@@ -4,8 +4,10 @@ function modelRowValue(row){
  const key=tableSort.key;
  return key==='total'||key==='share'?modelTotal(row):key==='provider'?`${row.provider} / ${row.route}`:key==='est_cost'?(row.est_cost??-1):key==='avg'?(row.requests?(row.recorded_tokens??modelTotal(row))/row.requests:-1):row[key];
 }
+// The Codex account residual is not a model: it stays last (table and CSV) whatever the sort.
 function sortedModelRows(data){
  return[...data.rows].sort((a,b)=>{
+  if((a.model===RESIDUAL)!==(b.model===RESIDUAL))return a.model===RESIDUAL?1:-1;
   const aa=modelRowValue(a),bb=modelRowValue(b);
   const comparison=typeof aa==='number'?aa-bb:compareText.compare(String(aa??''),String(bb??''));
   return comparison*(tableSort.direction==='desc'?-1:1)||compareText.compare(`${a.model} / ${a.route}`,`${b.model} / ${b.route}`);
@@ -23,17 +25,19 @@ $('csv-export').addEventListener('click',()=>{
  if(!lastUsage)return;
  const denom=modelTotal(lastUsage.totals);
  downloadCsv('models',['제작사','사용 서비스','모델','요청 수','평균 토큰/요청','비중 %','Uncached Input','Cached Input','Output','Total (incl. cache creation)','Cache creation','Reasoning','비용 추정 USD'],
-  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,r.model,r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
+  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,residualText(r.model),r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
 });
 $('csv-sessions').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.sessions)return;
- downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD'],
-  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'']));
+ const accounts=multiClaude();
+ downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD',...(accounts?['Claude 계정']:[])],
+  lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'',
+   ...(accounts?[familyOf(s.route)==='claude-code'?(s.accounts||[]).map(a=>accountLabel(a)||a).join(' · '):'']:[])]));
 });
 $('csv-projects').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.projects)return;
  downloadCsv('projects',['프로젝트','세션','요청 수','토큰','비용 추정 USD','최근 활동 KST'],
-  lastUsage.projects.map(p=>[p.project,p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
+  lastUsage.projects.map(p=>[residualText(p.project),p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
 });
 $('csv-series').addEventListener('click',event=>{
  event.preventDefault();event.stopPropagation();
@@ -53,9 +57,12 @@ function renderScope(data){
  for(const [kind,label] of Object.entries(SCOPE_LABELS)){
   const values=(data.scope_options&&data.scope_options[kind])||[];if(!values.length)continue;
   const group=document.createElement('optgroup');group.label=label;
-  for(const v of values){const o=new Option(kind==='route'?(routeNames[v]||v):v,kind+':'+v);group.append(o);}
+  for(const v of values){const o=new Option(kind==='route'?(routeNames[v]||v):kind==='account'?(accountLabel(v)||v):v,kind+':'+v);group.append(o);}
   sel.add(group);
  }
+ // The per-account view exists only once a second Claude account is known.
+ const byAccount=$('group').querySelector('option[value="account"]');
+ if(byAccount){byAccount.hidden=byAccount.disabled=!multiClaude()&&$('group').value!=='account';}
  if(scope&&![...sel.options].some(o=>o.value===scope))sel.add(new Option(scopeText(scope),scope));
  sel.value=scope||'';
  const chip=$('scope-chip');
@@ -174,7 +181,7 @@ const mobileOpen=new Map(foldedPanels.map(panel=>[panel,panel.hasAttribute('data
 const filterOptions=[...document.querySelectorAll('.filters option')].map(option=>({option,label:option.textContent}));
 const shortOptions={period:{'1h':'1시간',today:'오늘','7d':'7일','30d':'30일',all:'전체',custom:'직접'},
  granularity:{day:'일별',hour:'시간',week:'주별',month:'월별'},
- group:{provider:'제작사',route:'서비스',model:'모델',project:'프로젝트',agent:'에이전트'},
+ group:{provider:'제작사',route:'서비스',model:'모델',project:'프로젝트',account:'계정',agent:'에이전트'},
  metric:{tokens:'토큰',requests:'요청 수',cost:'비용'},
  compare:{'':'비교 없음',previous:'직전',week:'7일 전',month:'28일 전'},
  cumulative:{'0':'구간별','1':'누적',share:'점유율 막대','share-area':'점유율 면적','share-line':'점유율 꺾은선'}};
@@ -197,6 +204,10 @@ foldedPanels.forEach(panel=>panel.addEventListener('toggle',()=>{if(compactMedia
 compactMedia.addEventListener('change',compactPanels);compactPanels();
 function renderUsage(data){
  lastUsage=data;
+ const renamed='claude_accounts' in data&&setClaudeAccounts(data.claude_accounts);
+ const shownName=residualName;setResidualName(data.residual_label);
+ // Reports drawn before the names arrived (or before they changed) are drawn again.
+ if(renamed||residualName!==shownName)redrawReports();
  $('first-use').hidden=!!data.scope||total(data.lifetime||{})>0||data.lifetime?.requests!==0;
  const gaps=data.unavailable_routes||[];
  $('usage-gaps').hidden=!gaps.length;
@@ -211,16 +222,21 @@ function renderUsage(data){
  $('recent-usage-note').hidden=!recent;
  document.querySelector('[data-panel="heatmap"]').hidden=recent;
  renderScope(data);
- // Card deltas always compare token totals, whatever metric is selected.
- // The earlier window is cut at the same elapsed time as the running period.
- const cmpSum=data.compare&&data.compare.elapsed?total(data.compare.elapsed):null;
- const curSum=total(data.totals);
- const delta=cmpSum?(curSum-cmpSum)/cmpSum:null;
- const cards=[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output'],['전체 토큰','total']];
- $('cards').innerHTML=cards.map(([label,k])=>{
-  const d=k==='total'&&delta!=null?` · ${esc(data.compare.label)} 같은 경과 시간 대비 ${delta>=0?'+':'−'}${Math.abs(delta*100).toFixed(1)}%`:'';
-  return `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" data-tip="${fmt(k==='total'?total(data.totals):data.totals[k])}">${compact(k==='total'?total(data.totals):data.totals[k])}</div><small>선택 기간 · 전체 누계 ${compact(k==='total'?total(data.lifetime):data.lifetime[k])}${d}</small></div>`;}).join('')
- +(data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?`<div class="stat"><div class="stat-label">비용 추정</div><div class="stat-value" data-tip="${esc(usd(data.cost.period))}">${usd(data.cost.period)}</div><small>공개 단가 기준 환산 · 단가 확정 토큰 ${percent(data.cost.coverage)}${data.cost.lifetime!=null?' · 전체 누계 '+usd(data.cost.lifetime):''}${data.cost.cache_savings?` · 캐시 읽기 덕분 ${usd(data.cost.cache_savings)} 절감 환산`:''}</small></div>`:'');
+ // Total tokens and cost lead, each with its change against the window before (or the
+ // chosen comparison) up to the same elapsed time. Token changes compare tokens whatever
+ // metric is selected; an account day still open at the cut counts on neither side (API `prior`).
+ const prior=data.prior;
+ const change=(current,previous)=>{const text=priorChange(prior,data.period,current,previous);return text?`<small class="stat-delta">${esc(text)}</small>`:'';};
+ const card=(label,value,tip,lines)=>`<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" data-tip="${esc(tip)}">${value}</div>${lines}</div>`;
+ const tokens=total(data.totals);
+ const cost=data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?data.cost:null;
+ $('cards').innerHTML=card('전체 토큰',compact(tokens),fmt(tokens),
+   change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small>`)
+  +(cost?card('비용 추정',usd(cost.period),usd(cost.period),
+   change(cost.period,prior?prior.cost??(total(prior)?null:0):null)
+   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}</small>`):'')
+  +[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output']].map(([label,k])=>
+   card(label,compact(data.totals[k]),fmt(data.totals[k]),`<small>선택 기간 · 전체 누계 ${compact(data.lifetime[k])}</small>`)).join('');
  renderModelTable(data);renderHeatmap(data.heatmap);
  $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note;
  renderAccountGap(data.account_gap);
@@ -241,10 +257,10 @@ function renderUsage(data){
 function renderAccountGap(gap){
  const box=$('account-gap');
  if(!gap||!gap.days||!gap.days.length){box.innerHTML='';return;}
- const days=gap.days.slice(-7).reverse();
- box.innerHTML=`<details class="source-group account-gap"${gap.total_gap?' open':''}><summary>Codex 계정 합계 대비 로컬 미기록 <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
-  +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다.</p>`
-  +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>미기록</th></tr></thead><tbody>`
+ const days=gap.days.slice(-7).reverse(),opened=box.querySelector('details')?.open;
+ box.innerHTML=`<details class="source-group account-gap"${opened?' open':''}><summary>Codex 계정 합계 대비 ${esc(residualName)} <small>최근 ${gap.days.length}일 ${compact(gap.total_gap)} 토큰${gap.checked?' · '+esc(ago(gap.checked))+' 확인':''}</small></summary>`
+  +`<p class="source-detail">OpenAI 계정의 KST 09:00–다음 날 09:00 집계 토큰에서 이 PC의 Codex 기록을 뺀 값입니다. ChatGPT 에이전트(dot)·Codex 클라우드처럼 서버 실행·다른 기기·집계 지연 등이 섞일 수 있어 dot 사용량으로 단정하지 않습니다. 모델·입출력 구분이 없어 비용은 추정하지 않습니다. 모델·프로젝트별 보기에서는 ‘${esc(residualName)}’ 한 항목으로 따로 보이며, 이름은 설정의 구독에서 바꿀 수 있습니다.</p>`
+  +`<div class="table-wrap"><table><thead><tr><th>집계 범위(KST)</th><th>계정 합계</th><th>로컬 기록</th><th>${esc(residualName)}</th></tr></thead><tbody>`
   +days.map(d=>`<tr><td>${esc(d.day)} 09:00–다음 날 09:00</td><td data-tip="${fmt(d.account)}">${compact(d.account)}</td><td data-tip="${fmt(d.local)}">${compact(d.local)}</td><td data-tip="${fmt(d.gap)}">${d.over?`<span title="로컬 기록이 계정 합계보다 많습니다 · 계정 집계 지연일 수 있습니다">0 (초과 ${compact(d.over)})</span>`:compact(d.gap)}</td></tr>`).join('')
   +'</tbody></table></div></details>';
 }
@@ -267,20 +283,34 @@ function renderReconciliation(r){
   +'<p>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</p></div></details>';
  if(focused)box.querySelector('summary').focus({preventScroll:true});
 }
-// Collection status: a summary, problems first, grouped by provider, each with what it means.
+// Collection status, problems first: failures and values to check as cards; what is not
+// collected now (미제공·미사용) stays listed in a neutral color, never folded away; the
+// normal sources fold by provider. Fold states survive the periodic refresh.
+const SOURCE_BUCKETS={error:'bad',partial:'warn',stale:'warn',unavailable:'na',idle:'idle',ended:'idle'};
 function renderSources(list){
- const bucket=s=>s.status==='error'||s.status==='unavailable'?'bad':s.status==='partial'||s.status==='stale'?'warn':s.status==='idle'||s.status==='ended'?'idle':'ok';
- const counts={ok:0,warn:0,bad:0,idle:0};list.forEach(s=>counts[bucket(s)]++);
+ const box=$('sources'),opened=new Set([...box.querySelectorAll('details[open]')].map(el=>el.dataset.fold));
+ const bucket=s=>SOURCE_BUCKETS[s.status]||'ok';
+ const order=(a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name);
+ const counts={bad:0,warn:0,na:0,idle:0,ok:0};list.forEach(s=>counts[bucket(s)]++);
+ const action=list.filter(s=>['bad','warn'].includes(bucket(s))).sort(order);
+ const quiet=list.filter(s=>['na','idle'].includes(bucket(s))).sort(order);
  const groups=new Map();
- for(const s of [...list].sort((a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name)))
-  (groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
- const worst=items=>Math.min(...items.map(s=>SOURCE_RANK[s.status]??4));
- const card=s=>`<div class="source${bucket(s)==='idle'||s.status==='stale'?' stale':''} src-${bucket(s)}"><p class="source-line"><span><strong>${esc(s.name)}</strong> · ${esc(statuses[s.status]||s.status)}</span><small>${s.checked?when(s.checked):'확인 기록 없음'}</small></p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
- const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업')||worst(a[1])-worst(b[1]));
- $('sources').innerHTML=`<div class="source-summary"><span class="ok">정상 <strong>${counts.ok}</strong></span><span class="warn">확인 필요 <strong>${counts.warn}</strong></span><span class="bad">실패·미수집 <strong>${counts.bad}</strong></span><span class="idle">미사용 <strong>${counts.idle}</strong></span></div>`
-  +ordered.map(([name,items])=>name==='내부 작업'
-   ?`<details class="source-group"><summary>${esc(name)} <small>${items.length}개 · 보정·백필 작업</small></summary><div class="source-list">${items.map(card).join('')}</div></details>`
-   :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('');
+ for(const s of list.filter(s=>bucket(s)==='ok').sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
+ const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업'));
+ const time=s=>`<small>${s.checked?when(s.checked):'확인 기록 없음'}</small>`;
+ const card=s=>`<div class="source src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${bucket(s)!=='ok'&&SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const fold=(key,summary,body)=>`<details class="source-group" data-fold="${key}"${opened.has(key)?' open':''}><summary>${summary}</summary>${body}</details>`;
+ const tally=(name,key)=>`<span class="${counts[key]?key:''}">${name} <strong>${counts[key]}</strong></span>`;
+ box.innerHTML=`<div class="source-summary">${tally('실패','bad')}${tally('확인 필요','warn')}${tally('미제공','na')}${tally('미사용','idle')}${tally('정상','ok')}</div>`
+  +(action.length?`<section class="source-group source-action"><h4>조치 필요 <small>${action.length}개</small></h4><div class="source-list">${action.map(card).join('')}</div></section>`
+   :'<p class="source-clear">조치가 필요한 수집원이 없습니다.</p>')
+  +(quiet.length?`<section class="source-group source-quiet"><h4>지금 수집하지 않는 경로 <small>${quiet.length}개</small></h4>`
+   +`<p class="source-hint">${[...new Set(quiet.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`
+   +`<ul class="source-rows">${quiet.map(s=>`<li><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${s.detail?`<span class="source-detail">${esc(s.detail)}</span>`:''}${time(s)}</li>`).join('')}</ul></section>`:'')
+  +(counts.ok?fold('ok',`정상 ${counts.ok}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
+   ordered.map(([name,items])=>name==='내부 작업'
+    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(card).join('')}</div>`)
+    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('')):'');
 }
 let modelFilter='';
 $('model-search').addEventListener('input',event=>{modelFilter=event.target.value.trim().toLowerCase();if(lastUsage)renderModelTable(lastUsage);});
@@ -299,11 +329,14 @@ bindColsToggle($('sess-cols'),document.querySelector('[data-panel="sessions"] ta
 function renderModelTable(data){
  const denom=modelTotal(data.totals);
  const all=sortedModelRows(data);
- const match=r=>`${r.provider} ${routeNames[r.route]||r.route} ${r.model}`.toLowerCase().includes(modelFilter);
- const rows=modelFilter?all.filter(match):all;
- $('model-search-count').textContent=modelFilter?`${rows.length}/${all.length}개`:'';
+ const match=r=>`${r.provider} ${routeNames[r.route]||r.route} ${residualText(r.model)}`.toLowerCase().includes(modelFilter);
+ const shown=modelFilter?all.filter(match):all;
+ // The Codex account residual is not a model: it stays below the ranked rows, unranked.
+ const rows=shown.filter(r=>r.model!==RESIDUAL),residual=shown.filter(r=>r.model===RESIDUAL);
+ $('model-search-count').textContent=modelFilter?`${shown.length}/${all.length}개`:'';
  const avg=r=>r.requests?(r.recorded_tokens??modelTotal(r))/r.requests:null;
- $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
+ const residualRow=r=>`<tr class="residual-row"><td class="row-rank">—</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(residualName)}<small>계정 합계 − 이 PC 기록 · 모델 구분 없음</small></td><td class="col-detail">—</td><td>—</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`;
+ $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')+residual.map(residualRow).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
  $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${fmt(row.requests)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
  document.querySelectorAll('[data-sort]').forEach(button=>{
   const selected=button.dataset.sort===tableSort.key;
@@ -331,6 +364,8 @@ function bucketLabel(point,short=false){
 const metricValue=v=>{const m=$('metric').value;return m==='requests'?(v.requests||0):m==='cost'?(v.cost||0):total(v||{});};
 const metricName=()=>({requests:'요청 수',cost:'비용 추정'})[$('metric').value]||'토큰';
 const metricFmt=v=>$('metric').value==='cost'?usd(v):fmt(v);
+// Summary lines shorten large counts (HTML); the exact count stays in the tooltip.
+const metricShort=v=>$('metric').value==='cost'?usd(v):`<span data-tip="${fmt(v)}${metricUnit()}">${compact(v)}</span>`;
 // Cost buckets with tokens of unpriced models say so instead of reading as $0.
 const costNote=v=>$('metric').value==='cost'&&v&&v.unpriced?` <small>+미산정 ${compact(v.unpriced)} 토큰</small>`:'';
 const metricUnit=()=>({tokens:' 토큰',requests:'회'})[$('metric').value]||'';
@@ -344,7 +379,7 @@ function chartSeries(data){
  const points=data.series;
  const compact=$('group').value!=='model'&&labels.length>8;
  const sum=l=>points.reduce((s,p)=>s+metricValue(p.values[l]||{}),0);
- const kept=new Set(compact?[...labels].filter(l=>l!=='기타').sort((a,b)=>sum(b)-sum(a)).slice(0,7):labels);
+ const kept=new Set(compact?[...[...labels].filter(l=>l!=='기타'&&l!==RESIDUAL).sort((a,b)=>sum(b)-sum(a)).slice(0,7),...labels.filter(l=>l===RESIDUAL)]:labels);
  const shown=compact?[...labels.filter(l=>kept.has(l)),'기타']:labels;
  function mapPoints(series){return series.map(p=>{
   const values=Object.fromEntries(shown.map(l=>[l,{}]));
@@ -357,17 +392,23 @@ function chartSeries(data){
  return {labels:shown,points:mapPoints(points),compare:comparison?{...comparison,series:mapPoints(comparison.series)}:null};
 }
 // Stable label→palette index so a model keeps its color across period changes.
-// Active labels always get distinct indices; inactive owners are evicted.
+// Active labels always get distinct indices; inactive owners are evicted. `fixed`
+// (groupSlots) gives services their own index; other labels take those indices only
+// when no other one is free.
 const labelColorIndex=new Map();
-function paletteFor(labels){
+function paletteFor(labels,fixed={}){
  const actives=[...new Set(labels.filter(l=>l!=='기타'))];
  const seen=new Map();
+ for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){labelColorIndex.set(l,fixed[l]);seen.set(fixed[l],l);}
  for(const l of actives){
+  if(seen.get(labelColorIndex.get(l))===l)continue;
   const idx=labelColorIndex.get(l);
   if(idx!=null&&!seen.has(idx)){seen.set(idx,l);continue;}
   labelColorIndex.delete(l);
  }
- const free=[];for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i))free.push(i);
+ const reserved=new Set(Object.values(fixed)),free=[];
+ for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i)&&!reserved.has(i))free.push(i);
+ for(const i of [...reserved].sort((a,b)=>a-b))if(!seen.has(i))free.push(i);
  for(const l of actives){
   if(labelColorIndex.has(l))continue;
   let idx;

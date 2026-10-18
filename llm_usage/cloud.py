@@ -28,14 +28,14 @@ class IncompletePages(ValueError):
         self.cursor=cursor
 
 
-def _backoff(store,exc,pause):
+def _backoff(store,exc,pause,key='claude-cloud:retry'):
     if not isinstance(exc,urllib.error.HTTPError) or exc.code not in (401,403,429):return
     delay=min(3600,300*2**min(pause.get('failures',0),4))
     retry=exc.headers.get('Retry-After') if exc.headers else None
     if retry:
         try:delay=max(delay,int(retry) if retry.isdigit() else parsedate_to_datetime(retry).timestamp()-time.time())
         except (ValueError,TypeError,OverflowError):pass
-    with store.connect() as c:store.save_state(c,'claude-cloud:retry',dict(next_attempt=time.time()+delay,failures=pause.get('failures',0)+1))
+    with store.connect() as c:store.save_state(c,key,dict(next_attempt=time.time()+delay,failures=pause.get('failures',0)+1))
 
 
 def _fetch(url,headers):
@@ -102,7 +102,7 @@ def _batch(fetch,headers,item,cursor=None,endpoint='events'):
     return entries,None
 
 
-def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events',account_key=None,entries=None):
+def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events',account_key=None,entries=None,account='claude-code'):
     from .reconciliation import aliases,link,snapshot,number
     project=_project(item);count=0
     entries=entries if entries is not None else list(_numeric_entries(_pages(fetch,headers,item,endpoint)))
@@ -135,36 +135,43 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
         store.event(c,eid,ts,model_provider(m.get('model','')),'claude-code',m.get('model'),dict(
             uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
             output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0)),
-            session=sid,project=project,agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main')
+            session=sid,project=project,agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main',
+            account=account)
         link(c,'claude:'+sid,eid,'claude-cloud:'+endpoint,'provisional' if endpoint=='events' else 'final')
         aliases(c,'claude-code',eid,m.get('id'),d.get('requestId'),d.get('request_id'),d.get('uuid'))
         count+=1
     return count
 
 
-def collect_claude_cloud(store,settings,fetch=None):
+def collect_claude_cloud(store,settings,fetch=None,account=None):
+    """Cloud sessions of one Claude account (the original account without a context)."""
+    from .claude_accounts import suffix
     from .collect import model_provider
-    from .limits import claude_account,claude_headers
+    from .limits import claude_account,claude_headers,claude_target
     fetch=fetch or _fetch
-    path=Path(settings.get('claude_auth',Path.home()/'.claude/.credentials.json'))
+    route,path,account_file=claude_target(settings,account);tag=suffix(route)
+    source,supplement,retry='claude-cloud'+tag,'claude-cloud-supplement'+tag,'claude-cloud:retry'+tag
     try:
         auth=json.loads(path.read_text()).get('claudeAiOauth',{})
-        organization=claude_account(path,settings).get('organization')
+        organization=claude_account(path,settings,account_file).get('organization')
         if not auth.get('accessToken') or not organization or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
             raise PermissionError('native authentication required')
     except (OSError,ValueError,AttributeError,PermissionError):
         with store.connect() as c:
-            store.source(c,'claude-cloud','error','Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.')
+            store.source(c,source,'error','Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.')
         return
     headers={**claude_headers(auth['accessToken']),'anthropic-version':'2023-06-01','x-organization-uuid':organization}
-    with store.connect() as c:pause=store.state(c,'claude-cloud:retry',{})
+    with store.connect() as c:
+        pause=store.state(c,retry,{})
+        # Account-level cloud totals (usage_evidence) name their account route.
+        store.save_state(c,'claude_cloud_account:'+identity('claude-account',organization),route)
     if time.time()<pause.get('next_attempt',0):return
     try:sessions=_sessions(fetch,headers)
     except Exception as exc:
         # Errors carry no response body or credentials.
-        _backoff(store,exc,pause)
+        _backoff(store,exc,pause,retry)
         if isinstance(exc,urllib.error.HTTPError):exc.close()
-        with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 목록 조회 실패 ({type(exc).__name__})')
+        with store.connect() as c:store.source(c,source,'error',f'클라우드 세션 목록 조회 실패 ({type(exc).__name__})')
         return
     failed=missing=backfilling=unavailable=0;errors=[]
     for item in sessions:
@@ -188,7 +195,7 @@ def collect_claude_cloud(store,settings,fetch=None):
             scan_updated=state.get('scan_updated',item.get('updated_at')) if state.get('cursor') or state.get('teleport_cursor') else item.get('updated_at')
             entries,teleport_cursor=_batch(fetch,headers,item,state.get('teleport_cursor'),'teleport-events')
             with store.connect() as c:
-                _ingest(store,c,fetch,headers,item,model_provider,entries=entries)
+                _ingest(store,c,fetch,headers,item,model_provider,entries=entries,account=route)
                 if teleport_cursor:
                     store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,
                         teleport_cursor=teleport_cursor,cursor=state.get('cursor'),parser=PARSER_VERSION,checked=time.time(),**supplement_state))
@@ -207,11 +214,11 @@ def collect_claude_cloud(store,settings,fetch=None):
             cursor=seen.get('cursor') if isinstance(seen,dict) else None
             entries,cursor=_batch(fetch,headers,item,cursor)
             with store.connect() as c:
-                _ingest(store,c,fetch,headers,item,model_provider,'events',identity('claude-account',organization),entries)
+                _ingest(store,c,fetch,headers,item,model_provider,'events',identity('claude-account',organization),entries,account=route)
                 store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,cursor=cursor,parser=PARSER_VERSION,checked=time.time()))
             if cursor:backfilling+=1
         except urllib.error.HTTPError as exc:
-            _backoff(store,exc,pause)
+            _backoff(store,exc,pause,retry)
             exc.close()
             if exc.code==404 and endpoint=='events':
                 unavailable+=1
@@ -233,9 +240,9 @@ def collect_claude_cloud(store,settings,fetch=None):
             +(f' · 과거 이벤트 이어 읽기 {backfilling}개' if backfilling else '')
             +(' · '+','.join(sorted(set(errors))) if errors else ''))
     with store.connect() as c:
-        if not failed:store.save_state(c,'claude-cloud:retry',{})
-        store.source(c,'claude-cloud','partial' if failed or backfilling else 'ok',detail)
-        store.source(c,'claude-cloud-supplement',
+        if not failed:store.save_state(c,retry,{})
+        store.source(c,source,'partial' if failed or backfilling else 'ok',detail)
+        store.source(c,supplement,
                      'unavailable' if not sessions or unavailable+missing==len(sessions) else 'partial' if unavailable or missing or failed or backfilling else 'ok',
                      f'추가 누계·상세 API · 미제공 {unavailable}세션 · 기존 transcript 수집과 별도'
                      +(' · 세션 변경 또는 24시간 뒤 재확인' if unavailable else ''))

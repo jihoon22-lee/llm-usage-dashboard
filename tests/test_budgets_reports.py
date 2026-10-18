@@ -84,6 +84,249 @@ class ReportTests(unittest.TestCase):
         self.assertIn('Codex codex · 10080분 2회',reports.summary(report))
         self.assertIn('전주 대비',reports.summary(report))
 
+    def test_codex_account_residual_share_is_its_own_line(self):
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            # Account days run 09:00-09:00 KST: 09-27 and 10-04 cross the week's edges.
+            self.store.account_tokens(c,'codex',[dict(startDate=d,tokens=t) for d,t in (('2026-09-27',700),('2026-09-29',4000),('2026-10-04',900))],NOW)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        # Only 09-29 lies wholly inside the week: its 4,000 less this PC's 2,000 records.
+        self.assertEqual(report['residual'],dict(tokens=2000,account_tokens=4000,days=1))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in report['models']])
+        self.assertIn('Codex 로컬 미기록 ',reports.summary(report))
+        self.assertIn('Codex 자동 리뷰 ',reports.summary(report,'자동 리뷰'))
+        self.assertIn('계정 합계의 50% (1일 기준)',reports.summary(report))
+        # Without account days the line is left out rather than shown as 0%.
+        self.assertIsNone(reports.build(self.store,stamp('2026-09-28T01:00:00Z'),PRICING)['residual'])
+
+    def test_report_lists_top_projects_without_the_account_residual(self):
+        from llm_usage.reconciliation import RESIDUAL
+        with self.store.connect() as c:
+            self.store.event(c,'pa',stamp('2026-09-30T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=4_000_000),project='alpha')
+            self.store.event(c,'pb',stamp('2026-09-30T02:00:00Z'),'OpenAI','codex','gpt-test',dict(output=1_000_000),project='beta')
+            # A residual far above every project still stays out of the project ranking.
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-09-29',tokens=90_000_000)],NOW)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        self.assertEqual([p['project'] for p in report['projects']],['alpha','beta','미분류'])
+        self.assertEqual(report['projects'][0],dict(project='alpha',tokens=4_000_000,cost=40.0))
+        # Records without a project stay as 미분류 (w1, w2 and the Saturday record).
+        self.assertEqual(report['projects'][2]['tokens'],1500+500+300+9_999)
+        self.assertNotIn(RESIDUAL,[p['project'] for p in report['projects']])
+        # One Claude account: no account split.
+        self.assertIsNone(report['accounts'])
+        self.assertIn('상위 프로젝트 alpha 4.0M · beta 1.0M · 미분류 0.0M',reports.summary(report))
+        self.assertNotIn('Claude 계정별',reports.summary(report))
+
+    def test_this_week_so_far_against_last_week_at_the_same_time(self):
+        with self.store.connect() as c:
+            # Last week up to Saturday 18:00 KST is set against this week; the rest is not.
+            self.store.event(c,'l1',stamp('2026-09-26T08:30:00Z'),'OpenAI','codex','gpt-test',dict(output=200))
+            self.store.event(c,'l2',stamp('2026-09-26T10:00:00Z'),'OpenAI','codex','gpt-test',dict(output=7000))
+        week=reports.this_week(self.store,NOW,PRICING)
+        self.assertEqual((week['start'],week['end']),('2026-09-28','2026-10-04'))
+        self.assertEqual(week['tokens'],1500+500+300+9_999)
+        self.assertEqual(week['routes'],[dict(route='codex',tokens=1500+500+9_999),dict(route='claude-code',tokens=300)])
+        prior=week['prior']
+        self.assertEqual((prior['start'],prior['end_exclusive']),('2026-09-21T00:00:00+09:00','2026-09-26T18:00:00+09:00'))
+        self.assertTrue(prior['running'])
+        # p1 (09-22) and l1 (17:30); l2 at 19:00 comes after the same point.
+        self.assertEqual(prior['uncached_input']+prior['output'],1000+200)
+        self.assertEqual(prior['current_tokens'],week['tokens'])
+        # Records begin inside last week, so the comparison says it lacks the start of it.
+        self.assertFalse(prior['complete'])
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-14T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+        self.assertTrue(reports.this_week(self.store,NOW,PRICING)['prior']['complete'])
+        self.assertIsNone(week['accounts'])
+
+    def test_this_week_cut_follows_the_clock_without_a_collection_pass(self):
+        with self.store.connect() as c:
+            self.store.event(c,'old',stamp('2026-09-14T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            # Last Saturday 18:30 KST: after the cut at 18:00, before the one at 19:00.
+            self.store.event(c,'l3',stamp('2026-09-26T09:30:00Z'),'OpenAI','codex','gpt-test',dict(output=300))
+        first=reports.this_week(self.store,NOW,PRICING)['prior']
+        # An hour later with no new record (nothing moves the usage cache key).
+        later=reports.this_week(self.store,NOW+3600,PRICING)['prior']
+        self.assertEqual((first['current_end'],later['current_end']),('2026-10-03T18:00:00+09:00','2026-10-03T19:00:00+09:00'))
+        self.assertEqual(later['output']-first['output'],300)
+
+    def test_quota_use_counts_observed_and_zero_time(self):
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        codex=next(q for q in report['quota_use'] if q['route']=='codex')
+        # Five readings 10 minutes apart cover 40 minutes, 10 of them at 0% (0 → 0); the rise to
+        # 100 without a new reset time is not a window reset, so no before-reset value is recorded.
+        self.assertEqual((codex['observed_hours'],codex['zero_hours'],codex['resets_observed'],codex['before_reset']),(0.67,0.17,0,None))
+        self.assertEqual((codex['exhausted'],codex['streak']),(2,1))
+        self.assertIn('0%로 머문 시간 Codex codex · 10080분 10분',reports.summary(report))
+
+    def test_before_reset_needs_observation_across_the_reset(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            # Observed every 5 minutes up to and across the reset: 35% was left unused.
+            for i,remaining in enumerate((60,50,40,35)):
+                self.store.limit(c,'claude-code','five_hour',remaining,start+3600,start+2640+i*300,'claude-oauth')
+            self.store.limit(c,'claude-code','five_hour',100,start+21600,start+3840,'claude-oauth')
+            # The next window resets while nothing is observed: no value is guessed for it.
+            self.store.limit(c,'claude-code','five_hour',80,start+39600,start+28800,'claude-oauth')
+            # A window that ends with no new one started reads without a reset time; the reset
+            # was still seen (20% left).
+            for i,(remaining,resets) in enumerate(((20,start+39600),(20,start+39600),(100,None))):
+                self.store.limit(c,'claude-code','five_hour',remaining,resets,start+39000+i*300,'claude-oauth')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        claude=next(q for q in report['quota_use'] if q['route']=='claude-code')
+        self.assertEqual((claude['resets_observed'],claude['before_reset']),(2,dict(avg=27.5,min=20,max=35)))
+        self.assertEqual((claude['observed_hours'],claude['zero_hours'],claude['exhausted']),(0.5,0,0))
+
+    def test_moving_reset_time_of_an_idle_window_is_not_a_reset(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            # An unused 5-hour window reports a reset five hours after every reading; then a
+            # reading of the stale reset time after it passed is followed by the new window.
+            for i in range(6):
+                self.store.limit(c,'antigravity','gemini-5h',100,start+i*300+18000,start+i*300,'antigravity-app')
+            for i,(remaining,resets) in enumerate(((0,start+3000),(0,start+3000),(0,start+3000),(100,start+3000+18000))):
+                self.store.limit(c,'antigravity','3p-5h',remaining,resets,start+2700+i*300,'antigravity-app')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use={q['bucket']:q for q in report['quota_use'] if q['route']=='antigravity'}
+        self.assertEqual((use['gemini-5h']['observed_hours'],use['gemini-5h']['resets_observed']),(0.42,0))
+        # The window reset at +3000 once, with 0% left; the stale reading after it is not another reset.
+        self.assertEqual((use['3p-5h']['resets_observed'],use['3p-5h']['before_reset']),(1,dict(avg=0,min=0,max=0)))
+
+    def test_week_edges_join_readings_just_outside(self):
+        start,end=stamp('2026-09-27T15:00:00Z'),stamp('2026-10-04T15:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=end+3600),self.store.connect() as c:
+            # A reset in the last minutes of the week, confirmed by a poll just after it.
+            self.store.limit(c,'claude-code','five_hour',30,end-100,end-400,'claude-oauth')
+            self.store.limit(c,'claude-code','five_hour',100,end-100+18000,end+150,'claude-oauth')
+            # 0% across the start of the week counts only from the start.
+            self.store.limit(c,'claude-code','seven_day',0,end+86400,start-200,'claude-oauth')
+            self.store.limit(c,'claude-code','seven_day',0,end+86400,start+100,'claude-oauth')
+            # An exhaustion counted from a reading long before the week, with no interval inside it.
+            self.store.limit(c,'codex','codex · 300분',50,end+86400,start-3600,'codex')
+            self.store.limit(c,'codex','codex · 300분',0,end+86400,start+100,'codex')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use={(q['route'],q['bucket']):q for q in report['quota_use']}
+        five=use[('claude-code','five_hour')]
+        self.assertEqual((five['resets_observed'],five['before_reset'],five['observed_hours']),(1,dict(avg=30,min=30,max=30),0.11))
+        self.assertEqual((use[('claude-code','seven_day')]['zero_hours'],use[('claude-code','seven_day')]['observed_hours']),(0.03,0.03))
+        kept=use[('codex','codex · 300분')]
+        self.assertEqual((kept['exhausted'],kept['observed_hours'],kept['before_reset']),(1,0,None))
+        # The next week does not count the same reset again.
+        with self.store.connect() as c:later=reports.quota_use(c,end,end+7*86400)
+        self.assertFalse(any(q['resets_observed'] for q in later))
+
+    def test_longest_observed_stream_is_used(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            # The account poll stops after two readings; the status line goes on to exhaust the window.
+            for i,remaining in enumerate((80,78)):
+                self.store.limit(c,'claude-code','seven_day',remaining,start+6*86400,start+i*300,'claude-oauth')
+            for i,remaining in enumerate((40,20,5,0,0)):
+                self.store.limit(c,'claude-code','seven_day',remaining,start+6*86400,start+86400+i*300,'claude-code')
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use=next(q for q in report['quota_use'] if (q['route'],q['bucket'])==('claude-code','seven_day'))
+        self.assertEqual((use['exhausted'],use['observed_hours'],use['zero_hours']),(1,0.33,0.08))
+
+    def test_fetch_failure_between_readings_is_not_observed(self):
+        start=stamp('2026-09-29T00:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            for i in range(3):self.store.limit(c,'claude-code','five_hour',0,start+18000,start+i*300,'claude-oauth')
+            # The same failure also falls between the readings around a window reset.
+            for i,(remaining,resets) in enumerate(((0,start+400),(0,start+400),(100,start+400+604800))):
+                self.store.limit(c,'claude-code','seven_day',remaining,resets,start+i*300,'claude-oauth')
+            # The poll between the last two readings failed: that interval is not observed 0% time.
+            self.store.source(c,'claude-oauth','error','timeout',start+450)
+        report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        use={q['bucket']:q for q in report['quota_use'] if q['route']=='claude-code'}
+        self.assertEqual((use['five_hour']['observed_hours'],use['five_hour']['zero_hours']),(0.08,0.08))
+        self.assertEqual((use['seven_day']['observed_hours'],use['seven_day']['zero_hours']),(0.08,0.08))
+        # The reset itself was still seen across the two readings.
+        self.assertEqual(use['seven_day']['before_reset'],dict(avg=0,min=0,max=0))
+
+    def test_consecutive_exhaustion_weeks(self):
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            for i,remaining in enumerate((5,0)):
+                self.store.limit(c,'codex','codex · 10080분',remaining,NOW+86400,stamp('2026-09-23T00:00:00Z')+i*600,'codex')
+        reports.ensure_report(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        with self.store.connect() as c:report=self.store.state(c,'report:2026-09-28')
+        self.assertEqual(next(q for q in report['quota_use'] if q['route']=='codex')['streak'],2)
+        self.assertIn('Codex codex · 10080분 2회 (2주 연속)',reports.summary(report))
+
+    def test_rebuilt_old_week_keeps_quota_figures(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:before=self.store.state(c,'report:2026-09-28')
+        self.assertEqual(before['exhausted'][0]['count'],2)
+        # Weeks later the quota history of that week is pruned; a pricing change rebuilds every report.
+        month=later+40*86400
+        with patch('llm_usage.store.time.time',return_value=month),self.store.connect() as c:self.store.prune_history(c)
+        with self.store.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM limit_history').fetchone()[0],0)
+        reports.ensure_report(self.store,month,{**PRICING,'claude-x':dict(input=1,output=1)})
+        with self.store.connect() as c:
+            after=self.store.state(c,'report:2026-09-28');unseen=self.store.state(c,'report:2026-10-05')
+        self.assertNotEqual(after['built'],before['built'])
+        self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
+        # A week first built after its history was pruned says so instead of reporting zeros.
+        self.assertEqual((unseen['exhausted'],unseen['quota_use']),(None,None))
+        self.assertNotIn('한도 소진',reports.summary(unseen))
+
+    def test_longer_retention_after_pruning_keeps_quota_figures(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:before=self.store.state(c,'report:2026-09-28')
+        month=later+40*86400
+        with patch('llm_usage.store.time.time',return_value=month),self.store.connect() as c:self.store.prune_history(c)
+        # Retention is raised after the prune: the deleted history of that week does not come back.
+        wider=Store(Path(self.tmp.name)/'usage.db',thresholds={'retention_days':90})
+        reports.ensure_report(wider,month,{**PRICING,'claude-x':dict(input=1,output=1)})
+        with wider.connect() as c:after=wider.state(c,'report:2026-09-28')
+        self.assertNotEqual(after['built'],before['built'])
+        self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
+
+    def test_report_format_change_rebuilds_stored_weeks_once(self):
+        from llm_usage.reconciliation import RESIDUAL
+        later=stamp('2026-10-05T01:00:00Z')
+        with self.store.connect() as c:
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-09-29',tokens=4000)],NOW)
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            # A week stored by an earlier version: the residual among the models, no own line.
+            old=self.store.state(c,'report:2026-09-28')
+            self.store.save_state(c,'report:2026-09-28',{**old,'models':[dict(model='unknown',route='codex',tokens=2000,cost=None)],'residual':None})
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:self.assertEqual(self.store.state(c,'report:2026-09-28')['residual'],None)
+        with patch.object(reports,'REPORT_FORMAT',reports.REPORT_FORMAT+1):
+            self.assertIsNone(reports.ensure_report(self.store,later+120,PRICING))
+        with self.store.connect() as c:rebuilt=self.store.state(c,'report:2026-09-28')
+        self.assertEqual((rebuilt['built'],rebuilt['residual']['tokens']),(later+120,2000))
+        self.assertNotIn(RESIDUAL,[m['model'] for m in rebuilt['models']])
+        self.assertNotIn('unknown',[m['model'] for m in rebuilt['models']])
+
+    def test_records_attributed_later_rebuild_stored_weeks(self):
+        later=stamp('2026-10-05T01:00:00Z')
+        reports.ensure_report(self.store,later,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류'])
+            # Assigned to a project later: every token sum is kept.
+            c.execute("UPDATE events SET project='alpha' WHERE route='claude-code'");self.store.bump_data_version(c)
+        reports.ensure_report(self.store,later+60,PRICING)
+        with self.store.connect() as c:
+            self.assertEqual([p['project'] for p in self.store.state(c,'report:2026-09-28')['projects']],['미분류','alpha'])
+
+    def test_a_week_is_built_once_the_readings_past_its_end_are_in(self):
+        # Readings up to 10 minutes past the week's end close its last interval.
+        end=stamp('2026-10-04T15:00:00Z')  # Monday 10-05 00:00 KST
+        with patch('llm_usage.store.time.time',return_value=end+120),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end-300,'devin')
+        reports.ensure_report(self.store,end+120,PRICING)
+        with self.store.connect() as c:self.assertIsNone(self.store.state(c,'report:2026-09-28'))
+        with patch('llm_usage.store.time.time',return_value=end+240),self.store.connect() as c:
+            self.store.limit(c,'devin','weekly',0,end+86400,end+240,'devin')
+        self.assertEqual(reports.ensure_report(self.store,end+600,PRICING)['week'],'2026-09-28')
+        with self.store.connect() as c:report=self.store.state(c,'report:2026-09-28')
+        devin=next(q for q in report['quota_use'] if q['route']=='devin')
+        self.assertEqual((devin['observed_hours'],devin['zero_hours']),(0.08,0.08))
+
     def test_report_is_built_once_and_old_ones_are_pruned(self):
         later=stamp('2026-10-05T01:00:00Z')
         self.assertIsNotNone(reports.ensure_report(self.store,later,PRICING))
@@ -122,7 +365,10 @@ class BudgetWebTests(unittest.TestCase):
         usage=self.get('/api/usage?period=7d').get_json()
         self.assertEqual(usage['project_budgets']['a']['tokens'],2_000_000)
         self.assertIn('projects',usage['project_month'])
-        self.assertEqual(self.get('/api/reports').get_json(),{'reports':[]})
+        reports=self.get('/api/reports').get_json()
+        self.assertEqual(reports['reports'],[])
+        # This week so far, with nothing recorded: no use, and nothing to compare left out.
+        self.assertEqual((reports['this_week']['tokens'],reports['this_week']['routes']),(0,[]))
 
 
 if __name__=='__main__':unittest.main()

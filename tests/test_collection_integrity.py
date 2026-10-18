@@ -162,6 +162,15 @@ class StatusPresentationTests(unittest.TestCase):
         self.assertIn('터미널(TUI)',sources['claude-code']['detail'])
         self.assertEqual(sources['codex']['status'],'stale')
 
+    def test_finished_one_time_job_is_not_an_old_value(self):
+        # The attribution backfill runs once; its age says nothing about freshness.
+        import time
+        with self.store.connect() as c:
+            self.store.source(c,'session-backfill','ok','기존 기록의 세션·프로젝트 귀속 완료',time.time()-30*86400)
+            self.store.source(c,'normalization','ok','',time.time()-3*86400)
+        sources={s['name']:s['status'] for s in self.store.usage(period='7d')['sources']}
+        self.assertEqual((sources['session-backfill'],sources['normalization']),('ok','stale'))
+
     def test_antigravity_window_not_reported_by_the_app_is_explained(self):
         import time
         now=time.time()

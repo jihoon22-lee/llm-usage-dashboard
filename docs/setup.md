@@ -33,6 +33,8 @@ Windows 상태줄 쓰기는 init의 선택과 별도로 매 실행 명시해야 
 원복은 도구 종료 후 올바른 백업의 statusLine을 복구합니다. 이후 다른 설정 변경이 있었다면 파일 전체를 덮어쓰지 마세요.
 TUI가 아닌 앱·headless·원격 worker에서는 상태줄이 실행되지 않을 수 있습니다. 계정/앱 한도 조회와 구분합니다.
 
+`install-hooks`는 Linux 홈의 `.claude/settings.json`에 Claude 계정 구분 훅(SessionStart·UserPromptSubmit·Stop)도 추가합니다. 기존 훅은 유지하고 같은 백업을 남기며, 다시 실행해도 중복 추가하지 않습니다. zerosub 관리 홈처럼 이 설정 파일을 공유하는 홈도 같은 훅을 실행합니다. 훅은 세션 ID·시각·해시된 계정·설정 홈 경로만 상태 수신함의 `claude-accounts.db`에 기록하고 아무것도 출력하지 않습니다. 훅은 Claude Code 프로세스가 시작될 때 적용되므로 이미 실행 중인 세션은 프로세스 기록으로만 구분합니다. 상태줄 래퍼도 다시 복사되어 기본 홈이 아닌 홈의 상태줄을 `claude-code@<홈 태그>.json`에 따로 남깁니다.
+
 ## 개인 설정
 
 | 위치 | 내용 |

@@ -53,6 +53,16 @@ Claude 선불 잔액과 초기화권 조회는 정상 15분 간격이며 각각 
 
 지출 여유는 보유 잔액이 아닌 사용 조건입니다. 독립 자원 카드에서는 제외하고 같은 계정의 크레딧에 관련 조건을 연결합니다. 활성화 여부와 통화 일치 여부를 분리하며 금액은 단위가 같을 때만 연결합니다. 통화의 원본 소수 단위 또는 확인된 변환만 적용하며, 없는 통화·무제한 조건·만료를 추론하지 않습니다. 초기화권은 실제 사용 전 잔여율에 더하지 않습니다. 수동 기록은 계정/적용 범위·확인 시각·수정 버전과 함께 보존합니다. 독립 API 기록은 구독 경로의 추가 자원이 아닙니다.
 
+## Claude 계정 구분
+
+Claude Code는 계정마다 설정 홈(`CLAUDE_CONFIG_DIR`, 기본 `~/.claude`)을 쓰지만 zerosub처럼 여러 홈이 `projects`를 심볼릭 링크로 공유하면 transcript에는 계정이 남지 않습니다. 계정은 하나의 서비스(route `claude-code`) 안의 하위 차원입니다.
+
+- 계정 키: 각 홈의 `.claude.json` oauthAccount의 accountUuid·organizationUuid 해시(resources의 계정 키와 동일). DB에 이미 식별된 계정이 `claude-code` 경로를 유지하고, 다른 계정은 `claude-code:<키 앞 12자>` 경로입니다. 한도·자원·소스 상태(`claude-oauth:<…>` 등)·구독료는 이 경로별로 저장합니다.
+- 홈 탐색: 기본 홈, 설정의 `claude_homes`, `~/.paseo/zerosub/homes/claude-*`(`claude_discover_homes: false`로 끔), 훅이 보고한 사용자 홈 아래의 홈, Windows 홈(transcript 귀속용, 인증값은 읽지 않음). 계정별로 만료되지 않은 로그인을 우선해 조회합니다.
+- 요청 귀속: events.account에 계정 경로를 저장하고 usage_hourly(rollup v2)도 계정별로 유지합니다. 근거 시점은 claude_evidence에 보관합니다. 훅(SessionStart·UserPromptSubmit·Stop)과 각 홈의 `sessions/<pid>.json`(프로세스 시작·busy 전환, 수집기 5초 주기 관찰)이 근거입니다. 요청 시각 이전의 가장 최근 근거가 계정을 정합니다. 계정 전환은 새 프로세스로만 일어나고 턴 중간에 옮기지 않으므로, 근거를 남긴 프로세스가 요청을 만든 프로세스입니다.
+- 근거가 없을 때: 한 계정만 쓰는 폴더(Windows 등)는 그 계정입니다. 공유 폴더는 두 번째 계정이 연결된 시각(공유 링크 생성 시각, 한 번 기록하면 늦어지지 않음) 전에는 폴더 원래 계정이고, 이후에는 `claude-code:unknown`(계정 미확인)입니다. 클라우드 세션은 읽은 계정으로 바로 배정합니다. 새 근거가 오면 그 시각 이후 요청만 다시 판정합니다.
+- 추가 테이블·열만 사용합니다(claude_accounts, claude_evidence, claude_dirty, events.account). 이전 릴리스로 되돌려도 events·limits를 그대로 읽으며 rollup 버전이 다르면 서로 다시 만듭니다.
+
 ## API·신뢰 경계
 
 | API | 역할 |
@@ -61,7 +71,7 @@ Claude 선불 잔액과 초기화권 조회는 정상 15분 간격이며 각각 
 | GET /api/usage | 기간·간격·분류·scope 통계 |
 | GET /api/limits, /api/collection | 한도·자원 관측 / 수집 상태 |
 | GET /api/session, /api/project | 세션·프로젝트 상세 |
-| GET /api/reports, /api/notify/log | 리포트·비밀 제외 알림 결과 |
+| GET /api/reports, /api/notify/log | 저장된 주간 리포트·월간 구독 결산과 이번 주 현황·비밀 제외 알림 결과 |
 | GET /api/bootstrap, /api/config | CSRF 초기화·마스킹 설정 |
 | POST /api/refresh | 202 수집 요청, collection의 완료 ID 확인 |
 | POST /api/config/*, /api/notify/test | 허용 설정 저장·알림 시험 |

@@ -8,7 +8,7 @@ function chart(data){
  if(!$('chart').clientWidth)return;
  const grouped=chartSeries(data),allLabels=grouped.labels;
  const labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
- const colorOf=paletteFor(allLabels);
+ const colorOf=paletteFor(allLabels,groupSlots($('group').value,allLabels));
  $('legend').innerHTML=allLabels.map(label=>`<button data-label="${esc(label)}" aria-pressed="${!hiddenLabels.has(label)}">${esc(seriesLabel(label))}</button>`).join('');
  $('legend').insertAdjacentHTML('beforeend',missingRoutes(data).map(row=>`<span class="unavailable-series">${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span>`).join(''));
  $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);chart(data);};});
@@ -65,7 +65,7 @@ function chart(data){
 }
 function bindChartTooltip(data,grouped,geometry,comparisonTotals){
  const root=$('chart'),svg=root.querySelector('svg'),tooltip=$('chart-tooltip'),cursor=root.querySelector('.chart-cursor');
- const colorOf=paletteFor(grouped.labels);
+ const colorOf=paletteFor(grouped.labels,groupSlots($('group').value,grouped.labels));
  // Long lists sit below the plot so scrolling never intercepts a bucket tap.
  const scrollable=grouped.labels.length>8;
  tooltip.classList.toggle('scrollable',scrollable);
@@ -151,41 +151,66 @@ new ResizeObserver(()=>{
  cancelAnimationFrame(chartFrame);
  chartFrame=requestAnimationFrame(()=>{if(chartData&&$('chart').clientWidth)chart(chartData);});
 }).observe($('chart'));
-let donutExcludeCache=storage.get('llmDonutNoCache')!=='0';
-$('donut-nocache').setAttribute('aria-pressed',String(donutExcludeCache));
-$('donut-nocache').classList.toggle('on',donutExcludeCache);
-$('donut-nocache').addEventListener('click',event=>{
- donutExcludeCache=!donutExcludeCache;
- storage.set('llmDonutNoCache',donutExcludeCache?'1':'0');
- event.currentTarget.setAttribute('aria-pressed',String(donutExcludeCache));
- event.currentTarget.classList.toggle('on',donutExcludeCache);
- if(lastUsage)composition(lastUsage);
-});
-function composition(data){
- const all=[['일반 입력','uncached_input',0],['캐시 읽기','cached_input',1],['출력','output',2],['캐시 생성','cache_creation',3],['내역 미분류','unclassified_tokens',4]].filter(([,key])=>key!=='unclassified_tokens'||data.totals.unclassified_tokens);
- const totals=donutExcludeCache?{...data.totals,cached_input:0,total_tokens:total(data.totals)-(data.totals.cached_input||0)}:data.totals;
- const segments=all.filter(([,key])=>!(donutExcludeCache&&key==='cached_input'))
-  .sort((a,b)=>(totals[b[1]]||0)-(totals[a[1]]||0));
- const sum=total(totals);if(!sum){$('composition').innerHTML='<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';return;}
- const circumference=2*Math.PI*76;let offset=0;
- const rings=segments.map(([name,key,color])=>{const value=totals[key],length=value/sum*circumference;const circle=`<circle cx="110" cy="110" r="76" fill="none" stroke="${colors[color]}" stroke-width="24" stroke-dasharray="${length} ${circumference-length}" stroke-dashoffset="${-offset}" transform="rotate(-90 110 110)" data-tip="${name}: ${fmt(value)} (${(value/sum*100).toFixed(1)}%)"/>`;offset+=length;return circle;}).join('');
- // Cached Input stays in the key as a muted row so exclusion never hides data.
- const keyRows=all.slice().sort((a,b)=>(data.totals[b[1]]||0)-(data.totals[a[1]]||0)).map(([name,key,color])=>{
-  if(donutExcludeCache&&key==='cached_input'){
-   const value=data.totals[key],grand=total(data.totals),pct=grand?(value/grand*100).toFixed(1):'0.0';
-   return `<div class="excluded" data-token="${key}" data-tip="${name}: ${fmt(value)} (${pct}%) · 차트 제외"><strong><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colors[color]}"/></svg> ${name}</strong><span>${fmt(value)} · ${pct}% (차트 제외)</span></div>`;
-  }
-  return `<div data-token="${key}" data-tip="${name}: ${fmt(totals[key])} (${(totals[key]/sum*100).toFixed(1)}%)"><strong><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${colors[color]}"/></svg> ${name}</strong><span>${fmt(totals[key])} · ${(totals[key]/sum*100).toFixed(1)}%</span></div>`;
+let donutExcludeCache=storage.get('llmDonutNoCache')!=='0',donutExcludeResidual=storage.get('llmDonutNoResidual')!=='0';
+function donutToggle(id,key,get,set){
+ const button=$(id);
+ button.setAttribute('aria-pressed',String(get()));button.classList.toggle('on',get());
+ button.addEventListener('click',()=>{
+  set(!get());storage.set(key,get()?'1':'0');
+  button.setAttribute('aria-pressed',String(get()));button.classList.toggle('on',get());
+  if(lastUsage)composition(lastUsage);
  });
- $('composition').innerHTML=`<div class="donut-wrap"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${donutExcludeCache?'캐시 읽기 제외 ':''}비중순 토큰 구성 도넛 차트">${rings}<text x="110" y="${donutExcludeCache?103:109}" text-anchor="middle" font-size="26" font-weight="600">${compact(sum)}</text><text x="110" y="${donutExcludeCache?123:130}" text-anchor="middle" font-size="11">${donutExcludeCache?'캐시 읽기 제외':'전체 토큰'}</text>${donutExcludeCache?`<text x="110" y="140" text-anchor="middle" font-size="11" class="donut-sub">전체 ${compact(total(data.totals))}</text>`:''}</svg><div class="donut-key">${keyRows.join('')}</div></div>`;
+}
+donutToggle('donut-nocache','llmDonutNoCache',()=>donutExcludeCache,v=>{donutExcludeCache=v;});
+donutToggle('donut-noresidual','llmDonutNoResidual',()=>donutExcludeResidual,v=>{donutExcludeResidual=v;});
+// Token types of the period. The Codex account residual has no type: it is its own muted
+// item, apart from other supplements without a breakdown (내역 미분류), and like cache
+// reads it can be left out of the ring while its key row stays.
+function composition(data){
+ const residual=data.totals.residual_tokens||0;
+ const parts={...data.totals,unclassified_tokens:(data.totals.unclassified_tokens||0)-residual,residual_tokens:residual};
+ const tint=i=>i<0?mutedColor:colors[i];
+ const all=[['일반 입력','uncached_input',0],['캐시 읽기','cached_input',1],['출력','output',2],['캐시 생성','cache_creation',3],['내역 미분류','unclassified_tokens',4],[residualName,'residual_tokens',-1]]
+  .filter(([,key])=>!['unclassified_tokens','residual_tokens'].includes(key)||parts[key]);
+ const out=key=>(donutExcludeCache&&key==='cached_input')||(donutExcludeResidual&&key==='residual_tokens'&&residual>0);
+ $('donut-noresidual').hidden=!residual;$('donut-noresidual').textContent=residualName+' 제외';
+ const grand=total(data.totals),excluded=all.filter(([,key])=>out(key));
+ const sum=grand-excluded.reduce((n,[,key])=>n+(parts[key]||0),0);
+ const segments=all.filter(([,key])=>!out(key)).sort((a,b)=>(parts[b[1]]||0)-(parts[a[1]]||0));
+ if(!sum){$('composition').innerHTML='<div class="empty">'+(grand?'제외한 항목만 있습니다. 위의 제외 버튼으로 다시 표시할 수 있습니다.':'선택 기간에 사용 기록이 없습니다.')+'</div>';return;}
+ const circumference=2*Math.PI*76;let offset=0;
+ const rings=segments.map(([name,key,color])=>{const value=parts[key],length=value/sum*circumference;const circle=`<circle cx="110" cy="110" r="76" fill="none" stroke="${tint(color)}" stroke-width="24" stroke-dasharray="${length} ${circumference-length}" stroke-dashoffset="${-offset}" transform="rotate(-90 110 110)" data-tip="${esc(name)}: ${fmt(value)} (${(value/sum*100).toFixed(1)}%)"/>`;offset+=length;return circle;}).join('');
+ // Excluded items stay in the key as muted rows so exclusion never hides data.
+ const dot=color=>`<svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${tint(color)}"/></svg>`;
+ const keyRows=all.slice().sort((a,b)=>(parts[b[1]]||0)-(parts[a[1]]||0)).map(([name,key,color])=>{
+  if(out(key)){
+   const value=parts[key],pct=grand?(value/grand*100).toFixed(1):'0.0';
+   return `<div class="excluded" data-token="${key}" data-tip="${esc(name)}: ${fmt(value)} (${pct}%) · 차트 제외"><strong>${dot(color)} ${esc(name)}</strong><span>${fmt(value)} · ${pct}% (차트 제외)</span></div>`;
+  }
+  return `<div data-token="${key}" data-tip="${esc(name)}: ${fmt(parts[key])} (${(parts[key]/sum*100).toFixed(1)}%)"><strong>${dot(color)} ${esc(name)}</strong><span>${fmt(parts[key])} · ${(parts[key]/sum*100).toFixed(1)}%</span></div>`;
+ });
+ const names=excluded.map(([name])=>name),cut=names.length?(names.length>1?`${names.length}개 항목`:names[0])+' 제외':'';
+ $('composition').innerHTML=`<div class="donut-wrap"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}<text x="110" y="${cut?103:109}" text-anchor="middle" font-size="26" font-weight="600">${compact(sum)}</text><text x="110" y="${cut?123:130}" text-anchor="middle" font-size="11">${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</text>${cut?`<text x="110" y="140" text-anchor="middle" font-size="11" class="donut-sub">전체 ${compact(grand)}</text>`:''}</svg><div class="donut-key">${keyRows.join('')}</div></div>`;
 }
 function ranking(data){
- const rowValue=r=>$('metric').value==='requests'?(r.requests||0):$('metric').value==='cost'?(r.est_cost??0):modelTotal(r);
- const rows=[...data.rows].sort((a,b)=>rowValue(b)-rowValue(a));const max=Math.max(1,...rows.map(rowValue));
- $('ranking-caption').textContent=`전체 ${rows.length}개 · 구독 경로 구분`;
- const denom=data.rows.reduce((s,r)=>s+rowValue(r),0);
+ const metric=$('metric').value;
+ const rowValue=r=>metric==='requests'?(r.requests||0):metric==='cost'?(r.est_cost??0):modelTotal(r);
+ // The Codex account residual is not a model: shares are of model-attributed use, and the
+ // residual follows on a muted line (tokens only; it has no requests or cost).
+ const residual=data.rows.filter(r=>r.model===RESIDUAL);
+ const rows=data.rows.filter(r=>r.model!==RESIDUAL).sort((a,b)=>rowValue(b)-rowValue(a));const max=Math.max(1,...rows.map(rowValue));
+ $('ranking-caption').textContent=`전체 ${rows.length}개 · 구독 경로 구분${residual.length?' · 비중은 모델이 기록된 사용량 기준':''}`;
+ const denom=rows.reduce((s,r)=>s+rowValue(r),0);
  const share=r=>denom?percent(rowValue(r)/denom*100):'—';
  const colorOf=paletteFor(rows.map(r=>r.model));
- $('ranking').innerHTML=rows.map(r=>{const v=rowValue(r),label=routeNames[r.route]||r.route;
-  return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.model)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
+ const extra=residual.map(r=>{
+  const v=metric==='tokens'?modelTotal(r):null,label=routeNames[r.route]||r.route,all=denom+(v||0);
+  const note=v==null?`${metricName()} 없음`:`전체의 ${all?percent(v/all*100):'—'} · 순위 제외`;
+  return `<div class="rank rank-residual"><div class="rank-label"><strong>${esc(residualName)} <small>${esc(label)} · 모델 구분 없음</small></strong><span>${v==null?'—':metricFmt(v)} <small>${note}</small></span></div>`
+   // Hatched rather than colored: it is not one of the ranked models.
+   +(v?`<span class="rank-bar rank-hatch" role="img" aria-label="${esc(residualName)} ${metricFmt(v)} · ${note}"><i data-w="${(Math.min(1,v/max)*100).toFixed(2)}" data-tip="${esc(residualName)} · ${esc(label)} · ${metricFmt(v)} · ${note}"></i></span>`:'')+'</div>';
+ }).join('');
+ $('ranking').innerHTML=(rows.map(r=>{const v=rowValue(r),label=routeNames[r.route]||r.route;
+  return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.model)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
+ applyGeometry($('ranking'));
 }
