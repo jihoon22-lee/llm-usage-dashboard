@@ -97,6 +97,24 @@ def record_tokens(directory,data,checked):
         c.execute('DELETE FROM observations WHERE last_seen<?',(checked-30*86400,))
 
 
+def claude_target(environ=None):
+    """(inbox file name, hashed account) for the Claude config home this process uses.
+
+    The default home keeps claude-code.json; another CLAUDE_CONFIG_DIR home writes its
+    own file, so two accounts never overwrite each other's quota."""
+    environ=os.environ if environ is None else environ
+    try:
+        try:from .claudehook import config_home,native_account
+        except ImportError:from claudehook import config_home,native_account
+    except ImportError:
+        # An older install without the hook module: unidentified, default name only.
+        return ('claude-code.json',None) if not environ.get('CLAUDE_CONFIG_DIR') else (None,None)
+    home,account_file=config_home(environ)
+    if not environ.get('CLAUDE_CONFIG_DIR'):return 'claude-code.json',native_account(account_file)
+    tag=hashlib.sha256(str(home).encode()).hexdigest()[:12]
+    return f'claude-code@{tag}.json',native_account(account_file)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--route',choices=['claude-code','antigravity'],required=True)
@@ -107,11 +125,15 @@ def main():
     try:
         data=json.loads(raw)
         safe=sanitize(args.route,data)
+        name,account=claude_target() if args.route=='claude-code' else (args.route+'.json',None)
+        if name is None:raise ValueError('unidentified Claude home')
+        payload=dict(route=args.route,checked=time.time(),data=safe)
+        if account:payload['account']=account
         directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         fd,tmp=tempfile.mkstemp(dir=directory)
         try:
-            with os.fdopen(fd,'w') as f:json.dump(dict(route=args.route,checked=time.time(),data=safe),f)
-            os.replace(tmp,directory/(args.route+'.json'))
+            with os.fdopen(fd,'w') as f:json.dump(payload,f)
+            os.replace(tmp,directory/name)
         finally:
             if os.path.exists(tmp):os.unlink(tmp)
     except Exception:

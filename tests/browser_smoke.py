@@ -79,7 +79,8 @@ with sync_playwright() as p:
     # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
     page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
     assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
-    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue']
+    # A panel the saved order does not know (added later) follows the known ones.
+    assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue','monthly']
     assert page.evaluate("[...document.querySelectorAll('#view-usage>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
     page.evaluate("storage.set('llmOrder','{}')");page.reload()
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
@@ -107,6 +108,27 @@ with sync_playwright() as p:
     else:
         values=[int(cells[i].replace(',','')) for i in (5,6,7,8,10)]
         assert values[3]==values[0]+values[1]+values[2]+values[4]
+    # Period cards lead with total tokens and cost. The fixture's Codex account days begin
+    # inside this week, so that source did not cover the week before: no change is computed.
+    assert page.locator('#cards .stat-label').all_text_contents()[:2]==['전체 토큰','비용 추정']
+    prior=page.evaluate('lastUsage.prior')
+    assert prior['running'] and prior['mode']=='previous' and not prior['complete'],prior
+    delta=page.locator('#cards .stat').first.locator('.stat-delta')
+    expect(delta).to_have_text('직전 7일 같은 시점 기록 부족')
+    # Claude Code alone has local records a hundred days back: the change against the
+    # seven days before, cut at the same time, as the response gives it.
+    with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route%3Aclaude-code' in r.url and r.status==200):
+        page.locator('#scope').select_option('route:claude-code')
+    expect(page.locator('#refresh')).to_be_enabled()
+    prior=page.evaluate('lastUsage.prior')
+    assert prior['complete'],prior
+    previous=prior.get('total_tokens',sum(prior[k] for k in ('uncached_input','cached_input','output','cache_creation')))
+    ratio=prior['current_tokens']/previous
+    change=f'{ratio:.1f}배' if ratio>=2 else f"{'+' if ratio>=1 else '−'}{abs(ratio-1)*100:.1f}%"
+    expect(delta).to_have_text('직전 7일 같은 시점 대비 '+change)
+    with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route' not in r.url and r.status==200):
+        page.locator('#scope').select_option('')
+    expect(page.locator('#refresh')).to_be_enabled()
     labels=page.evaluate('lastUsage.labels')
     page.locator('#chart > svg').focus()
     expect(page.locator('#chart-tooltip .tooltip-row:not(.tooltip-missing)')).to_have_count(min(len(labels),8))
@@ -177,7 +199,8 @@ with sync_playwright() as p:
     assert page.evaluate("JSON.parse(localStorage.getItem('llmDefaults')).view")=='usage'
     expect(page.locator('#cfg-subs .cfg-row').first).to_be_visible()
     assert page.locator('#cfg-pricing tbody tr').count()>0
-    assert page.locator('#cfg-thresholds input').count()==4
+    # Four thresholds and the two of the pre-reset notice.
+    assert page.locator('#cfg-thresholds input').count()==6
     expect(page.locator('#cfg-refresh')).to_be_visible()
     # Auto refresh and browser alerts moved here from the header.
     assert page.locator('.cfg-toggles input').count()==6

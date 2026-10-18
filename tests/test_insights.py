@@ -296,7 +296,9 @@ class InsightStoreTests(unittest.TestCase):
     def test_subscriptions_without_pricing_report_no_estimate(self):
         with self.store.connect() as c:
             self.store.event(c,'e',stamp('2026-09-08T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
-        data=self.store.usage(period='all',subscriptions={'codex':20})
-        self.assertEqual(data['subscriptions'],[dict(route='codex',monthly_usd=20,period_cost=None,monthly_equiv=None)])
+        data=self.store.usage(period='all',subscriptions={'codex':20,'devin':10})
+        # Unpriced tokens and no tokens at all are told apart.
+        self.assertEqual(data['subscriptions'],[dict(route='codex',monthly_usd=20,period_cost=None,period_tokens=5,monthly_equiv=None),
+                                                dict(route='devin',monthly_usd=10,period_cost=None,period_tokens=0,monthly_equiv=None)])
 
 if __name__=='__main__':unittest.main()

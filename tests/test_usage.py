@@ -24,6 +24,13 @@ from llm_usage.statusline import sanitize
 from llm_usage.webapp import create_app
 
 
+
+
+def default_home_env(home):
+    """The wrapper as run by the default Claude home of a disposable HOME; the
+    developer's CLAUDE_CONFIG_DIR and real login are never inherited."""
+    return {**{k:v for k,v in os.environ.items() if k!='CLAUDE_CONFIG_DIR'},'HOME':str(home)}
+
 class UsageTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -199,6 +206,17 @@ class UsageTests(unittest.TestCase):
         src=next(s for s in self.store.limits(1235)['sources'] if s['name']=='antigravity')
         self.assertEqual(src['status'],'error')
 
+    def test_sources_carry_their_last_success(self):
+        # The page shows a failure chip only once a source has not succeeded for a while.
+        now=time.time()
+        with self.store.connect() as c:
+            self.store.source(c,'codex','ok','fine',now-100)
+            self.store.source(c,'codex','error','HTTP 500',now-10)
+            self.store.source(c,'devin','error','HTTP 401',now-10)
+        sources={s['name']:s for s in self.store.usage(period='today')['sources']}
+        self.assertEqual((sources['codex']['status'],sources['codex']['last_success']),('error',now-100))
+        self.assertIsNone(sources['devin']['last_success'])
+
     def test_older_status_source_cannot_override_new_confirmation(self):
         with self.store.connect() as c:
             self.store.source(c,'antigravity','ok','new',200)
@@ -211,14 +229,14 @@ class UsageTests(unittest.TestCase):
         from llm_usage import statusline
         (self.root/'claude-code-original.json').write_text(json.dumps({'command':f'{sys.executable} -c "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(7)"'}))
         raw=b'{"rate_limits":{"five_hour":{"used_percentage":25}},"content":"PRIVATE BODY"}\n'
-        result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True)
+        result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True,env=default_home_env(self.root))
         self.assertEqual(result.returncode,7);self.assertEqual(result.stdout,raw)
         self.assertNotIn('PRIVATE BODY',(self.root/'claude-code.json').read_text())
 
     def test_status_wrapper_appends_a_fresh_opt_in_summary_only(self):
         from llm_usage import statusline
         (self.root/'claude-code-original.json').write_text(json.dumps({'command':f'{sys.executable} -c "print(1)"'}))
-        run=lambda:subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=b'{}',capture_output=True).stdout
+        run=lambda:subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=b'{}',capture_output=True,env=default_home_env(self.root)).stdout
         self.assertEqual(run(),b'1\n')
         (self.root/'summary.txt').write_text('Codex 주간 44%\n')
         self.assertEqual(run().decode(),'1\nCodex 주간 44%\n')
@@ -239,7 +257,7 @@ class UsageTests(unittest.TestCase):
         raw=b'{"rate_limits":{"five_hour":{"used_percentage":25}}}'
         for broken in (None,'{not json'):
             if broken is not None:(self.root/'claude-code-original.json').write_text(broken)
-            result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True)
+            result=subprocess.run([sys.executable,statusline.__file__,'--route','claude-code','--directory',str(self.root)],input=raw,capture_output=True,env=default_home_env(self.root))
             self.assertEqual((result.returncode,result.stdout,result.stderr),(0,b'',b''))
         self.assertIn('five_hour',json.loads((self.root/'claude-code.json').read_text())['data']['rate_limits'])
 
@@ -535,7 +553,9 @@ class UsageCacheTests(unittest.TestCase):
         spy,calls=self.calls();self.store._usage_body=spy
         first=self.store.usage(period='7d')
         second=self.store.usage(period='7d')
-        self.assertEqual(first,second)
+        # The card comparison is worked out per request: its cut follows the clock.
+        self.assertEqual({k:v for k,v in first.items() if k!='prior'},{k:v for k,v in second.items() if k!='prior'})
+        self.assertLessEqual(first['prior']['current_end'],second['prior']['current_end'])
         self.assertEqual(len(calls),1)
         # A different shape (scope/sections/grouping) is a different entry.
         self.store.usage(period='7d',sections='core')

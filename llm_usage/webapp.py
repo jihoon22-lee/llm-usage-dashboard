@@ -12,10 +12,11 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory, session
 from werkzeug.exceptions import HTTPException
 
-from .config import atomic_json, config_path, settings, update_local
+from .config import atomic_json, config_path, ended_routes, settings, update_local
 from .store import Store
 
-ROUTE_RE=re.compile(r'^[a-z0-9_-]{1,64}$')
+# Claude account routes are 'claude-code:<hash>'.
+ROUTE_RE=re.compile(r'^[a-z0-9_-]{1,40}(:[a-z0-9_-]{1,40})?$')
 SESSION_RE=re.compile(r'^[A-Za-z0-9._:/@-]+$')
 # Inline style="" attributes are blocked too; the UI sets geometry through the CSSOM.
 CSP=("default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; "
@@ -99,13 +100,24 @@ def create_app(config=None):
         return sorted({r['model'] for r in data.get('rows') or [] if r.get('est_cost') is None and r.get('requests')
                        and r['model'] not in NO_PUBLIC_PRICE and origins.get(r['model'])!='hidden'})
 
+    def residual_label():
+        from .reconciliation import RESIDUAL_LABEL
+        return config.get('residual_label') or RESIDUAL_LABEL
+
+    def active_prices():
+        """Monthly prices of subscriptions that are not marked ended."""
+        ended=ended_routes(config)
+        return {route:value for route,value in (config.get('subscription_prices') or {}).items() if route not in ended}
+
     @app.get('/api/usage')
     def usage():
         try:
             as_of=float(request.args['as_of']) if 'as_of' in request.args else None
             data=(store.usage(period=request.args.get('period','7d'),start=request.args.get('start'),end=request.args.get('end'),
-                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=config.get('subscription_prices'),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of))
-            return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {}} if 'rows' in data else data)
+                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=active_prices(),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of,names=config.get('claude_account_names'),ended=ended_routes(config)))
+            # The residual's name is a display setting, not part of the cached usage body.
+            return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {},
+                            'residual_label':residual_label()} if 'rows' in data else data)
         except (ValueError,TypeError,OverflowError):abort(400,description='기간 또는 집계 단위를 확인하세요.')
 
     @app.get('/api/session')
@@ -127,12 +139,14 @@ def create_app(config=None):
 
     @app.get('/api/reports')
     def reports():
-        from .reports import recent
-        return jsonify(reports=recent(store))
+        from .monthly import recent as months
+        from .pricing import load_pricing
+        from .reports import recent,this_week
+        return jsonify(reports=recent(store),this_week=this_week(store,time.time(),load_pricing(config)),months=months(store))
 
     @app.get('/api/limits')
     def limits():
-        return jsonify(store.limits())
+        return jsonify(store.limits(ended=ended_routes(config),names=config.get('claude_account_names')))
 
     def manual_resource(rid=None,delete=False):
         from .resources import write_manual,Conflict
@@ -211,17 +225,24 @@ def create_app(config=None):
         from datetime import datetime
         pricing=load_pricing(config)
         today=datetime.now(KST).strftime('%Y-%m-%d')
+        from .claude_accounts import describe
         with store.connect() as c:
             providers={r[0]:r[1] for r in c.execute('SELECT model,MAX(provider) FROM events GROUP BY model ORDER BY model')}
             models=list(providers)
             routes=set(SUPPORTED_ROUTES)|set(config.get('subscription_prices') or {})
             routes.update(r[0] for r in c.execute('SELECT DISTINCT route FROM events'))
+            claude=describe(c,config.get('claude_account_names'),ended_routes(config))
+            # Several Claude accounts: each is its own subscription row.
+            if len(claude)>1:routes.update(a['route'] for a in claude)
         upcoming={m:e for m in {*models,*pricing} if (e:=upcoming_for(m,pricing,today))}
         from .notify import masked
         since=time.time()-30*86400
         with store.connect() as c:
             usage30={r[0]:r[1] for r in c.execute('SELECT model,SUM(uncached_input+cached_input+output+cache_creation) FROM events WHERE ts>=? GROUP BY model',(since,))}
-        return jsonify(subscription_routes=sorted(routes),subscription_prices=config.get('subscription_prices') or {},notify=masked(config.get('notify')),
+        return jsonify(subscription_routes=sorted(routes),subscription_prices=config.get('subscription_prices') or {},
+                       ended_subscriptions=config.get('ended_subscriptions') or {},claude_accounts=claude,
+                       claude_account_names=config.get('claude_account_names') or {},notify=masked(config.get('notify')),
+                       residual_label=config.get('residual_label'),
                        project_budgets=config.get('project_budgets') or {},model_usage_30d=usage30,
                        thresholds=store.thresholds,pricing=pricing,refresh_seconds=config.get('refresh_seconds',300),
                        value_alert_usd=config.get('value_alert_usd'),
@@ -231,15 +252,40 @@ def create_app(config=None):
 
     @app.post('/api/config/subscription-prices')
     def set_prices():
-        prices=(request.get_json(silent=True) or {}).get('prices')
+        body=request.get_json(silent=True) or {}
+        prices=body.get('prices')
         if not isinstance(prices,dict) or len(prices)>64:abort(400,description='구독료 목록을 확인하세요.')
         clean={}
         for route,value in prices.items():
-            if not isinstance(route,str) or not ROUTE_RE.match(route):abort(400,description='경로 이름을 확인하세요.')
+            if not isinstance(route,str) or not ROUTE_RE.fullmatch(route):abort(400,description='경로 이름을 확인하세요.')
             if not number(value,0,100000):abort(400,description='구독료는 0~100000 범위의 숫자여야 합니다.')
             clean[route]=value
-        persist({'subscription_prices':clean})
-        return jsonify(subscription_prices=clean)
+        patch={'subscription_prices':clean}
+        names=body.get('names')
+        if names is not None:
+            # Display names of Claude accounts; emails are never stored or shown.
+            if (not isinstance(names,dict) or len(names)>16 or not all(isinstance(r,str) and ROUTE_RE.fullmatch(r) and r.startswith('claude-code')
+                    and isinstance(v,str) and len(v.strip())<=40 and not any(ord(ch)<32 or ord(ch)==127 for ch in v) for r,v in names.items())):
+                abort(400,description='계정 이름은 40자 이하로 입력하세요.')
+            patch['claude_account_names']={r:v.strip() for r,v in names.items() if v.strip()}
+        label=body.get('residual_label')
+        if label is not None:
+            # The name of the Codex account residual (e.g. '자동 리뷰'); empty restores the default.
+            if not isinstance(label,str) or len(label.strip())>20 or any(ord(ch)<32 or ord(ch)==127 for ch in label):
+                abort(400,description='계정 합계 차이 이름은 20자 이하로 입력하세요.')
+            patch['residual_label']=label.strip() or None
+        ended=body.get('ended')
+        if ended is not None:
+            # Omitted keeps the stored state; a list replaces it and keeps the original dates.
+            if not isinstance(ended,list) or len(ended)>64 or not all(isinstance(r,str) and ROUTE_RE.fullmatch(r) for r in ended):
+                abort(400,description='구독 종료 목록을 확인하세요.')
+            def change(current):
+                before=current.get('ended_subscriptions') or {}
+                return {**patch,'ended_subscriptions':{r:before.get(r) or {'since':time.time()} for r in dict.fromkeys(ended)}}
+            saved=persist(change)
+        else:saved=persist(patch)
+        return jsonify(subscription_prices=clean,ended_subscriptions=saved.get('ended_subscriptions') or {},
+                       claude_account_names=saved.get('claude_account_names') or {},residual_label=saved.get('residual_label'))
 
     @app.post('/api/config/pricing')
     def set_pricing():
@@ -291,7 +337,8 @@ def create_app(config=None):
     def set_thresholds():
         body=request.get_json(silent=True) or {}
         patch={}
-        for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90)}.items():
+        for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90),
+                            'unused_percent':(10,100),'unused_hours':(1,72)}.items():
             if key not in body:continue
             if not number(body[key],lo,hi):abort(400,description=f'{key}는 {lo}~{hi} 범위여야 합니다.')
             patch[key]=body[key]

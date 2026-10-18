@@ -3,6 +3,12 @@
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>Number(v||0).toLocaleString('ko-KR');
 const compact=v=>Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:2}).format(v||0);
+// Balances keep at most two decimals: none for counts, won/yen or 100+ credits.
+const amountText=(v,unit)=>{const n=Number(v);if(v==null||!Number.isFinite(n))return '—';
+ const digits=unit==='count'||unit==='KRW'||unit==='JPY'||(unit==='credit'&&Math.abs(n)>=100)?0:2;
+ return n.toLocaleString('ko-KR',{maximumFractionDigits:digits});};
+// IDs that share a prefix (time-ordered UUIDs of one minute) stay distinguishable.
+const shortId=id=>{const s=String(id??'');return s.length>12?s.slice(0,8)+'…'+s.slice(-4):s;};
 const when=t=>t?new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'확인 기록 없음';
 const left=s=>s==null?'초기화 정보 미제공':s<=0?'초기화 경과 · 재확인 대기':`${Math.floor(s/86400)?Math.floor(s/86400)+'일 ':''}${Math.floor(s%86400/3600)}시간 ${Math.floor(s%3600/60)}분 남음`;
 // Dense rows (overview, reset schedule): the two largest units, without "남음".
@@ -12,6 +18,25 @@ const kstYear=t=>new Date(t*1000).toLocaleString('en',{timeZone:'Asia/Seoul',yea
 const stamp=(t,now=Date.now()/1000)=>new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',...(kstYear(t)===kstYear(now)?{}:{year:'numeric'}),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const names={'codex':'OpenAI / Codex','claude-code':'Anthropic / Claude Code','antigravity':'Google / Antigravity','opencode-go':'OpenCode Go','devin':'Cognition / Devin'};
 const routeNames={...names,opencode:'OpenCode'};
+// Several Claude accounts are one Claude Code service. Each keeps an internal route
+// ('claude-code' for the original account, 'claude-code:<hash>' for another one);
+// labels come from the API and are shown only once a second account exists.
+const familyOf=route=>typeof route==='string'&&route.startsWith('claude-code')?'claude-code':route;
+const claudeAccounts={labels:{},list:[]};
+// True when the shown names changed, so what was drawn with the old ones can be drawn again.
+function setClaudeAccounts(list){
+ const before=JSON.stringify(claudeAccounts.labels);
+ claudeAccounts.list=Array.isArray(list)?list:[];
+ claudeAccounts.labels=claudeAccounts.list.length>1?Object.fromEntries(claudeAccounts.list.map(a=>[a.route,a.label])):{};
+ return JSON.stringify(claudeAccounts.labels)!==before;
+}
+const multiClaude=()=>claudeAccounts.list.length>1;
+const HOME_KINDS={default:'기본 Claude 홈',zerosub:'zerosub 관리 홈',configured:'설정한 홈',observed:'관측된 홈',windows:'Windows 홈'};
+// Where an account signs in, without paths: '기본 Claude 홈' or 'zerosub 관리 홈 claude-0123abcd4567'.
+const accountWhere=a=>(a?.homes||[]).filter(h=>h.kind!=='windows').map(h=>(HOME_KINDS[h.kind]||h.kind)+(h.kind==='default'?'':' '+String(h.name||'').slice(0,24))).join(' · ');
+const accountLabel=route=>route==='claude-code:unknown'?'계정 미확인':claudeAccounts.labels[route]||null;
+// 'Anthropic / Claude Code · Max 5x' for a Claude account, the service name otherwise.
+const serviceFull=route=>{const base=routeNames[familyOf(route)]||route,label=familyOf(route)==='claude-code'?accountLabel(route):null;return label?`${base} · ${label}`:base;};
 const statuses={fresh:'최근 확인',stale:'오래된 값',error:'수집 실패',unavailable:'미제공',ended:'구독 없음',ok:'수집 완료',partial:'일부 미수집',idle:'미사용'};
 const fields=['uncached_input','cached_input','output','total','cache_creation','reasoning'];
 // Every table, ranking and share uses the same total as the cards and charts (cache creation included).
@@ -36,6 +61,23 @@ const KIND_NAMES={main:'메인',sub:'서브 에이전트',fork:'포크',unattrib
 const estimateWith=(rows,rate)=>rows.reduce((s,r)=>s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)
  +(r.output||0)*rate.output+(r.cache_creation||0)*(rate.cache_write??rate.input))/1e6,0);
 const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
+// A period card's change against the window it is compared with (API `prior`, cut at the
+// same elapsed time): '직전 7일 같은 시점 대비 +12.3%', or a multiple from twice as much
+// ('3.2배', past a hundred '100배 이상'). A window older than the first record says so; a
+// window without use has no ratio; an unknown value has no line.
+const PRIOR_NAMES={'1h':'직전 1시간',today:'어제','7d':'직전 7일','30d':'직전 30일'};
+function priorChange(prior,period,current,previous,label){
+ if(!prior)return '';
+ const name=(label||(prior.mode==='week'?'7일 전':prior.mode==='month'?'28일 전':PRIOR_NAMES[period]||'직전 기간'))+(prior.running?' 같은 시점':'');
+ if(!prior.complete)return `${name} 기록 부족`;
+ if(previous==null||current==null)return '';
+ if(!previous)return `${name} 사용 없음`;
+ const ratio=current/previous;
+ if(ratio>=100)return `${name} 대비 100배 이상`;
+ if(ratio>=2)return `${name} 대비 ${ratio.toFixed(1)}배`;
+ const d=(ratio-1)*100;
+ return `${name} 대비 ${d>=0?'+':'−'}${Math.abs(d).toFixed(1)}%`;
+}
 // Month-to-date use against a project's token and/or USD budget (the larger share counts).
 function budgetState(usage,budget){
  const parts=[];
@@ -45,12 +87,66 @@ function budgetState(usage,budget){
  return {ratio,text:parts.map(p=>p.text).join(' · '),level:ratio>=1?'level-low':ratio>=.8?'level-mid':'level-ok'};
 }
 const shortService={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'};
-// Antigravity buckets are '<family>-<window>[-n]'; anything else keeps its own name.
-const agyBucket=bucket=>{const m=/^(gemini|3p)-(5h|weekly)(?:-(\d+))?$/.exec(bucket);return m&&{family:m[1]==='3p'?'3rd party':'Gemini',window:m[2]==='5h'?'5시간':'주간',suffix:m[3]||''};};
+// The Codex account residual (account day total minus this PC's records) is one item under
+// model and project grouping: no model, project or token parts. Its name is a setting
+// (/api/usage residual_label), '로컬 미기록' until one is set.
+const RESIDUAL='/account-residual',RESIDUAL_DEFAULT='로컬 미기록';
+let residualName=RESIDUAL_DEFAULT;
+const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
+const residualText=v=>v===RESIDUAL?residualName:v;
+// Series colors. Light themes keep a pale tint of the accent in --chart-1, which beside
+// --chart-0 reads as one color, so series take it last; the dark themes' palettes are
+// already spread. In ocean, sand comes before blue (blue is close to the teal accent).
+const CHART_ORDER={charcoal:[0,1,2,3,4,5,6,7],midnight:[0,1,2,3,4,5,6,7],ocean:[0,3,2,4,5,6,7,1]};
+const chartOrder=theme=>CHART_ORDER[theme]||[0,2,3,4,5,6,7,1];
+// Each service keeps one series slot in every period, by service or by maker. Further
+// Claude accounts take the next free slots in name order: every known account first,
+// shown in the period or not, so one account keeps its color; then any other Claude
+// label of the period (계정 미확인). Other groupings have none.
+const ROUTE_SLOTS={codex:0,'claude-code':1,antigravity:2,devin:3,'opencode-go':4,opencode:5};
+const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Google:2,Cognition:3};
+function groupSlots(group,labels){
+ if(group==='provider')return {...PROVIDER_SLOTS};
+ if(group!=='route'&&group!=='account')return {};
+ const out={...ROUTE_SLOTS},used=new Set(Object.values(out));let next=0;
+ const name=l=>accountLabel(l)||l,byName=(a,b)=>name(a).localeCompare(name(b))||a.localeCompare(b);
+ const extra=list=>[...new Set(list)].filter(l=>familyOf(l)==='claude-code'&&out[l]==null).sort(byName);
+ const known=group==='account'?extra(claudeAccounts.list.map(a=>a.route)):[];
+ for(const label of [...known,...extra(labels)]){
+  if(out[label]!=null)continue;
+  while(used.has(next))next++;
+  out[label]=next;used.add(next);
+ }
+ return out;
+}
+// Calendar steps 1-5 by rank among the shown days with use (five equal groups; ties share
+// a step), so one very large day does not leave every other day in the first step.
+function rankLevels(values){
+ const sorted=values.filter(v=>v>0).sort((a,b)=>a-b);
+ return v=>{
+  if(!(v>0))return 0;
+  if(!sorted.length)return 5;
+  let lo=0,hi=sorted.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(sorted[mid]<=v)lo=mid+1;else hi=mid;}
+  return Math.max(1,Math.ceil(lo/sorted.length*5));
+ };
+}
+// 'Claude(Max 5x)' for a Claude account when several exist, 'Claude' otherwise.
+const serviceShort=(route,label)=>{const base=shortService[familyOf(route)]||route,name=label??accountLabel(route);return familyOf(route)==='claude-code'&&name?`${base}(${name})`:base;};
+// Antigravity buckets are '<family>[-<pool>]-<window>[-n]' ('gemini-argon-wtu-weekly' names
+// its pool); anything else keeps its own name.
+const agyBucket=bucket=>{const m=/^(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?$/.exec(bucket);
+ return m&&{family:m[1]==='3p'?'3rd party':'Gemini',window:m[3]==='5h'?'5시간':'주간',suffix:[m[2],m[4]].filter(Boolean).join(' ')};};
+const BUCKET_NAMES={five_hour:'5시간',seven_day:'주간',seven_day_opus:'Opus 주간',seven_day_sonnet:'Sonnet 주간',seven_day_oauth_apps:'앱 주간',
+ seven_day_cowork:'Cowork 주간',seven_day_omelette:'추가 주간 한도',seven_day_overage_included:'추가 포함량 주간',rolling:'5시간',daily:'일간',weekly:'주간',monthly:'월간'};
 const bucketName=r=>{
  const agy=r.route==='antigravity'&&agyBucket(r.bucket);
  if(agy)return agy.family+(agy.suffix?' '+agy.suffix:'');
- return ({five_hour:'5시간',seven_day:'주간',seven_day_opus:'Opus 주간',seven_day_sonnet:'Sonnet 주간',seven_day_oauth_apps:'앱 주간',rolling:'5시간',daily:'일간',weekly:'주간',monthly:'월간'})[r.bucket]||r.display_name||r.bucket;
+ if(BUCKET_NAMES[r.bucket])return BUCKET_NAMES[r.bucket];
+ if(r.display_name&&r.display_name!==r.bucket)return r.display_name;
+ // A per-model weekly window without a stored label ('seven_day_fable' → 'Fable 주간').
+ const model=/^seven_day_([a-z0-9]+(?:_[a-z0-9]+)*)$/.exec(r.bucket||'');
+ return model?model[1].split('_').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ')+' 주간':r.display_name||r.bucket;
 };
 // Antigravity lists the 5h window before the weekly one, Gemini first in each.
 function agyWindows(rows){
@@ -67,18 +163,28 @@ function availability(rows){
 }
 const levelOf=(v,low)=>v<=low?'level-low':v<=50?'level-mid':'level-ok';
 const ring=(row,low)=>row?`<svg class="ring ${levelOf(usable(row),low)}" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.9" class="ring-bg"/><circle cx="18" cy="18" r="15.9" class="ring-fg" pathLength="100" stroke-dasharray="${Math.max(0,Math.min(100,usable(row))).toFixed(1)} 100" transform="rotate(-90 18 18)"/></svg>`:'<span class="ring ring-empty" aria-hidden="true"></span>';
-const modelQuota=r=>['model','unknown'].includes(r.scope?.role)||(r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex')||(r.route==='claude-code'&&r.bucket.startsWith('seven_day_'));
+const modelQuota=r=>['model','unknown'].includes(r.scope?.role)||(r.route==='codex'&&r.bucket.includes(' · ')&&r.bucket.split(' · ')[0]!=='codex')||(familyOf(r.route)==='claude-code'&&r.bucket.startsWith('seven_day_'));
 const quotaLabel=r=>{
  const agy=r.route==='antigravity'&&agyBucket(r.bucket);
  if(agy)return `Antigravity ${agy.window} ${agy.family}${agy.suffix?' '+agy.suffix:''}`;
- const sv=shortService[r.route]||r.route,bn=bucketName(r);
- return bn.startsWith(sv)?bn:`${sv} ${bn}`;
+ const sv=shortService[familyOf(r.route)]||r.route,bn=bucketName(r);
+ return bn.startsWith(sv)?bn:`${serviceShort(r.route,r.account_label)} ${bn}`;
 };
-const SCOPE_LABELS={route:'서비스',provider:'제작사',model:'모델',project:'프로젝트'};
+// When one Claude account's window is exhausted: the other accounts' current value in the
+// same window ('Claude(Max 5x) 5시간 92.0%'). Current values of a verified account only
+// (a status-line value not tied to the account is left out); no recommendation.
+const otherAccounts=(rows,row)=>familyOf(row.route)!=='claude-code'?[]:(rows||[])
+ .filter(r=>r.route!==row.route&&familyOf(r.route)==='claude-code'&&r.route!=='claude-code:unknown'&&r.bucket===row.bucket&&r.status==='fresh'&&r.remaining!=null&&!r.scope?.identity_unverified)
+ .map(r=>`${quotaLabel(r)} ${quotaValue(r)}`);
+const SCOPE_LABELS={route:'서비스',provider:'제작사',model:'모델',project:'프로젝트',account:'Claude 계정'};
 const scopeText=scope=>{const i=scope.indexOf(':');if(i<0)return scope;
  const kind=scope.slice(0,i),value=scope.slice(i+1);
- const name=kind==='route'?(routeNames[value]||value):value;
+ const name=kind==='route'?(routeNames[value]||value):kind==='account'?(accountLabel(value)||value):value;
  return (SCOPE_LABELS[kind]||kind)+': '+name;};
+// Per-account source names ('claude-oauth:<hash>') read as 'claude-oauth · Max 5x'.
+const sourceName=name=>{const m=/^(.*):([0-9a-f]{12})$/.exec(name||'');if(!m)return name;const label=accountLabel('claude-code:'+m[2]);return label?`${m[1]} · ${label}`:name;};
+// The source kind without the account suffix: 'claude-oauth:<hash>' → 'claude-oauth'.
+const sourceBase=name=>String(name||'').replace(/:[0-9a-f]{12}$/,'');
 const SOURCE_GROUPS=[['Claude',/claude/i],['Codex',/codex/i],['Antigravity',/antigravity/i],['Devin',/devin/i],['OpenCode',/opencode/i],
  ['운영',/^(수집기|일일 백업|원본 대조|외부 알림|데이터베이스)$/],['내부 작업',/^(normalization|session-backfill)$/]];
 const SOURCE_RANK={error:0,unavailable:1,partial:2,stale:3,ok:4,fresh:4,idle:5,ended:5};

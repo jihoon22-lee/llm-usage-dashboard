@@ -137,6 +137,33 @@ class CompareTests(Base):
         self.assertEqual(data['compare']['elapsed']['end_exclusive'],'2026-10-02T12:00:00+09:00')
         self.assertEqual(sum(v.get('output',0) for p in data['compare']['series'] for v in p['values'].values()),1000)
 
+    def test_period_cards_compare_with_the_window_before_at_the_same_elapsed_time(self):
+        now=stamp('2026-10-03T03:00:00Z')  # 12:00 KST
+        pricing={'gpt-test':dict(input=1,cached=1,output=2,cache_write=1)}
+        with self.store.connect() as c:
+            self.store.event(c,'first',stamp('2026-09-20T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
+            self.store.event(c,'y-am',stamp('2026-10-02T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=100))
+            self.store.event(c,'y-pm',stamp('2026-10-02T08:00:00Z'),'OpenAI','codex','gpt-test',dict(output=900))
+            self.store.event(c,'t-am',stamp('2026-10-03T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=150))
+        usage=lambda **kw:self.store.usage(now=now,sections='core',pricing=pricing,**kw)
+        # Without a chosen comparison the cards use yesterday up to the same time of day.
+        prior=usage(period='today')['prior']
+        self.assertEqual((prior['mode'],prior['output'],prior['requests'],prior['complete'],prior['running']),('previous',100,1,True,True))
+        self.assertEqual((prior['start'],prior['end_exclusive'],prior['current_end']),
+                         ('2026-10-02T00:00:00+09:00','2026-10-02T12:00:00+09:00','2026-10-03T12:00:00+09:00'))
+        self.assertAlmostEqual(prior['cost'],100*2/1e6)
+        self.assertEqual(prior['current_tokens'],150)
+        # A chosen comparison moves the window; one that starts before the first record
+        # is not complete, and a whole period has nothing before it.
+        week=usage(period='today',compare='week')['prior']
+        self.assertEqual((week['mode'],week['start'],week['complete'],week['output'],week['cost']),
+                         ('week','2026-09-26T00:00:00+09:00',True,0,None))
+        self.assertFalse(usage(period='today',compare='month')['prior']['complete'])
+        # A scope with no use on either side compares nothing: complete, both zero.
+        empty=usage(period='7d',scope='model:gpt-other')['prior']
+        self.assertEqual((empty['complete'],empty['current_tokens'],empty['output']),(True,0,0))
+        self.assertIsNone(usage(period='all')['prior'])
+
 
 class PricingTierTests(unittest.TestCase):
     def test_tier_suffixes_do_not_inherit_a_price(self):

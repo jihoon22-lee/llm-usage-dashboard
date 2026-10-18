@@ -70,6 +70,7 @@ section[data-view]{margin-top:24px}
 .stat-label{font-size:var(--fs-meta);color:var(--muted)}
 .stat-value{font-size:26px;letter-spacing:-.8px;font-weight:650;margin:8px 0}
 .stat small{color:var(--subtle);font-size:var(--fs-small)}
+.stat .stat-delta{display:block;margin-bottom:3px;color:var(--ink);font-variant-numeric:tabular-nums}
 .panel{border:1px solid var(--border);background:var(--surface);padding:23px;border-radius:10px;margin-bottom:20px}
 .legend{display:flex;gap:17px;flex-wrap:wrap;font-size:var(--fs-small);margin-bottom:16px}
 .legend span::before{content:'●';color:var(--color);margin-right:6px}
@@ -89,7 +90,6 @@ summary{cursor:pointer;font-weight:600;margin-bottom:12px}
 .source-line small{flex:none;font-variant-numeric:tabular-nums}
 .source-detail{display:block;overflow-wrap:anywhere}
 #coverage{font-size:var(--fs-small);line-height:1.7;max-width:75ch}
-.source.stale{opacity:.55}
 .source strong{color:var(--ink)}
 #error{background:var(--error-bg);color:var(--error-ink);padding:15px;border-radius:7px;margin-bottom:18px}
 body.busy .panel,body.busy .stat{opacity:.55;transition:opacity .2s}
@@ -118,6 +118,11 @@ footer{border-top:1px solid var(--border);padding:24px 0 30px;color:var(--subtle
 .rank-label strong{font-weight:500;overflow-wrap:anywhere}
 .rank small{color:var(--subtle);font-size:var(--fs-meta)}
 .rank-bar{display:block;height:13px;width:100%;border-radius:3px;background:var(--raised)}
+/* The Codex account residual: unranked, below the models and projects, without drill-down. */
+.rank-residual{padding-top:12px;border-top:1px dashed var(--border)}
+.rank-hatch{position:relative;overflow:hidden}
+.rank-hatch i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:repeating-linear-gradient(45deg,var(--muted) 0 3px,transparent 3px 6px);opacity:.75}
+.residual-row td{border-top:1px dashed var(--border)}
 .legend button{font-size:11px;background:none;color:var(--muted);padding:4px;display:flex;align-items:center;gap:5px}
 .legend button::before{content:'●';color:var(--color)}
 .legend button[aria-pressed=false]{opacity:.35;text-decoration:line-through}
@@ -206,7 +211,7 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 @media(max-width:850px){.chart-grid{grid-template-columns:1fr}}
 
 /* Compact quota overview is mobile-only; desktop keeps its four columns. */
-#quota-overview,.quota-close{display:none}
+#quota-overview,.quota-close,.card-caption{display:none}
 .quota-dormant{grid-column:1/-1;margin-top:14px;border:1px dashed var(--border);border-radius:11px;padding:12px 16px;color:var(--muted)}
 .quota-dormant>summary{font-size:12px;font-weight:600;margin-bottom:0}
 .quota-dormant>summary small{display:block;font-weight:400}
@@ -216,6 +221,17 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .quota-window-title{font-size:12px;font-weight:700;color:var(--ink);margin:0 0 6px}
 .quota-window-group .bucket:first-of-type{border-top:none;padding-top:4px}
 .quota-divider{border:0;border-top:1px solid var(--border);margin:14px 0 10px}
+/* Several Claude accounts: one card, a titled section per account. */
+.quota-account-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;margin:8px 0 2px;font-size:13px;font-weight:700;color:var(--ink)}
+.quota-account-title small{font-size:var(--fs-meta);font-weight:400;color:var(--muted);overflow-wrap:anywhere}
+.quota-account .card-meta{margin-top:2px}
+.quota-account .bucket:first-of-type{border-top:none;padding-top:4px}
+.quota-account.ended .quota-account-title>span{color:var(--muted)}
+.session-accounts{display:block;font-size:var(--fs-meta);color:var(--muted)}
+.ov-accounts{display:flex;flex-direction:column;gap:5px}
+.ov-account{display:block}
+.ov-account+.ov-account{border-top:1px dashed var(--line);padding-top:4px}
+.ov-account>small{display:block;font-size:var(--fs-meta);font-weight:650;color:var(--muted);line-height:1.4}
 .quota-secondary{margin-top:16px;border-top:1px dashed var(--border);padding-top:12px}
 .quota-secondary>summary{font-size:11px;color:var(--muted);line-height:1.6}
 .quota-secondary>summary small{display:block;font-weight:400}
@@ -319,6 +335,11 @@ tr[data-scope]:hover{background:var(--raised)}
 .cfg-row>span{min-width:150px}
 .cfg-row>span small{display:block;color:var(--muted);font-size:var(--fs-meta)}
 .cfg-row input{width:130px}
+.cfg-sub-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+#cfg-subs .cfg-account-name{width:150px}
+.cfg-check{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.cfg-row .cfg-check input,#cfg-subs .cfg-check input{width:auto;min-height:0;padding:0}
+.cfg-sub.ended>span:first-child{color:var(--muted)}
 .cfg-toggles{display:flex;gap:12px;font-size:12px}
 .cfg-toggles input{width:auto}
 .cfg-num{width:90px}
@@ -477,6 +498,19 @@ details.source-group>summary{cursor:pointer;margin-bottom:0}
 .source-hint{display:block;margin-top:4px;color:var(--muted)}
 .source.src-bad{border-color:var(--error-ink)}
 .source.src-warn{border-color:var(--warning-ink)}
+.source-summary .na strong,.source-summary .idle strong{color:var(--muted)}
+.source-group>h4 small{font-weight:400;color:var(--muted);margin-left:4px}
+.source-clear{margin:16px 0 0;font-size:var(--fs-small);color:var(--muted)}
+.source-quiet>.source-hint{margin:14px 0 0;font-size:var(--fs-meta)}
+.source-rows{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 8px}
+.source-rows li{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface);font-size:var(--fs-small);line-height:1.5;color:var(--muted)}
+.source-rows li strong{color:var(--ink)}
+.source-rows li>small{margin-left:auto;font-variant-numeric:tabular-nums}
+.source-rows .source-detail{flex-basis:100%;font-size:var(--fs-meta)}
+details.source-group>summary small{font-weight:400;color:var(--muted);margin-left:4px}
+details.source-group[open]>summary{margin-bottom:-8px}
+.coverage-fold>p{color:var(--muted);margin:14px 0 0}
+@media(max-width:600px){.source-rows{grid-template-columns:1fr}}
 .heat-cell:focus-visible,.cal-cell:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Phones: tabs sit at the bottom, within thumb reach; content keeps clear of them. */
 @media(max-width:600px){
@@ -495,7 +529,21 @@ details.source-group>summary{cursor:pointer;margin-bottom:0}
 .budget-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--chart-0)}
 .budget-bar.level-mid i{background:var(--warning-ink)}.budget-bar.level-low i{background:var(--error-ink)}
 .report-head{font-size:var(--fs-small);margin-bottom:8px}
+.report-sub{margin-top:14px}
+.quota-use .badge{margin-left:4px;white-space:nowrap}
+/* Phones: the quota use table wraps inside its cells instead of scrolling sideways. */
+@media(max-width:600px){.quota-use :is(td,th):is(:first-child,:nth-child(4)){white-space:normal}.quota-use td:first-child{min-width:6.5em}.quota-use .badge{display:inline-block;margin:2px 0 0}}
 .report-table td,.report-table th{padding:6px 8px;font-size:var(--fs-small)}
+@media(max-width:600px){.report-table .col-req{display:none}.report-table td,.report-table th{padding:6px 5px}}
+/* Month by month: the ratios of several subscriptions wrap in their cell. */
+.month-trend td:last-child{white-space:normal;min-width:12em}
+.month-trend small{color:var(--muted)}
+.ratio-item{white-space:nowrap}
+#monthly>.sub-row:first-of-type{border-top:0}
+/* This week so far, above the finished weeks. */
+.this-week{border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:12px}
+.this-week .hint{margin-top:2px}
+.week-delta{white-space:nowrap}
 .report-older{margin-top:10px;font-size:var(--fs-small)}
 .report-older details{margin:6px 0 0 10px}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */
@@ -547,7 +595,36 @@ kbd{font:inherit;font-size:10px;border:1px solid var(--border);border-bottom-wid
 }
 
 /* Observed quota changes and the manual-resource editor. */
-@media(min-width:601px){.limits.two-services{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Desktop quota cards: one line per window (name · remaining · bar · reset, 상세 at the end);
+   notes, a measured decline and an opened 상세 run full width below. Columns follow the
+   number of service cards (data-cards) so none stands empty. */
+@media(min-width:601px){
+ .limits[data-cards="1"]{grid-template-columns:minmax(0,1fr)}
+ .limits[data-cards="2"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .limits[data-cards="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .limit-card{padding:16px 18px}
+ .limit-card>.limit-head{margin-bottom:8px}
+ .limit-card>.limit-head>.card-caption{display:inline;margin-left:auto;font-size:var(--fs-meta);color:var(--muted)}
+ .limits .bucket .reset-word{display:none}
+ .limits .bucket{display:grid;grid-template-columns:minmax(0,7.5em) 3.6em minmax(36px,1fr) 5.8em 2.8em;align-items:center;column-gap:10px;padding:8px 0;position:relative}
+ .limits .bucket>.limit-head{grid-column:1;margin:0;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px}
+ .limits .bucket .bucket-label{font-size:12px;color:var(--ink)}
+ .limits .bucket .badges:empty{display:none}
+ .limits .bucket>.bucket-summary{display:contents}
+ .limits .bucket .remaining,.limits .quota-secondary .remaining{grid-column:2;margin:0;font-size:17px;letter-spacing:-.4px;text-align:right}
+ .limits .bucket .remaining small{display:none}
+ .limits .bucket .bar-wrap{grid-column:3}
+ .limits .bucket .bar-wrap progress{margin:0}
+ .limits .bucket .bucket-reset{grid-column:4;white-space:nowrap;text-align:right}
+ .limits .bucket>:is(.quota-note,.quota-blocked-note,.bucket-detail){grid-column:1/-1}
+ .limits .bucket>.bucket-decrease{grid-column:2/-1;border:0;margin:2px 0 0;padding:0;font-size:var(--fs-meta)}
+ .limits .bucket-detail{margin:0}
+ .limits .bucket-detail>summary{position:absolute;top:6px;right:0;padding:2px 0;line-height:1.3}
+ .limits .bucket-detail[open]{padding-top:6px}
+}
+@media(min-width:601px) and (max-width:1120px){.limits[data-cards="3"]{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:601px) and (max-width:820px){.limits[data-cards]{grid-template-columns:minmax(0,1fr)}}
+.decrease-detail{font-size:var(--fs-small);color:var(--muted);font-variant-numeric:tabular-nums}
 .resource-fields label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:var(--fs-small);min-width:0}
 .resource-fields input,.resource-fields select{width:100%;min-width:0;max-width:100%;min-height:40px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--ink);padding:8px 10px;font:inherit;font-size:var(--fs-body)}
 .bucket-decrease{border-top:1px solid var(--line);padding-top:8px;margin:9px 0;font-size:var(--fs-small);color:var(--muted);font-variant-numeric:tabular-nums}

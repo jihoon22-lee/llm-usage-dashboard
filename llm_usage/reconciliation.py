@@ -3,14 +3,24 @@
 Only an interval wholly inside a selected range contributes to its total. It
 enters a chart bucket only when the whole interval fits there as well.
 """
+from contextlib import contextmanager
 import copy
 import json
 import math
+import threading
 from datetime import datetime, timezone
 
 from .store import TOKENS, KST, identity, stamp
 
 PARTS = TOKENS[:4]
+# The Codex account residual (account day total minus this PC's records) has no model,
+# project, session or token parts. Under model and project grouping it gets this key,
+# which the dashboard shows under the user's name for it, instead of 'unknown'/'미분류';
+# every total still includes it. The '/' keeps it apart from every project name (a
+# directory basename, see store.project_label).
+RESIDUAL = '/account-residual'
+# Its name until the user sets one in the subscription settings (e.g. '자동 리뷰').
+RESIDUAL_LABEL = '로컬 미기록'
 
 
 def initialize(c):
@@ -86,7 +96,9 @@ def _raw(c, row, begin, end):
                           ' FROM events WHERE '+where,args).fetchone())
 
 
-def supplements(c):
+def _evidence(c):
+    """Aggregates to reconcile: other sources as stored; Codex account days of the current
+    account, the latest revision of each (UTC) day, plus older account buckets."""
     rows=[dict(r) for r in c.execute('SELECT * FROM usage_evidence ORDER BY source,scope_id,model,end')]
     from .store import Store
     namespace=Store.account_namespace(c,'codex')
@@ -106,12 +118,55 @@ def supplements(c):
         rows.append(dict(id=scope,source='codex-account',scope_id=scope,route=r['route'],provider='OpenAI',
                          model=None,session=None,project=None,account_key=namespace,start=start,end=start+86400,
                          checked=r['checked'],tokens=r['tokens'],parts=None))
+    return rows
+
+
+def account_days(c):
+    """The Codex account's day totals (09:00–09:00 KST days), as reconciled."""
+    return [r for r in _evidence(c) if r['source']=='codex-account']
+
+
+_held=threading.local()
+
+
+@contextmanager
+def held():
+    """Within the block (this thread), supplements() is worked out once per database and
+    handed back as copies. Only for reading work during which nothing it reads changes,
+    such as building the weekly reports; a later block works it out again."""
+    outer=getattr(_held,'memo',None)
+    _held.memo={} if outer is None else outer
+    try:yield
+    finally:_held.memo=outer
+
+
+def supplements(c, received=None):
+    """(supplement entries, conflicts). `received`, when given, is extended with every
+    aggregate received (its source, start and the fields a scope matches), whether or not
+    it left anything beyond the local records."""
+    memo=getattr(_held,'memo',None)
+    if memo is None:return _supplements(c,received)
+    database=c.execute('PRAGMA database_list').fetchone()[2]
+    if database not in memo:
+        seen=[];memo[database]=(*_supplements(c,seen),seen)
+    entries,conflicts,seen=memo[database]
+    if received is not None:received.extend(copy.deepcopy(seen))
+    return copy.deepcopy(entries),copy.deepcopy(conflicts)
+
+
+def _supplements(c, received=None):
+    rows=_evidence(c)
+    if received is not None:
+        received.extend(dict(source=r['source'],start=r['start'],route=r['route'],provider=r['provider'],model=r['model'],
+                             project=r['project'],account=_account(c,r)) for r in rows)
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
     out=[];conflicts=[]
     for group in groups.values():
         previous=None
         for r in sorted(group,key=lambda x:x['end']):
+            # The whole interval the count belongs to (an account day stays one total).
+            whole=r['end']
             if r['source']=='codex-account':
                 # A received running-day count cannot contain future activity.
                 # This is an upper bound, not a claim that work happened at poll
@@ -139,7 +194,8 @@ def supplements(c):
             if missing or (detail and detail.get('reasoning')):
                 out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
                                 model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
-                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:')))
+                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
+                                account=_account(c,r),whole_end=whole))
             previous=r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence
@@ -150,9 +206,18 @@ def supplements(c):
     return out,conflicts
 
 
+def _account(c,row):
+    """Subscription account of an aggregate: the Claude account whose login read it."""
+    if row['route']!='claude-code':return row['route']
+    found=c.execute('SELECT data FROM state WHERE key=?',('claude_cloud_account:'+str(row['account_key']),)).fetchone() if row['account_key'] else None
+    return json.loads(found[0]) if found else 'claude-code'
+
+
 def matches(row,scope):
     if not scope:return True
     kind,_,value=scope.partition(':')
+    # The Codex account residual is no model and no project: not 'unknown' or '미분류'.
+    if row.get('source')=='codex-account' and kind in ('model','project'):return False
     return (row.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None))==value
 
 
@@ -169,13 +234,30 @@ def add(row, evidence):
     if evidence['parts']:
         for k in TOKENS:row[k]=row.get(k,0)+evidence['parts'].get(k,0)
     else:row['unclassified_tokens']=row.get('unclassified_tokens',0)+evidence['tokens']
+    if evidence['source']=='codex-account':row['residual_tokens']=row.get('residual_tokens',0)+evidence['tokens']
+
+
+def residual(e):
+    return e['source']=='codex-account'
+
+
+def series_label(e, group):
+    if residual(e) and group in ('model','project'):return RESIDUAL
+    if group=='agent':return '미귀속'
+    return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
 
 
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
-    entries,conflicts=supplements(c)
+    # Where each aggregate source's evidence of the scope begins: a comparison needs it to
+    # reach back as far as the local records (whose first record is taken in the scope too).
+    received=[]
+    entries,conflicts=supplements(c,received)
     entries=[e for e in entries if matches(e,scope)]
+    first_seen={}
+    for r in received:
+        if matches(r,scope):first_seen[r['source']]=min(first_seen.get(r['source'],math.inf),r['start'])
     a,b=stamp(data['start']),stamp(data['end_exclusive'])
     conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
     if not entries and not conflicts:return data
@@ -184,11 +266,24 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         if e['end']<=a or e['start']>=b:continue
         public={**e,'start':datetime.fromtimestamp(e['start'],KST).isoformat(),
                 'end_exclusive':datetime.fromtimestamp(e['end'],KST).isoformat()}
-        public.pop('end');public.pop('parts')
-        if not (a<=e['start'] and e['end']<=b):overlapping.append(public);continue
+        public.pop('end');public.pop('parts');public.pop('whole_end')
+        # A subscription whose period usage is only supplemented (a Codex account residual,
+        # Claude cloud sessions) was still used; an aggregate that crosses the period edge
+        # leaves 'no usage' unknown (None) rather than 0.
+        sub=next((s for s in data.get('subscriptions') or [] if s['route']==(e.get('account') or e['route'])),None)
+        if not (a<=e['start'] and e['end']<=b):
+            overlapping.append(public)
+            if sub is not None and not sub.get('period_tokens'):sub['period_tokens']=None
+            continue
+        if sub is not None and sub.get('period_tokens') is not None:sub['period_tokens']+=e['tokens']
         accepted.append(e);add(data['totals'],e)
-        label=e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
-        if group=='agent':label='미귀속'
+        split=data.get('claude_split')
+        if split is not None and e['route']=='claude-code':
+            account=e.get('account') or 'claude-code'
+            part=next((x for x in split if x['account']==account),None)
+            if part is None:part=dict(account=account,tokens=0,requests=0,cost=None);split.append(part)
+            part['tokens']+=e['tokens']
+        label=series_label(e,group)
         located=False
         for p in data['series']:
             lo=stamp(p.get('range_start',p['time']));hi=stamp(p.get('range_end_exclusive',data['end_exclusive']))
@@ -202,25 +297,44 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                             add(later['values'].setdefault(label,dict.fromkeys((*TOKENS,'requests','cost','unpriced'),0)),e)
                 break
         if not located:unallocated.append(public)
-        row=next((r for r in data['rows'] if r['route']==e['route'] and r['model']==(e['model'] or 'unknown')),None)
+        model=RESIDUAL if residual(e) else e['model'] or 'unknown'
+        row=next((r for r in data['rows'] if r['route']==e['route'] and r['model']==model),None)
         if row is None:
-            row=dict(provider=e['provider'],route=e['route'],model=e['model'] or 'unknown',requests=0,
+            row=dict(provider=e['provider'],route=e['route'],model=model,requests=0,
                      est_cost=None,**dict.fromkeys(TOKENS,0));data['rows'].append(row)
         add(row,e)
-        for collection,key,value in [('sessions','session',e['session']),('projects','project',e['project'])]:
+        project=RESIDUAL if residual(e) else e['project'] or '미분류'
+        for collection,key,value in [('sessions','session',e['session']),('projects','project',project)]:
             if key=='session' and not value:continue
-            if key=='project':value=value or '미분류'
             target=next((r for r in data.get(collection,[]) if r.get(key)==value),None)
             if target is None and collection in data:
-                target={key:value,'route':e['route'],'project':e['project'] or '미분류','kind':'unattributed',
+                target={key:value,'route':e['route'],'project':project,'kind':'unattributed',
                         'requests':0,'sessions':0,'cost':None,'first_ts':e['start'],'last_ts':e['end'],**dict.fromkeys(TOKENS,0)}
                 data[collection].append(target)
                 if collection=='sessions':data['sessions_total']=data.get('sessions_total',0)+1
             if target is not None:add(target,e)
-        for kind in ('route','provider','model','project'):
+        for kind in ('route','provider','model','project','account'):
+            # The residual is not an unknown model or an unassigned project to filter by.
+            if residual(e) and kind in ('model','project'):continue
             value=e.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None)
+            if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
             if options is not None and value and value not in options:options.append(value)
+    # The card comparison: on both sides, aggregates whose whole interval ended by the same
+    # elapsed time. An account day is one total: it counts once the day is over by the cut,
+    # whenever its count was first received; a day still open at the cut counts on neither
+    # side (it is in the period total, not set against a whole one).
+    prior=data.get('prior')
+    if prior:
+        pa,pb,cut=stamp(prior['start']),stamp(prior['end_exclusive']),stamp(prior['current_end'])
+        counted=set()
+        for e in entries:
+            if pa<=e['start'] and e['whole_end']<=pb:add(prior,e);counted.add(e['source'])
+            if a<=e['start'] and e['whole_end']<=cut:prior['current_tokens']+=e['tokens'];counted.add(e['source'])
+        # A source counted on either side must already have covered the earlier window;
+        # otherwise its share is missing there, not zero.
+        if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
+    if data.get('claude_split'):data['claude_split'].sort(key=lambda x:(-x['tokens'],x['account']))
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)
@@ -240,9 +354,9 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     if 'calendar' in data:data['calendar'].sort(key=lambda x:x['day'])
     for name in ('totals','lifetime'):
         value=data[name];value.setdefault('total_tokens',total(value));value.setdefault('recorded_tokens',value['total_tokens'])
-        value.setdefault('supplemental_tokens',0);value.setdefault('unclassified_tokens',0)
+        value.setdefault('supplemental_tokens',0);value.setdefault('unclassified_tokens',0);value.setdefault('residual_tokens',0)
     data['reconciliation']=dict(recorded_tokens=data['totals']['recorded_tokens'],
-        supplemental_tokens=sum(e['tokens'] for e in accepted),
+        supplemental_tokens=sum(e['tokens'] for e in accepted),residual_tokens=sum(e['tokens'] for e in accepted if residual(e)),
         unallocated_tokens=sum(e['tokens'] for e in unallocated),unallocated_intervals=unallocated,
         overlapping_intervals=overlapping,conflicts=conflicts,
         cost_basis='세부 요청 기록 중 단가가 확인된 부분',requests_basis='수집한 고유 요청',
@@ -250,8 +364,10 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     where='e.ts>=? AND e.ts<?';args=[a,b]
     if scope:
         kind,_,value=scope.partition(':')
-        if kind in ('route','provider','model','project'):
-            where+=' AND '+('COALESCE(e.project,\'미분류\')' if kind=='project' else 'e.'+kind)+'=?';args.append(value)
+        if kind in ('route','provider','model','project','account'):
+            column=("COALESCE(e.project,'미분류')" if kind=='project' else
+                    "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
+            where+=' AND '+column+'=?';args.append(value)
     origins=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
                       "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
                       'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
@@ -266,7 +382,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if elapsed and stamp(elapsed['start'])<=e['start'] and e['end']<=stamp(elapsed['end_exclusive']):add(elapsed,e)
             if not (ca<=e['start'] and e['end']<=cb):continue
             placed=False
-            label=e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
+            label=series_label(e,group)
             for p,grid in zip(comparison.get('series',[]),data['series']):
                 lo=stamp(grid.get('range_start',grid['time']))-shift
                 hi=stamp(grid.get('range_end_exclusive',data['end_exclusive']))-shift

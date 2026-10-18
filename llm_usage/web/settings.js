@@ -2,7 +2,8 @@
 // Settings: subscription prices, model rates, thresholds, external alerts and budgets.
 const RATE_KEYS=['input','cached','output','cache_write'];
 const RATE_LABELS={input:'입력',cached:'캐시 읽기',output:'출력',cache_write:'캐시 쓰기'};
-const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90']];
+const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90'],
+ ['unused_percent','초기화 전 남은 한도 알림 · 잔여','% 이상 · 10~100'],['unused_hours','초기화 전 남은 한도 알림 · 초기화까지','시간 이내 · 1~72']];
 function cfgMsg(id,text){const el=$(id);el.textContent=text;el.setAttribute('role','status');}
 let settingsEpoch=0,settingsOnline=false,configVersion=0;
 const priceOperations=new Map(),priceMessages=new Map();
@@ -13,6 +14,8 @@ function draftKey(input){
  if(input.id)return '#'+CSS.escape(input.id);
  if(input.dataset.model)return `input[data-model="${CSS.escape(input.dataset.model)}"][data-key="${input.dataset.key}"]`;
  if(input.dataset.route)return `input[data-route="${CSS.escape(input.dataset.route)}"]`;
+ if(input.dataset.ended)return `input[data-ended="${CSS.escape(input.dataset.ended)}"]`;
+ if(input.dataset.accountName)return `input[data-account-name="${CSS.escape(input.dataset.accountName)}"]`;
  if(input.dataset.budgetKey)return `[data-budget="${CSS.escape(input.closest('[data-budget]').dataset.budget)}"] input[data-budget-key="${input.dataset.budgetKey}"]`;
  if(input.dataset.notifyEvent)return `input[data-notify-event="${input.dataset.notifyEvent}"]`;
  return null;
@@ -101,10 +104,27 @@ async function loadConfig(){
  if(epoch!==settingsEpoch||version!==configVersion)return;
  const drafts=settingsOnline?settingsDrafts():[];
  settingsAvailable(true);
- const prices=cfg.subscription_prices||{};
- const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...(lastUsage?.subscriptions||[]).map(s=>s.route)])].sort(compareText.compare);
- $('cfg-subs').innerHTML=(routes.map(r=>`<label class="cfg-row"><span>${esc(routeNames[r]||r)}<small>${esc(r)}</small></span><input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정"></label>`).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
-  +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="월 구독료 저장">저장</button>';
+ const prices=cfg.subscription_prices||{},ended=cfg.ended_subscriptions||{},accountNames=cfg.claude_account_names||{};
+ if(Array.isArray(cfg.claude_accounts)&&setClaudeAccounts(cfg.claude_accounts))redrawReports();
+ const claude=multiClaude()?claudeAccounts.list:[];
+ const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...Object.keys(ended),...(lastUsage?.subscriptions||[]).map(s=>s.route)])]
+  .filter(r=>r!=='claude-code:unknown')
+  .sort((a,b)=>compareText.compare(routeNames[familyOf(a)]||a,routeNames[familyOf(b)]||b)||claude.findIndex(x=>x.route===a)-claude.findIndex(x=>x.route===b));
+ // One row per subscription: its monthly price and whether it has ended. Several
+ // Claude accounts get a row each with a display name (emails are never shown).
+ $('cfg-subs').innerHTML=(routes.map(r=>{
+  const name=serviceFull(r),since=ended[r]?.since,account=claude.find(x=>x.route===r);
+  const plan=account?.plan_label&&account.plan_label!==accountLabel(r)?account.plan_label+' · ':'';
+  const hint=account?plan+(accountWhere(account)||r):r;
+  return `<div class="cfg-row cfg-sub${ended[r]?' ended':''}"><span>${esc(name)}<small>${esc(hint)}${since?' · '+esc(when(since))+' 종료 표시':''}</small></span>`
+   +`<span class="cfg-sub-controls">${account?`<input type="text" maxlength="40" class="cfg-account-name" data-account-name="${esc(r)}" value="${esc(accountNames[r]??'')}" placeholder="${esc('표시 이름 · '+(account.plan_label||'계정'))}" aria-label="${esc(name)} 계정 표시 이름">`:''}`
+   +`<input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정" aria-label="${esc(name)} 월 구독료 (USD)">`
+   +`<label class="cfg-check"><input type="checkbox" data-ended="${esc(r)}"${ended[r]?' checked':''}> 구독 종료</label></span></div>`;
+ }).join('')||'<p class="empty">구독 경로가 아직 없습니다.</p>')
+  // The Codex account residual's name in model/project views, reports and notifications.
+  +(routes.includes('codex')?`<div class="cfg-row cfg-sub"><span>Codex 계정 합계 차이 이름<small>계정 일별 합계 − 이 PC 기록 · 모델·프로젝트 보기의 별도 항목 · 비우면 ‘${esc(RESIDUAL_DEFAULT)}’</small></span>`
+   +`<span class="cfg-sub-controls"><input type="text" maxlength="20" class="cfg-account-name" id="cfg-residual-label" value="${esc(cfg.residual_label??'')}" placeholder="${esc(RESIDUAL_DEFAULT)}" aria-label="Codex 계정 합계 차이 표시 이름"></span></div>`:'')
+  +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="구독 설정 저장">저장</button>';
  $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
  renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});
@@ -124,7 +144,12 @@ $('cfg-subs').addEventListener('click',async e=>{
   if(!Number.isFinite(v)||v<0){cfgMsg('cfg-subs-msg','금액을 확인하세요: '+i.dataset.route);return;}
   prices[i.dataset.route]=v;
  }
- try{await settingsApi('/api/config/subscription-prices',{prices});savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다.');refresh();}
+ const ended=[...$('cfg-subs').querySelectorAll('input[data-ended]:checked')].map(i=>i.dataset.ended);
+ const body={prices,ended};
+ const nameInputs=[...$('cfg-subs').querySelectorAll('input[data-account-name]')];
+ if(nameInputs.length)body.names=Object.fromEntries(nameInputs.map(i=>[i.dataset.accountName,i.value.trim()]));
+ if($('cfg-residual-label'))body.residual_label=$('cfg-residual-label').value.trim();
+ try{await settingsApi('/api/config/subscription-prices',body);savedDrafts(drafts);cfgMsg('cfg-subs-msg','저장했습니다. 구독 종료 변경은 한도 화면에 바로, 수집에는 다음 갱신부터 반영됩니다.');loadConfig();refresh();}
  catch(err){cfgMsg('cfg-subs-msg',err.message);}
 });
 function priceBody(model){
@@ -203,7 +228,9 @@ $('cfg-pricing').addEventListener('click',async e=>{
  if(ok)refresh();
 });
 // External alerts: secrets are write-only here; the page only learns which channels are set.
-const NOTIFY_EVENTS={low:'잔여 적음',exhausted:'소진',recovered:'초기화 후 회복',spike:'사용량 급증',collector:'수집기 재시작',source:'수집 실패 지속',budget:'프로젝트 예산',report:'주간 리포트'};
+const NOTIFY_EVENTS={low:'잔여 적음',exhausted:'소진',recovered:'초기화 후 회복',spike:'사용량 급증',collector:'수집기 재시작',source:'수집 실패 지속',budget:'프로젝트 예산',report:'주간 리포트',unused:'초기화 전 남은 한도'};
+// Off until turned on, as on the server.
+const NOTIFY_OFF_BY_DEFAULT=new Set(['unused']);
 // Budgets: this month's busiest projects plus every budgeted one; tokens are entered in millions.
 const extraBudgetProjects=new Set();
 function renderBudgets(budgets){
@@ -242,7 +269,7 @@ function renderNotifySettings(n){
  $('webhook-state').textContent=ch.webhook?`설정됨 · ${ch.webhook}`:'Discord·Slack 호환';
  $('telegram-state').textContent=ch.telegram?'설정됨':'봇 토큰 · 채팅 ID';
  for(const id of ['ntfy-url','webhook-url','tg-token','tg-chat'])$(id).value='';
- $('notify-events').innerHTML=Object.entries(NOTIFY_EVENTS).map(([k,label])=>`<label><input type="checkbox" data-notify-event="${k}"${(n.events||{})[k]!==false?' checked':''}> ${label}</label>`).join('');
+ $('notify-events').innerHTML=Object.entries(NOTIFY_EVENTS).map(([k,label])=>`<label><input type="checkbox" data-notify-event="${k}"${((n.events||{})[k]??!NOTIFY_OFF_BY_DEFAULT.has(k))?' checked':''}> ${label}</label>`).join('');
  $('quiet-start').value=n.quiet?n.quiet[0]:'';$('quiet-end').value=n.quiet?n.quiet[1]:'';
  $('notify-test').disabled=!(ch.ntfy||ch.webhook||ch.telegram);
 }

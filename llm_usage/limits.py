@@ -93,8 +93,9 @@ def codex_limits(store,c,data,checked,source='codex',account_profile=None):
 
 
 def status_limits(store,c,route,data,checked):
+    from .claude_accounts import is_claude
     count=0
-    if route=='claude-code':
+    if is_claude(route):
         for key,row in (data.get('rate_limits') or {}).items():
             if not isinstance(row,dict):continue
             used=row.get('used_percentage')
@@ -129,9 +130,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def claude_limits(store,c,data,checked):
+def claude_limits(store,c,data,checked,route='claude-code'):
     """Internal account usage response; utilization is already a percentage."""
+    from .claude_accounts import account_source
     from .resources import SKEW,timestamp
+    source=account_source(route)
     if not number(checked) or checked>time.time()+SKEW:return 0
     count=0;observed=[]
     optional=('seven_day_opus','seven_day_sonnet','seven_day_oauth_apps','seven_day_cowork','seven_day_omelette','seven_day_overage_included')
@@ -145,16 +148,33 @@ def claude_limits(store,c,data,checked):
         group='common' if role=='common' else bucket.removeprefix('seven_day_') if role=='model' else bucket
         label={'seven_day_oauth_apps':'앱 주간','seven_day_cowork':'Cowork 주간','seven_day_omelette':'추가 주간 한도',
                'seven_day_overage_included':'추가 포함량 주간'}.get(bucket,'공통 한도' if role=='common' else group.title())
-        store.limit(c,'claude-code',bucket,100-used,reset,checked,'claude-oauth',
+        store.limit(c,route,bucket,100-used,reset,checked,source,
                     dict(role=role,group=group,label=label,locked=bool(row.get('locked_reason')),
                          reset_unparsed=row.get('resets_at') is not None and reset is None))
-        if role=='unknown':store.save_state(c,'label:claude-code:'+bucket,label)
+        if role=='unknown':store.save_state(c,'label:'+route+':'+bucket,label)
+        count+=1
+        observed.append(bucket)
+    # Per-model (or per-surface) weekly limits, e.g. a Max plan's Fable allowance,
+    # arrive only in the `limits` list; percent is the used share of that limit.
+    for row in data.get('limits') if isinstance(data.get('limits'),list) else []:
+        if not isinstance(row,dict) or row.get('kind')!='weekly_scoped' or not number(row.get('percent')) or not 0<=row['percent']<=100:continue
+        scope=row.get('scope') if isinstance(row.get('scope'),dict) else {}
+        model,surface=(scope.get(k) if isinstance(scope.get(k),dict) else {} for k in ('model','surface'))
+        name=model.get('display_name') or surface.get('display_name')
+        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}',name):continue
+        bucket='seven_day_'+re.sub(r'[^a-z0-9]+','_',name.lower()).strip('_')
+        if bucket in observed:continue  # the top-level field already reported this window
+        reset=timestamp(row.get('resets_at'))
+        store.limit(c,route,bucket,100-row['percent'],reset,checked,source,
+                    dict(role='model' if model.get('display_name') else 'unknown',group=bucket.removeprefix('seven_day_'),label=name,
+                         locked=False,reset_unparsed=row.get('resets_at') is not None and reset is None))
+        store.save_state(c,'label:'+route+':'+bucket,name+' 주간')
         count+=1
         observed.append(bucket)
     from .resources import claude_spend, claude_cloud_credits
-    store.save_state(c,'quota_snapshot:claude-code',dict(checked=checked,source='claude-oauth',buckets=observed,
-                                                       absent=[b for b in optional if b in data and data[b] is None]))
-    return count+claude_spend(c,data,checked)+claude_cloud_credits(c,data,checked)
+    store.save_state(c,'quota_snapshot:'+route,dict(checked=checked,source=source,buckets=observed,
+                                                   absent=[b for b in optional if b in data and data[b] is None]))
+    return count+claude_spend(c,data,checked,route)+claude_cloud_credits(c,data,checked,route)
 
 
 DEVIN_CLI_VERSION = '3000.10.27'
@@ -301,12 +321,23 @@ def claude_headers(token):
             'anthropic-client-platform':'claude_code_cli','x-app':'cli'}
 
 
-def poll_claude(store,settings):
-    """One account read, with persistent cooldown shared by automatic/manual runs."""
+def claude_target(settings,account=None):
+    """(route, credentials, account file) of one Claude account read. Without an
+    account context this is the original single account of the default home."""
+    if account and account.get('home'):
+        home=account['home']
+        return account['route'],Path(home['credentials']),home.get('account_file')
     path=Path(settings.get('claude_auth',Path.home()/'.claude/.credentials.json'))
+    return (account or {}).get('route','claude-code'),path,None
+
+
+def poll_claude(store,settings,account=None):
+    """One account read, with persistent cooldown shared by automatic/manual runs."""
+    from .claude_accounts import suffix
+    route,path,account_file=claude_target(settings,account);tag=suffix(route)
     metadata={}
     def read():
-        metadata.update(claude_account(path,settings))
+        metadata.update(claude_account(path,settings,account_file))
         auth=json.loads(path.read_text()).get('claudeAiOauth',{})
         metadata['plan_revision']=[auth.get('subscriptionType'),auth.get('rateLimitTier')] if auth.get('subscriptionType') or auth.get('rateLimitTier') else None
         if not auth.get('accessToken') or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
@@ -315,14 +346,15 @@ def poll_claude(store,settings):
         with urllib.request.build_opener(NoRedirect).open(request,timeout=20) as response:return json.load(response)
     def record(c,data,checked):
         from .resources import observe_account
-        observe_account(c,'claude-code',metadata.get('identity'),checked,path.stat().st_mtime_ns,metadata.get('plan_revision'))
-        return claude_limits(store,c,data,checked),'계정 사용량 조회 · 내부 OAuth 경로'
-    account_poll(store,path,'claude_oauth_poll','claude-oauth','Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.',read,record)
+        observe_account(c,route,metadata.get('identity'),checked,path.stat().st_mtime_ns,metadata.get('plan_revision'))
+        return claude_limits(store,c,data,checked,route),'계정 사용량 조회 · 내부 OAuth 경로'
+    account_poll(store,path,'claude_oauth_poll'+tag,'claude-oauth'+tag,'Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.',read,record)
 
 
-def claude_account(path,settings):
+def claude_account(path,settings,account_file=None):
     """Read only the native sign-in identity, never a token-derived identity."""
-    native=Path(settings['claude_account_file']) if settings.get('claude_account_file') else path.parent.parent/'.claude.json' if path.parent.name=='.claude' else None
+    native=(Path(account_file) if account_file else Path(settings['claude_account_file']) if settings.get('claude_account_file')
+            else path.parent.parent/'.claude.json' if path.parent.name=='.claude' else None)
     try:
         data=(json.loads(native.read_text()).get('oauthAccount') or {}) if native else {}
         user,org=data.get('accountUuid'),data.get('organizationUuid')
@@ -332,29 +364,30 @@ def claude_account(path,settings):
     except (OSError,ValueError,TypeError,AttributeError):return {}
 
 
-def poll_claude_resources(store,settings):
+def poll_claude_resources(store,settings,account=None):
     """Read-only paths in Claude Code 2.1.288, with independent cooldowns.
 
     Neither endpoint can redeem a reset or change billing. Identities and tokens
     stay in memory; account identity is hashed by the resource store.
     """
+    from .claude_accounts import suffix
     from .resources import observe_account,claude_balance,claude_resets
-    path=Path(settings.get('claude_auth',Path.home()/'.claude/.credentials.json'))
-    for kind,source,parser in (('credits','claude-credits',claude_balance),('resets','claude-resets',claude_resets)):
+    route,path,account_file=claude_target(settings,account);tag=suffix(route)
+    for kind,source,parser in (('credits','claude-credits'+tag,claude_balance),('resets','claude-resets'+tag,claude_resets)):
         metadata={}
         def read():
             auth=json.loads(path.read_text()).get('claudeAiOauth',{})
             if not auth.get('accessToken') or (auth.get('expiresAt') and auth['expiresAt']/1000<=time.time()):
                 raise PermissionError('native authentication required')
-            metadata.update(claude_account(path,settings))
+            metadata.update(claude_account(path,settings,account_file))
             if not metadata.get('identity'):raise AccountMetadataMissing('native account identity required')
             endpoint=('https://api.anthropic.com/api/oauth/organizations/'+metadata['organization']+'/prepaid/credits' if kind=='credits'
                       else 'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1')
             request=urllib.request.Request(endpoint,headers=claude_headers(auth['accessToken']))
             with urllib.request.build_opener(NoRedirect).open(request,timeout=10) as response:return json.load(response)
         def record(c,data,checked):
-            observe_account(c,'claude-code',metadata.get('identity'),checked,path.stat().st_mtime_ns)
-            return parser(c,data,checked),'추가 자원 읽기 전용 조회 · 내부 OAuth 경로'
+            observe_account(c,route,metadata.get('identity'),checked,path.stat().st_mtime_ns)
+            return parser(c,data,checked,route),'추가 자원 읽기 전용 조회 · 내부 OAuth 경로'
         account_poll(store,path,source+'_poll',source,'Claude 기본 계정 정보·인증 확인 필요',read,record,interval=900)
 
 
@@ -712,15 +745,52 @@ def poll_codex_thread(store,settings):
             store.source(c,'codex-thread-usage','error',f'스레드 누계 조회 실패 ({type(exc).__name__}) · 계정 합계 유지')
 
 
+def mark_ended(store,*names):
+    """A subscription marked ended in the settings is not polled; its existing sources
+    say why (an earlier ok or error row must not stay live)."""
+    from .store import USER_ENDED_DETAIL
+    with store.connect() as c:
+        for name in names:
+            if c.execute('SELECT 1 FROM sources WHERE name=?',(name,)).fetchone():
+                store.source_changed(c,name,'ended',USER_ENDED_DETAIL)
+
+
+CLAUDE_SOURCES=('claude-oauth','claude-credits','claude-resets','claude-cloud','claude-cloud-supplement')
+
+
+def claude_contexts(store,settings):
+    """Accounts to poll; discovery errors fall back to the original single account."""
+    from .claude_accounts import accounts
+    try:return accounts(store,settings)
+    except Exception:  # an unreadable home must not stop quota polling
+        return [None]
+
+
 def poll_limits(store,settings,manual=False):
-    poll_claude(store,settings)
-    poll_claude_resources(store,settings)
-    try:collect_claude_cloud(store,settings)
-    except Exception as exc:  # never stops the other reads
-        with store.connect() as c:store.source(c,'claude-cloud','error',f'클라우드 세션 수집 실패 ({type(exc).__name__})')
-    poll_devin(store,settings)
-    poll_antigravity_app(store,settings)
+    from .claude_accounts import is_claude,suffix
+    from .config import ended_routes
+    ended=ended_routes(settings)
+    # Ended Claude accounts, discoverable now or not: their sources (and status line) end.
+    for route in sorted(r for r in ended if is_claude(r)):
+        mark_ended(store,route,*(name+suffix(route) for name in CLAUDE_SOURCES))
+    for account in claude_contexts(store,settings):
+        # An account seen only through a home whose login is never read (Windows).
+        if account is not None and not account.get('home'):continue
+        route=(account or {}).get('route','claude-code');tag=suffix(route)
+        if route in ended:continue
+        poll_claude(store,settings,account)
+        poll_claude_resources(store,settings,account)
+        try:collect_claude_cloud(store,settings,account=account)
+        except Exception as exc:  # never stops the other reads
+            with store.connect() as c:store.source(c,'claude-cloud'+tag,'error',f'클라우드 세션 수집 실패 ({type(exc).__name__})')
+    if 'devin' in ended:mark_ended(store,'devin')
+    else:poll_devin(store,settings)
+    if 'antigravity' in ended:mark_ended(store,'antigravity-app')
+    else:poll_antigravity_app(store,settings)
     for route in ('codex','opencode-go'):
+        if route in ended:
+            mark_ended(store,route,*(('codex-account-usage','codex-thread-usage') if route=='codex' else ()))
+            continue
         if route=='opencode-go' and not manual:
             with store.connect() as c:
                 pause=store.state(c,'opencode_go_poll',{})
