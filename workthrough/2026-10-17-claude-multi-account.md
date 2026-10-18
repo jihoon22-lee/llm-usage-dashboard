@@ -50,7 +50,7 @@
 
 - 첫 PR #49는 전체 이력 Gitleaks가 테스트의 합성 경로 문자열(`claude-oauth:` + 12자리 hex)을 generic-api-key로 오탐해 실패했다. 허용 목록을 추가하지 않고 같은 변경을 낮은 엔트로피 합성 값으로 다시 만든 PR #50으로 대체했고, PR #49 브랜치는 전체 브랜치 검사에서 빠지도록 삭제했다.
 - PR #50은 필수 CI(`ci-required`)와 자동 리뷰 2회(지적 3건 반영, 대화 모두 해결) 후 병합 커밋 `2f4e1a1`로 main에 병합했다.
-- 배포 직전 운영 DB 복구용 백업 `~/.local/share/llm-usage/backups/pre-claude-accounts-20261017T225548.db.gz`를 만들었다(주기 백업 정리 대상이 아닌 이름, 보존). 외부 의존성·프로젝트 버전 변경이 없어 운영 `.venv`는 동기화하지 않았다.
+- 배포 직전 운영 DB 복구용 백업 `~/.local/share/llm-usage/backups/pre-claude-accounts-20261017T225548.db.gz`를 만들었다(주기 백업 정리 대상이 아닌 이름). 2026-10-18 사용자 결정으로 수동 백업을 마지막 하나만 남기면서 삭제했다. 외부 의존성·프로젝트 버전 변경이 없어 운영 `.venv`는 동기화하지 않았다.
 - 2026-10-17 22:57 KST 기존 `packaging/deploy.py`로 릴리스 `2f4e1a1`을 전환했다. 배포기의 Python 409개·JavaScript 검사 통과, 웹·수집기 재시작과 새 heartbeat 확인 후 성공을 반환했다. 두 프로세스의 실제 cwd가 새 릴리스이고 health 200이다.
 - 배포 후 운영 DB(읽기 전용 확인): rollup v2·events.account 적용, 대기 0건, Claude 요청 수·토큰 합계가 계정별 합계와 정확히 일치. 원래 계정의 resource_accounts epoch·since가 배포 전과 같아 이력 연속성이 유지됐다. 미확인은 첫 수집 전 이 작업 세션 일부와 수집기 배포 전에 끝난 짧은 SDK 보안 리뷰 세션들이다.
 - 계정별 실조회: 기존 Pro의 5시간·주간, 신규 Max 5x의 5시간·주간·Fable 주간 한도가 각 계정 경로로 최근 확인 상태로 수신됐고 `claude-oauth`·`claude-credits`·`claude-resets`·`claude-cloud`와 `:<계정>` 소스가 정상이다.
