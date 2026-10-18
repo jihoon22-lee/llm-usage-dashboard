@@ -482,3 +482,22 @@ PR #50 자동 리뷰 스레드(미해결)의 지적을 확인했다. 추가 Clau
 - 독립 worktree에서 uv 0.12.23 `uv sync --locked`로 0.7.0이 설치되는 것을 확인했다. 운영 `.venv`는 건드리지 않았다.
 - `.venv/bin/python -m unittest discover -s tests -q` 465개 통과. `node --check` 전체 통과, `node --test` 38개 통과.
 - 운영 문서에서 합친 절을 가리키던 링크가 없는지 확인했다.
+
+### 리뷰
+
+- PR #68: 자동 리뷰 1회차 지적 없음.
+
+### 병합·태그·게시
+
+- PR #68을 병합 커밋 `771d5d9`로 main에 병합했다. main CI 성공을 확인한 뒤 같은 커밋에 주석 태그 `v0.7.0`을 만들어 push했다. 태그 메시지는 이전 관례(‘Release v0.6.2’)와 달리 ‘v0.7.0’이지만, 게시가 시작된 뒤라 바꾸지 않았다.
+- Release 워크플로의 사전 검사(태그=프로젝트 버전, main 포함), 전체 검사, 게시가 모두 성공했다. [v0.7.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.7.0)은 immutable 릴리스다.
+- 게시 자산 4개(wheel, sdist, release-manifest.json, SHA256SUMS)를 새 폴더에 내려받아 SHA256SUMS와 대조했다. 저장소의 manifest 검사(`release_guard.verify_manifest`, 커밋·태그 출처)도 통과했다. wheel의 웹 자산 18개는 저장소와 같다. 릴리스 설명에는 변경 요약과 업데이트 절차 링크를 넣었다.
+
+### 운영 반영
+
+- 2026-10-18 19:24 KST 기본 checkout을 `v0.7.0`으로 fast-forward하고, 기존 배포기로 릴리스 `771d5d9`를 전환했다(사용자 결정: 코드만).
+  - 실행 중이던 `523e735`와 실행 코드 차이가 없고, 의존성은 프로젝트 버전 줄만 다르다. 그래서 운영 `.venv`는 동기화하지 않았다(표기는 0.6.2로 남음).
+  - DB를 바꾸지 않는 배포라 새 규칙대로 배포 직전 백업은 만들지 않았다.
+- 배포기의 JavaScript 38개와 Python 465개가 통과했다. 두 서비스가 재시작됐고 실제 cwd가 새 릴리스이며 health 200이다. 재시작 뒤 경고 이상 로그와 오류 수집원은 없다. 새 heartbeat를 확인했고, 키 없는 클라우드 누계는 0건이다.
+- 화면·실행 코드가 바뀌지 않아 실제 브라우저 확인은 생략했다.
+- 릴리스 자산 확인 폴더, 로그, 작업 worktree는 확인 후 삭제했다.
