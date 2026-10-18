@@ -116,9 +116,13 @@ function quotaUseHtml(r,unit='주',from=''){
  if(r.quota_use==null)return `<p class="hint">이 ${unit}의 한도 이력은 보존 기간이 지나 한도 활용·소진 횟수를 계산하지 않았습니다.</p>`;
  if(!r.quota_use.length)return `<p class="hint">이 ${unit}에 관측된 한도 이력이 없습니다.${from}</p>`;
  const rows=[...r.quota_use].sort((a,b)=>b.zero_hours-a.zero_hours||b.exhausted-a.exhausted||b.observed_hours-a.observed_hours||compareText.compare(quotaLabel(a),quotaLabel(b)));
+ // A window with no observed interval reads 미관측, not 0 hours: its exhaustions come from
+ // readings the observed time leaves out.
+ const seen=q=>q.observed_hours>0,hours=(q,v)=>seen(q)?hoursText(v):'미관측';
  const before=q=>!q.before_reset?'미관측':q.resets_observed>1?`평균 ${percent(q.before_reset.avg)} · 최소 ${percent(q.before_reset.min)} · ${q.resets_observed}회`:`${percent(q.before_reset.avg)} · 1회`;
  return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만${from}</p>`
-  +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hoursText(q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hoursText(q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`;
+  +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hours(q,q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hours(q,q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`
+  +(rows.some(q=>!seen(q)&&q.exhausted)?'<p class="hint">‘미관측’ 창의 소진 횟수는 관측 시간에 넣지 않는 이력(계정 확인 전 기록, 10분보다 긴 측정 간격)에서 센 것입니다.</p>':'');
 }
 // Claude Code by account (계정 미확인 included): the names set now, else the ones stored.
 const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'계정')} <span data-tip="${fmt(a.tokens)} 토큰">${compact(a.tokens)}</span>`).join(' · ');
