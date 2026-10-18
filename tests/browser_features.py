@@ -59,7 +59,10 @@ MONTHS = [dict(month='2026-09', start='2026-09-01', end='2026-09-30', built=now,
                models=[dict(model='gpt-fixture', route='codex', tokens=4.5e9, cost=3600.0)],
                projects=[dict(project='fixture-project', tokens=3e9, cost=2000.0)], accounts=None, residual=None,
                quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=600, zero_hours=12.5,
-                               resets_observed=4, before_reset=dict(avg=10.0, min=0.0, max=30.0), exhausted=2)],
+                               resets_observed=4, before_reset=dict(avg=10.0, min=0.0, max=30.0), exhausted=2),
+                          # Exhaustions counted from readings outside any observed interval.
+                          dict(route='claude-code', bucket='five_hour', observed_hours=0, zero_hours=0, resets_observed=0,
+                               before_reset=None, exhausted=15)],
                quota_from=1788222600),
           dict(month='2026-08', start='2026-08-01', end='2026-08-31', built=now, partial=True, records_from='2026-08-20',
                totals=dict(tokens=1e8, requests=900, cost=100.0, residual_tokens=0),
@@ -232,7 +235,15 @@ with sync_playwright() as p:
     expect(monthly).to_contain_text('환산 $20 · 월 구독료 미설정 · 100M 토큰')
     expect(monthly).to_contain_text('Codex 토큰에는 이 PC에 기록이 없는')
     expect(monthly).to_contain_text('09. 01. 09:30부터 보존된 이력')
-    expect(monthly.locator(':scope > .table-wrap .quota-use tbody tr')).to_have_count(1)
+    month_use = monthly.locator(':scope > .table-wrap .quota-use tbody tr')
+    expect(month_use).to_have_count(2)
+    # No observed interval: 미관측 rather than 0 hours, with where its exhaustions come from.
+    expect(month_use.nth(1).locator('td').nth(1)).to_have_text('15회')
+    expect(month_use.nth(1).locator('td').nth(2)).to_have_text('미관측')
+    expect(month_use.nth(1).locator('td.col-req')).to_have_text('미관측')
+    expect(month_use.first.locator('td').nth(2)).to_have_text('12.5시간')
+    expect(monthly).to_contain_text('‘미관측’은 관측 시간으로 셀 연속 측정이 없었다는 뜻입니다.')
+    expect(reports).not_to_contain_text('‘미관측’은 관측 시간으로')
     trend = monthly.locator('.month-trend tbody tr')
     expect(trend).to_have_count(2)
     expect(trend.first).to_contain_text('Claude 5.0배 · Codex 18.0배')
