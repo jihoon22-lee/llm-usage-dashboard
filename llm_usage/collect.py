@@ -337,7 +337,8 @@ def collect_status(store,settings):
     ended=ended_routes(settings)
     for folder in settings.get('status_inboxes',[]):
         for path,base in status_files(folder):
-            route=base
+            # A Claude file names its account only inside (see status_route).
+            route=None if base=='claude-code' else base
             try:
                 data=json.loads(path.read_text())
                 with store.connect() as c:
@@ -351,9 +352,13 @@ def collect_status(store,settings):
                     count=status_limits(store,c,route,data['data'],checked)
                     store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
                     store.save_state(c,'status:'+str(path),checked)
+                    store.save_state(c,'status_route:'+str(path),route)
             except (OSError,ValueError,KeyError,TypeError,AttributeError):
-                if route is None:continue
                 with store.connect() as c:
+                    # Unread, a file fails the account it last reported; a file of another home
+                    # never read is no account's (the default home's is the original account's).
+                    if route is None:route=store.state(c,'status_route:'+str(path)) or ('claude-code' if path.name=='claude-code.json' else None)
+                    if route is None:continue
                     if route in ended:store.source_changed(c,route,'ended',USER_ENDED_DETAIL)
                     else:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
 

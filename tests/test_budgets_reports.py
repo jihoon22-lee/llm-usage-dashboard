@@ -283,6 +283,18 @@ class ReportTests(unittest.TestCase):
         self.assertNotEqual(after['built'],before['built'])
         self.assertEqual((after['exhausted'],after['quota_use']),(before['exhausted'],before['quota_use']))
 
+    def test_evidence_crossing_a_monday_alone_schedules_no_report(self):
+        from llm_usage.reconciliation import snapshot
+        bare=Store(Path(self.tmp.name)/'bare.db')
+        monday=stamp('2026-09-27T15:00:00Z')  # 09-28 00:00 KST
+        with bare.connect() as c:
+            snapshot(bare,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',model='claude-x',
+                     start=monday-3600,end=monday+3600,tokens=100,parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=100))
+        # No week's report can hold it, so no empty report is built and announced.
+        self.assertIsNone(reports.ensure_report(bare,stamp('2026-10-05T01:00:00Z'),PRICING))
+        with bare.connect() as c:
+            self.assertEqual(c.execute("SELECT key FROM state WHERE key LIKE 'report:%'").fetchall(),[])
+
     def test_report_format_change_rebuilds_stored_weeks_once(self):
         from llm_usage.reconciliation import RESIDUAL
         later=stamp('2026-10-05T01:00:00Z')

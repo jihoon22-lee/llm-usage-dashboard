@@ -97,6 +97,12 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertNotIn(SECRET, dump)
         self.assertNotIn('TEST-ONLY-PRIVATE', dump)
 
+    def test_cloud_reasoning_is_kept_like_a_local_transcript_line(self):
+        message = assistant('msg_1', '2026-10-12T09:30:00Z', 40)
+        message['payload']['message']['usage']['reasoning_output_tokens'] = 12
+        self.run_collect(FakeApi([[session('session_cloud')]], {'session_cloud': [[message]]}))
+        self.assertEqual([(r['output'], r['reasoning']) for r in self.rows()], [(40, 12)])
+
     def test_a_message_already_read_from_a_local_transcript_is_not_added_twice(self):
         with self.store.connect() as c:
             self.store.event(c, identity('claude-code', 'msg_1'), NOW - 3600, 'Anthropic', 'claude-code', 'claude-opus-5-5',

@@ -134,7 +134,7 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
         # Same identity as a local transcript line, so a teleported copy merges.
         store.event(c,eid,ts,model_provider(m.get('model','')),'claude-code',m.get('model'),dict(
             uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
-            output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0)),
+            output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0),reasoning=u.get('reasoning_output_tokens',0)),
             session=sid,project=project,agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main',
             account=account)
         link(c,'claude:'+sid,eid,'claude-cloud:'+endpoint,'provisional' if endpoint=='events' else 'final')

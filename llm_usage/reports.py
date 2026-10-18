@@ -336,7 +336,9 @@ def _ensure_report(store,now,pricing=None):
         with store.connect() as c:store.save_state(c,'reports:usage-revision',revision)
     with store.connect() as c:
         first=c.execute('SELECT MIN(ts) FROM events').fetchone()[0]
-        if additions:first=min([first]+[e['start'] for e in additions]) if first is not None else min(e['start'] for e in additions)
+        # Evidence crossing a Monday is in no week's report (build sets it aside), so it starts none.
+        placed=[e['start'] for e in additions if e['end']<=(last_week(e['start'])[1]+timedelta(days=7)).timestamp()]
+        first=min([t for t in (first,*placed) if t is not None],default=None)
         missing=[]
         for back in range(KEEP):
             week=monday-timedelta(days=7*back)
