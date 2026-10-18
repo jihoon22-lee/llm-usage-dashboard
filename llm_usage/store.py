@@ -813,6 +813,7 @@ class Store:
                 +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',(project,start.timestamp()))]
         from .reconciliation import supplements
         with self.connect() as c:extra,conflicts=supplements(c)
+        by_session={r['session']:r for r in sessions}
         unallocated=[]
         for e in extra:
             # The Codex account residual is listed apart from '미분류' (see reconciliation.RESIDUAL).
@@ -827,10 +828,10 @@ class Store:
                 d=daily.setdefault(begin,dict(day=begin,tokens=0,requests=0));d['tokens']+=e['tokens']
             else:unallocated.append(dict(start=e['start'],end=e['end'],tokens=e['tokens']))
             if e['session']:
-                session=next((r for r in sessions if r['session']==e['session']),None)
+                session=by_session.get(e['session'])
                 if session is None:
-                    session=dict(session=e['session'],route=e['route'],tokens=0,requests=0,
-                                 first_ts=e['start'],last_ts=e['end'])
+                    session=by_session[e['session']]=dict(session=e['session'],route=e['route'],tokens=0,requests=0,
+                                                          first_ts=e['start'],last_ts=e['end'])
                     sessions.append(session)
                 session['tokens']+=e['tokens']
                 session['first_ts']=min(session['first_ts'],e['start'])

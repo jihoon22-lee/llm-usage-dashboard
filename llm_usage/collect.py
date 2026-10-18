@@ -337,12 +337,16 @@ def collect_status(store,settings):
     ended=ended_routes(settings)
     for folder in settings.get('status_inboxes',[]):
         for path,base in status_files(folder):
-            route=base
+            # A Claude file names its account only inside (see status_route).
+            route=None if base=='claude-code' else base
             try:
                 data=json.loads(path.read_text())
                 with store.connect() as c:
                     route=status_route(store,c,path,base,data)
                     if route is None:continue
+                    # Kept (committed) before the event is read, so a file whose last event was already
+                    # read, or whose event fails below, still names its account.
+                    if store.state(c,'status_route:'+str(path))!=route:store.save_state(c,'status_route:'+str(path),route);c.commit()
                     if route in ended:
                         # Like the polled sources: an old ok/error must not stay live.
                         store.source_changed(c,route,'ended',USER_ENDED_DETAIL);continue
@@ -352,8 +356,11 @@ def collect_status(store,settings):
                     store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
                     store.save_state(c,'status:'+str(path),checked)
             except (OSError,ValueError,KeyError,TypeError,AttributeError):
-                if route is None:continue
                 with store.connect() as c:
+                    # Unread, a file fails the account it last reported; a file of another home
+                    # never read is no account's (the default home's is the original account's).
+                    if route is None:route=store.state(c,'status_route:'+str(path)) or ('claude-code' if path.name=='claude-code.json' else None)
+                    if route is None:continue
                     if route in ended:store.source_changed(c,route,'ended',USER_ENDED_DETAIL)
                     else:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
 

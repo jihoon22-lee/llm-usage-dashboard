@@ -404,7 +404,8 @@ class AccountTests(unittest.TestCase):
 
     # --- status lines, usage and the hook installer ---------------------------------------------
 
-    def test_status_lines_of_two_homes_never_overwrite_each_other(self):
+    def status_lines(self):
+        """One status line from each home, as the status-line script writes them."""
         accounts(self.store, self.cfg, NOW)
         with self.store.connect() as c:
             observe_account(c, 'claude-code', MAIN, NOW)
@@ -416,12 +417,40 @@ class AccountTests(unittest.TestCase):
                 env['CLAUDE_CONFIG_DIR'] = str(home)
             subprocess.run([sys.executable, statusline.__file__, '--route', 'claude-code', '--directory', str(self.h.inbox)],
                            input=payload, capture_output=True, env=env, check=True)
+
+    def test_status_lines_of_two_homes_never_overwrite_each_other(self):
+        self.status_lines()
         names = sorted(p.name for p in self.h.inbox.glob('claude-code*.json'))
         self.assertEqual(len(names), 2)
         self.assertIn('claude-code.json', names)
         collect.collect_status(self.store, self.cfg)
         rows = {(r['route'], r['source']) for r in self.store.limits(NOW)['limits'] if r['bucket'] == 'five_hour'}
         self.assertEqual(rows, {(FAMILY, FAMILY), (R_SECOND, R_SECOND)})
+
+    def test_an_unreadable_status_line_of_another_home_fails_the_account_it_reported(self):
+        self.status_lines()
+        collect.collect_status(self.store, self.cfg)
+        # As an earlier version left it: the files' last events read, their accounts not kept.
+        with self.store.connect() as c:
+            c.execute("DELETE FROM state WHERE key LIKE 'status_route:%'")
+        collect.collect_status(self.store, self.cfg)
+        next(self.h.inbox.glob('claude-code@*.json')).write_text('{not json')
+        # A file never read names no account, so its failure is none of theirs.
+        (self.h.inbox / 'claude-code@0123456789ab.json').write_text('{not json')
+        collect.collect_status(self.store, self.cfg)
+        with self.store.connect() as c:
+            status = dict(c.execute("SELECT name,status FROM sources WHERE name LIKE 'claude-code%'").fetchall())
+        self.assertEqual(status, {FAMILY: 'ok', R_SECOND: 'error'})
+
+    def test_a_status_event_that_cannot_be_used_still_keeps_the_file_s_account(self):
+        self.status_lines()
+        other = next(self.h.inbox.glob('claude-code@*.json'))
+        event = json.loads(other.read_text())
+        other.write_text(json.dumps({k: v for k, v in event.items() if k != 'checked'}))
+        collect.collect_status(self.store, self.cfg)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c, 'status_route:' + str(other)), R_SECOND)
+            self.assertEqual(c.execute('SELECT status FROM sources WHERE name=?', (R_SECOND,)).fetchone()[0], 'error')
 
     def test_usage_groups_scopes_and_values_each_account(self):
         accounts(self.store, self.cfg, NOW)
