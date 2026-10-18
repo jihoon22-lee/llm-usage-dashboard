@@ -143,6 +143,39 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
     return count
 
 
+def _rekey(store,c):
+    """Cloud totals once stored without the key of the login that read them (the teleport
+    read did not pass it) take the key their session proves: that of its keyed totals, else
+    of the one account its cloud-read records name. A copy of a keyed total goes, so one
+    result counts once. Unproven ones stay with the original account, which read every
+    cloud session before accounts were told apart."""
+    rows=c.execute("SELECT * FROM usage_evidence WHERE source='claude-cloud' AND account_key IS NULL").fetchall()
+    if not rows:return
+    prefix='claude_cloud_account:';readers={}
+    for name,data in c.execute('SELECT key,data FROM state WHERE substr(key,1,?)=?',(len(prefix),prefix)):
+        readers.setdefault(json.loads(data),set()).add(name[len(prefix):])
+    changed=False
+    for r in rows:
+        scope=(r['source'],r['scope_id'])
+        if not c.execute('SELECT 1 FROM usage_evidence WHERE source=? AND scope_id=? AND model IS ? AND end=? AND account_key IS NOT NULL',
+                         (*scope,r['model'],r['end'])).fetchone():
+            keys={k for k, in c.execute('SELECT DISTINCT account_key FROM usage_evidence WHERE source=? AND scope_id=? AND account_key IS NOT NULL',scope)}
+            if not keys:
+                # A cloud copy keeps the account that read it; a local copy's is attributed.
+                routes={a for a, in c.execute("""SELECT DISTINCT account FROM events WHERE id IN (SELECT event_id FROM usage_links WHERE scope_id=?)
+                                                 AND id IN (SELECT event_id FROM usage_origins WHERE source LIKE 'claude-cloud:%')""",(r['scope_id'],))}
+                keys=readers.get(routes.pop(),set()) if len(routes)==1 else set()
+            if len(keys)!=1:continue
+            key,=keys
+            c.execute('INSERT INTO usage_evidence SELECT ?,source,scope_id,route,provider,model,session,project,?,start,end,checked,tokens,parts'
+                      ' FROM usage_evidence WHERE id=?',(identity(*scope,r['model'],r['end'],key),key,r['id']))
+        c.execute('DELETE FROM usage_evidence WHERE id=?',(r['id'],))
+        changed=True
+    if changed:
+        store.bump_data_version(c)
+        store.save_state(c,'usage_evidence_version',(store.state(c,'usage_evidence_version') or 0)+1)
+
+
 def collect_claude_cloud(store,settings,fetch=None,account=None):
     """Cloud sessions of one Claude account (the original account without a context)."""
     from .claude_accounts import suffix
@@ -161,10 +194,12 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
             store.source(c,source,'error','Claude 인증 확인 필요 · Claude Code에서 로그인 갱신 후 자동 재확인합니다.')
         return
     headers={**claude_headers(auth['accessToken']),'anthropic-version':'2023-06-01','x-organization-uuid':organization}
+    account_key=identity('claude-account',organization)
     with store.connect() as c:
         pause=store.state(c,retry,{})
         # Account-level cloud totals (usage_evidence) name their account route.
-        store.save_state(c,'claude_cloud_account:'+identity('claude-account',organization),route)
+        store.save_state(c,'claude_cloud_account:'+account_key,route)
+        _rekey(store,c)
     if time.time()<pause.get('next_attempt',0):return
     try:sessions=_sessions(fetch,headers)
     except Exception as exc:
@@ -195,7 +230,7 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
             scan_updated=state.get('scan_updated',item.get('updated_at')) if state.get('cursor') or state.get('teleport_cursor') else item.get('updated_at')
             entries,teleport_cursor=_batch(fetch,headers,item,state.get('teleport_cursor'),'teleport-events')
             with store.connect() as c:
-                _ingest(store,c,fetch,headers,item,model_provider,entries=entries,account=route)
+                _ingest(store,c,fetch,headers,item,model_provider,account_key=account_key,entries=entries,account=route)
                 if teleport_cursor:
                     store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,
                         teleport_cursor=teleport_cursor,cursor=state.get('cursor'),parser=PARSER_VERSION,checked=time.time(),**supplement_state))
@@ -214,7 +249,7 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
             cursor=seen.get('cursor') if isinstance(seen,dict) else None
             entries,cursor=_batch(fetch,headers,item,cursor)
             with store.connect() as c:
-                _ingest(store,c,fetch,headers,item,model_provider,'events',identity('claude-account',organization),entries,account=route)
+                _ingest(store,c,fetch,headers,item,model_provider,'events',account_key,entries,account=route)
                 store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,cursor=cursor,parser=PARSER_VERSION,checked=time.time()))
             if cursor:backfilling+=1
         except urllib.error.HTTPError as exc:

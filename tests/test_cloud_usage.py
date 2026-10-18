@@ -30,6 +30,13 @@ def assistant(mid, ts, output, sidechain=False, model='claude-opus-5-5'):
                       'output_tokens': output}}}}
 
 
+def result(ts, messages, output, model='claude-opus-5-5'):
+    """The session's cumulative modelUsage after `messages` assistant() requests."""
+    return {'created_at': ts, 'payload': {'type': 'result', 'session_id': 'inner-1', 'modelUsage': {model: {
+        'inputTokens': 2 * messages, 'cacheReadInputTokens': 100 * messages, 'cacheCreationInputTokens': 10 * messages,
+        'outputTokens': output}}}}
+
+
 class FakeApi:
     def __init__(self, sessions, events):
         self.sessions, self.events, self.calls, self.gone = sessions, events, [], set()
@@ -59,9 +66,9 @@ class ClaudeCloudTests(unittest.TestCase):
         (root / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'user-1', 'organizationUuid': 'org-1'}}))
         self.config = {'claude_auth': str(self.auth)}
 
-    def run_collect(self, api):
+    def run_collect(self, api, account=None):
         with patch('llm_usage.cloud.time.time', return_value=NOW):
-            collect_claude_cloud(self.store, self.config, fetch=api)
+            collect_claude_cloud(self.store, self.config, fetch=api, account=account)
 
     def rows(self):
         with self.store.connect() as c:
@@ -226,6 +233,83 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertEqual(len(calls),101)
         with self.store.connect() as c:
             self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0],'ok')
+
+    def test_a_result_read_by_both_endpoints_is_one_aggregate(self):
+        from llm_usage.reconciliation import supplements
+        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[
+            assistant('msg_1', '2026-10-12T09:30:00Z', 40), result('2026-10-12T09:35:00Z', 1, 100),
+            assistant('msg_2', '2026-10-12T09:40:00Z', 10), result('2026-10-12T09:45:00Z', 2, 200)]]})
+        self.run_collect(api)
+        self.assertTrue(any('/teleport-events?' in u for u, _ in api.calls) and any('/events?' in u for u, _ in api.calls))
+        with self.store.connect() as c:
+            rows = [tuple(r) for r in c.execute('SELECT tokens,account_key FROM usage_evidence ORDER BY end')]
+            entries, conflicts = supplements(c)
+        key = identity('claude-account', 'org-1')
+        self.assertEqual(rows, [(212, key), (424, key)])
+        # Each result less the records before it, once: output 100-40, then (200-100)-10.
+        self.assertEqual([(e['tokens'], e['account']) for e in entries], [(60, 'claude-code'), (90, 'claude-code')])
+        self.assertEqual(conflicts, [])
+
+    def test_a_second_account_teleport_aggregate_is_that_account_s(self):
+        from llm_usage.reconciliation import supplements
+        home = Path(self.tmp.name) / 'second'; home.mkdir()
+        (home / '.credentials.json').write_text(self.auth.read_text())
+        (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'user-2', 'organizationUuid': 'org-2'}}))
+        account = dict(route='claude-code:second', home=dict(credentials=str(home / '.credentials.json'), account_file=str(home / '.claude.json')))
+        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[
+            assistant('msg_1', '2026-10-12T09:30:00Z', 40), result('2026-10-12T09:35:00Z', 1, 100)]]})
+        def teleport_only(url, headers):
+            if '/events?' in url:raise HTTPError(url, 404, 'Unavailable', {}, None)
+            return api(url, headers)
+        self.run_collect(teleport_only, account)
+        with self.store.connect() as c:
+            keys = [r[0] for r in c.execute('SELECT account_key FROM usage_evidence')]
+            entries, _ = supplements(c)
+        self.assertEqual(keys, [identity('claude-account', 'org-2')])
+        self.assertEqual([(e['tokens'], e['account']) for e in entries], [(60, 'claude-code:second')])
+
+    def test_aggregates_stored_without_the_reading_account_are_repaired_once(self):
+        from llm_usage.reconciliation import link, snapshot, supplements
+        first, second = identity('claude-account', 'org-1'), identity('claude-account', 'org-2')
+        start = stamp('2026-10-12T09:00:00Z')
+        def aggregate(c, scope, minute, tokens, key=None):
+            snapshot(self.store, c, source='claude-cloud', scope_id='claude:' + scope, route='claude-code', provider='Anthropic',
+                     model='claude-test', start=start, end=start + 60 * minute, tokens=tokens, account_key=key,
+                     parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens))
+        with self.store.connect() as c:
+            self.store.save_state(c, 'claude_cloud_account:' + second, 'claude-code:second')
+            # Read by both endpoints while only one passed its key.
+            aggregate(c, 'twin', 10, 50); aggregate(c, 'twin', 10, 50, first)
+            # A later result of a session whose other results carry a key.
+            aggregate(c, 'later', 10, 50, first); aggregate(c, 'later', 20, 80)
+            # Read by the second login only, whose cloud copies of the records name it.
+            self.store.event(c, 'cloud-read', start + 300, 'Anthropic', 'claude-code', 'claude-test', dict(output=5),
+                             session='read', account='claude-code:second')
+            link(c, 'claude:read', 'cloud-read', 'claude-cloud:teleport-events')
+            aggregate(c, 'read', 10, 30)
+            # The account of a local copy is attributed, so it proves nothing about the reader.
+            self.store.event(c, 'local-copy', start + 300, 'Anthropic', 'claude-code', 'claude-test', dict(output=5),
+                             session='local', account='claude-code:second')
+            link(c, 'claude:local', 'local-copy', 'local')
+            aggregate(c, 'local', 10, 30)
+            before = self.store.state(c, 'data_version')
+        api = FakeApi([[session('bridge', kind='bridge')]], {})
+        self.run_collect(api)
+        with self.store.connect() as c:
+            rows = [dict(r) for r in c.execute('SELECT * FROM usage_evidence')]
+            accounts = sorted((e['scope_id'], e['tokens'], e['account']) for e in supplements(c)[0])
+            after = self.store.state(c, 'data_version')
+        self.assertEqual(sorted((r['scope_id'], r['end'] - start, r['account_key'] or '-') for r in rows),
+                         [('claude:later', 600, first), ('claude:later', 1200, first), ('claude:local', 600, '-'),
+                          ('claude:read', 600, second), ('claude:twin', 600, first)])
+        self.assertTrue(all(r['id'] == identity(r['source'], r['scope_id'], r['model'], r['end'], r['account_key']) for r in rows))
+        self.assertEqual(accounts, [('claude:later', 30, 'claude-code'), ('claude:later', 50, 'claude-code'),
+                                    ('claude:local', 25, 'claude-code'), ('claude:read', 25, 'claude-code:second'),
+                                    ('claude:twin', 50, 'claude-code')])
+        self.assertGreater(after, before)
+        self.run_collect(api)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c, 'data_version'), after)
 
 
 def utc(day, hour=12):
