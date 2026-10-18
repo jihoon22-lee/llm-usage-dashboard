@@ -344,6 +344,9 @@ def collect_status(store,settings):
                 with store.connect() as c:
                     route=status_route(store,c,path,base,data)
                     if route is None:continue
+                    # Kept (committed) before the event is read, so a file whose last event was already
+                    # read, or whose event fails below, still names its account.
+                    if store.state(c,'status_route:'+str(path))!=route:store.save_state(c,'status_route:'+str(path),route);c.commit()
                     if route in ended:
                         # Like the polled sources: an old ok/error must not stay live.
                         store.source_changed(c,route,'ended',USER_ENDED_DETAIL);continue
@@ -352,7 +355,6 @@ def collect_status(store,settings):
                     count=status_limits(store,c,route,data['data'],checked)
                     store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
                     store.save_state(c,'status:'+str(path),checked)
-                    store.save_state(c,'status_route:'+str(path),route)
             except (OSError,ValueError,KeyError,TypeError,AttributeError):
                 with store.connect() as c:
                     # Unread, a file fails the account it last reported; a file of another home

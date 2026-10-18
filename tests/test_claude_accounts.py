@@ -430,6 +430,10 @@ class AccountTests(unittest.TestCase):
     def test_an_unreadable_status_line_of_another_home_fails_the_account_it_reported(self):
         self.status_lines()
         collect.collect_status(self.store, self.cfg)
+        # As an earlier version left it: the files' last events read, their accounts not kept.
+        with self.store.connect() as c:
+            c.execute("DELETE FROM state WHERE key LIKE 'status_route:%'")
+        collect.collect_status(self.store, self.cfg)
         next(self.h.inbox.glob('claude-code@*.json')).write_text('{not json')
         # A file never read names no account, so its failure is none of theirs.
         (self.h.inbox / 'claude-code@0123456789ab.json').write_text('{not json')
@@ -437,6 +441,16 @@ class AccountTests(unittest.TestCase):
         with self.store.connect() as c:
             status = dict(c.execute("SELECT name,status FROM sources WHERE name LIKE 'claude-code%'").fetchall())
         self.assertEqual(status, {FAMILY: 'ok', R_SECOND: 'error'})
+
+    def test_a_status_event_that_cannot_be_used_still_keeps_the_file_s_account(self):
+        self.status_lines()
+        other = next(self.h.inbox.glob('claude-code@*.json'))
+        event = json.loads(other.read_text())
+        other.write_text(json.dumps({k: v for k, v in event.items() if k != 'checked'}))
+        collect.collect_status(self.store, self.cfg)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c, 'status_route:' + str(other)), R_SECOND)
+            self.assertEqual(c.execute('SELECT status FROM sources WHERE name=?', (R_SECOND,)).fetchone()[0], 'error')
 
     def test_usage_groups_scopes_and_values_each_account(self):
         accounts(self.store, self.cfg, NOW)
