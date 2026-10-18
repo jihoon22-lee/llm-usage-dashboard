@@ -122,7 +122,7 @@ function quotaUseHtml(r,unit='주',from=''){
  const before=q=>!q.before_reset?'미관측':q.resets_observed>1?`평균 ${percent(q.before_reset.avg)} · 최소 ${percent(q.before_reset.min)} · ${q.resets_observed}회`:`${percent(q.before_reset.avg)} · 1회`;
  return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만${from}</p>`
   +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hours(q,q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hours(q,q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`
-  +(rows.some(q=>!seen(q)&&q.exhausted)?'<p class="hint">‘미관측’ 창의 소진 횟수는 관측 시간에 넣지 않는 이력(계정 확인 전 기록, 10분보다 긴 측정 간격)에서 센 것입니다.</p>':'');
+  +(rows.some(q=>!seen(q)&&q.exhausted)?'<p class="hint">‘미관측’ 창의 소진 횟수는 관측 시간에 넣지 않는 이력(계정 확인 전 기록, 10분보다 긴 측정 간격, 수집 실패가 기록된 구간)에서 센 것입니다.</p>':'');
 }
 // Claude Code by account (계정 미확인 included): the names set now, else the ones stored.
 const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'계정')} <span data-tip="${fmt(a.tokens)} 토큰">${compact(a.tokens)}</span>`).join(' · ');
