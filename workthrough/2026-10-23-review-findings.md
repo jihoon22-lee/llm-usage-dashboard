@@ -57,8 +57,22 @@
 - `uv tree --locked --invert --package certifi`로 개발용 pip-audit → requests의 전이 의존성임을 확인했다. uv 0.12.23으로 해당 패키지만 2026.10.19로 갱신하고 독립 환경을 다시 동기화했다. 런타임 의존성은 바뀌지 않는다.
 - 전체 잠금 의존성을 export한 뒤 `pip_audit --strict` 재검사에서 알려진 취약점 0건을 확인했다.
 
-## 릴리스 진행
+## 릴리스 결과
 
 - 수정 PR [#72](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/72)는 자동 리뷰 지적을 수정·검증하고 해결 처리한 뒤 merge commit `106f8a0`으로 main에 병합했다. [최종 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/39940738120)의 Python 3.11/3.14 × locked/minimum, JavaScript, 브라우저 20개, 패키지, 공개 파일, 보안·CodeQL과 필수 `ci-required`가 모두 성공했다.
-- 0.7.1의 pyproject·lock·변경 기록·설치·업데이트 안내를 준비했다. 런타임 의존성 버전은 유지하고 certifi 보안 수정은 개발 환경에만 해당한다.
-- 버전 PR·main CI·Release·게시 산출물 검증 및 정리가 남아 있다.
+- 0.7.1의 pyproject·lock·변경 기록·설치·업데이트 안내를 갱신했다. 런타임 의존성 버전은 유지하고 certifi 보안 수정은 개발 환경에만 해당한다.
+- 버전 PR [#73](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/73)은 [필수 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/39941155728) 성공 후 merge commit `59a2b35`로 병합했다. 해당 커밋의 [main CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/39941563674)도 모두 성공했다.
+- 버전·main 포함을 확인한 `v0.7.1` 태그를 push했다. [Release 워크플로](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/39941854937)의 전체 검사와 게시가 성공했다. [v0.7.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.7.1)은 2026-10-23 19:58:45 KST에 게시됐으며 Latest·비초안·불변 릴리스임을 확인했다.
+- 태그 대상은 `59a2b35ba0a4733c7f4fc870053289392220e97f`, 검증한 artifact ID는 `12495369268`이다. 게시된 wheel·소스 배포본·manifest·SHA256SUMS 네 파일을 다시 내려받고 `verify_manifest`의 커밋·태그·실행 ID·저장소와 `sha256sum --check`를 모두 통과했다. 릴리스 노트에 변경·업데이트 조건·CI 출처를 넣은 뒤에도 파일 ID·크기·해시가 유지됨을 확인했다.
+
+| 게시 파일 | SHA-256 |
+|---|---|
+| `llm_usage_dashboard-0.7.1-py3-none-any.whl` | `89e1a4664741707e8c9f3709973a8a51e4a106b88da591ab104ae25c7d00c5c9` |
+| `llm_usage_dashboard-0.7.1.tar.gz` | `5dd88b1831fc54225f9a33a44b5d24dd2f30c0c1e954da9acfb0f5ea82426717` |
+
+## 정리와 운영 범위
+
+- 수정·버전 브랜치는 main 포함을 확인한 뒤 로컬에서 삭제했고 원격에서도 제거됐음을 확인했다.
+- 임시 테스트 DB·스크린샷은 테스트 종료 시 정리됐다. 작업용 가상환경·빌드 메타데이터·Python 캐시, 의존성 감사 export, 게시 파일 검증 사본과 릴리스 노트 임시 파일을 제거했다. 작업 환경을 사용하는 프로세스는 없었다.
+- 최종 기록 PR의 브랜치와 worktree도 병합 후 main 포함·변경·미추적/ignored 파일·프로세스를 확인하고 제거하는 정리 범위에 포함한다.
+- 운영 서비스 배포, 운영 가상환경 동기화와 인증정보 변경은 수행하지 않았다. 실제 제공사 인증·수동 갱신 검증은 운영 배포 때 별도로 필요하다.
