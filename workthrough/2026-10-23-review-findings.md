@@ -50,6 +50,12 @@
 - 읽기 전용 원본 대조: Codex 완전 누적 1,474·카운터 초기화 58·부분 시작 12세션 불일치 0건. 같은 시각의 모호한 카운터 59세션은 판정 제외이며 0요청 기준선 110세션은 별도 표시다.
 - Antigravity 70개 DB의 4,716요청, Devin 43,041요청 대조에서 누락·수치 불일치·원본 오류 0건. Codex는 보존한 누계 관측 대조이며 Claude/OpenCode 전체 원본 대조는 아니다.
 
+### CI에서 발견한 개발 의존성 취약점
+
+- PR #72의 첫 보안 검사에서 `certifi 2026.7.22`의 `PYSEC-2026-4320`을 발견했다. [유지보수자 공지](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)와 [PyPA 수정 버전](https://github.com/pypa/advisory-database/blob/main/vulns/certifi/PYSEC-2026-4320.yaml)을 확인했다.
+- `uv tree --locked --invert --package certifi`로 개발용 pip-audit → requests의 전이 의존성임을 확인했다. uv 0.12.23으로 해당 패키지만 2026.10.19로 갱신하고 독립 환경을 다시 동기화했다. 런타임 의존성은 바뀌지 않는다.
+- 전체 잠금 의존성을 export한 뒤 `pip_audit --strict` 재검사에서 알려진 취약점 0건을 확인했다.
+
 ## 남은 작업
 
 - 버전 갱신, Push·PR·CI·병합·Release·산출물 검증 및 정리.
