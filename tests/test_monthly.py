@@ -82,6 +82,22 @@ class MonthlyTests(unittest.TestCase):
         with self.store.connect() as c:self.store.event(c,'oct2',NOW-60,'OpenAI','codex','gpt-test',dict(output=10))
         self.assertEqual(monthly.ensure_months(self.store,NOW+600,PRICING,PRICES,{}),[])
 
+    def test_format_rebuild_uses_current_account_counts_and_keeps_settled_prices(self):
+        from llm_usage.resources import observe_account
+        with patch.object(monthly,'MONTH_FORMAT',1):
+            monthly.ensure_months(self.store,NOW,PRICING,PRICES)
+        self.assertEqual(self.month('2026-09')['quota_use'][0]['exhausted'],1)
+        since=stamp('2026-09-20T02:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            observe_account(c,'codex','new',since)
+            for offset,remaining in ((0,100),(300,90)):
+                self.store.limit(c,'codex','codex · 10080분',remaining,NOW+86400,since+offset,'codex')
+        rebuilt=monthly.ensure_months(self.store,NOW+60,PRICING,{'codex':20})
+        self.assertIn('2026-07',rebuilt)  # the format change reaches older than two months
+        month=self.month('2026-09')
+        self.assertEqual(month['quota_use'][0]['exhausted'],0)
+        self.assertEqual(next(s['monthly_usd'] for s in month['subscriptions'] if s['route']=='codex'),200)
+
     def test_late_records_rebuild_the_last_two_months_with_the_first_prices(self):
         monthly.ensure_months(self.store,NOW,PRICING,PRICES,{})
         july=self.month('2026-07')

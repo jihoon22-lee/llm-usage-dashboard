@@ -12,7 +12,8 @@ KEEP=12
 # Bumped when what a report holds changes, so the stored weeks are rebuilt once (not
 # announced again). 2: the Codex account residual left the top models for its own line.
 # 3: Claude Code split by account, and the top projects.
-REPORT_FORMAT=3
+# 4: exhaustion counts use the same account boundary as observed quota time.
+REPORT_FORMAT=4
 # Readings up to 10 minutes past a week's or month's end close its last interval
 # (_points), and the quota history of a finished period does not change after them: it is
 # built once they are in, rather than frozen without them.
@@ -117,12 +118,15 @@ def exhaustions(c,start,end):
     """Quota exhaustions (remaining reaching 0 from above) observed in [start, end),
     per route and bucket, in each bucket's own source stream."""
     counts={}
+    since={r[0]:r[1] for r in c.execute('SELECT route,since FROM resource_accounts')}
     for route,bucket,source,_ in _streams(c,start,end):
-        previous=c.execute('SELECT remaining FROM limit_history WHERE route=? AND bucket=? AND source=? AND checked<? ORDER BY checked DESC LIMIT 1',
-                           (route,bucket,source,start)).fetchone()
+        boundary=since.get(route,0)
+        begin=max(start,boundary)
+        previous=c.execute('SELECT remaining FROM limit_history WHERE route=? AND bucket=? AND source=? AND checked>=? AND checked<? ORDER BY checked DESC LIMIT 1',
+                           (route,bucket,source,boundary,begin)).fetchone()
         before=previous[0] if previous else None
         for (remaining,) in c.execute('SELECT remaining FROM limit_history WHERE route=? AND bucket=? AND source=? AND checked>=? AND checked<? ORDER BY checked',
-                                      (route,bucket,source,start,end)):
+                                      (route,bucket,source,begin,end)):
             if remaining is None:continue
             if before is not None and remaining<=0<before:counts[(route,bucket)]=counts.get((route,bucket),0)+1
             before=remaining

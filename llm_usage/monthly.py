@@ -13,7 +13,8 @@ from .store import KST
 
 KEEP=12
 # Bumped when what a settlement holds changes, so the stored months are rebuilt once.
-MONTH_FORMAT=1
+# 2: account boundaries also constrain the month's quota exhaustion counts.
+MONTH_FORMAT=2
 
 
 def month_start(now):
