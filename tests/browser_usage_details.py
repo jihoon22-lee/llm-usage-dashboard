@@ -46,6 +46,9 @@ with tempfile.TemporaryDirectory(prefix='llm-details-browser-') as folder:
             page.wait_for_function("()=>lastUsage?.totals?.advisor_calls===1&&Array.isArray(lastUsage.sessions)")
             expect(page.locator('#cards')).to_contain_text('3회 요청 · Advisor 1회')
             assert page.evaluate('total(lastUsage.totals)')==542
+            project=page.evaluate("api('/api/project?name=project')")
+            assert project['sessions'][0]['requests']==3 and project['sessions'][0]['tokens']==542
+            assert sum(row['requests'] for row in project['models'])==3
             panel=page.locator('[data-panel="models"]')
             if panel.get_attribute('open') is None:panel.locator('summary').click()
             toggle=page.locator('#cols-toggle')

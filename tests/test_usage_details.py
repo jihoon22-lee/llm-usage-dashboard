@@ -7,7 +7,7 @@ import unittest
 
 from llm_usage.claude_usage import components
 from llm_usage.cloud import _ingest
-from llm_usage.collect import collect_file, model_provider
+from llm_usage.collect import collect_file, model_provider, prepare_normalization
 from llm_usage.insights import token_total
 from llm_usage.pricing import estimate
 from llm_usage.reconciliation import supplements
@@ -143,6 +143,32 @@ class DetailTests(unittest.TestCase):
             self.assertEqual((result['totals']['tokens'],result['totals']['requests'],result['totals']['advisor_calls']),(520,1,1))
             self.assertAlmostEqual(result['totals']['cost'],usage['cost']['period'])
             self.assertEqual(result['totals']['cache_creation_1h'],20)
+
+    def test_project_sessions_and_finished_quota_windows_count_api_requests_only(self):
+        self.collect(message())
+        project=self.store.project_detail('project',now=NOW,pricing=RATES)
+        self.assertEqual((project['sessions'][0]['requests'],project['sessions'][0]['tokens']),(1,520))
+        self.assertEqual(sum(row['requests'] for row in project['models']),1)
+        self.assertEqual(sum(row['requests'] for row in project['daily']),1)
+        with self.store.connect() as c:
+            c.execute('INSERT INTO limit_history VALUES (?,?,?,?,?,?)',('claude-code','window',NOW-10,50,NOW,'fixture'))
+            history=self.store.capacity_history(c,dict(route='claude-code',bucket='window',source='fixture',
+                                                      window_seconds=86400,checked=NOW),NOW)
+        self.assertEqual((history[0]['requests'],history[0]['tokens']),(1,520))
+
+    def test_legacy_normalization_retains_parent_account_and_copies_advisor_links(self):
+        value=message();value['message']['usage'].pop('iterations');self.collect(value)
+        with self.store.connect() as c:
+            self.store.save_state(c,'normalized_version',2)
+            c.execute("UPDATE events SET account='claude-code:fixture'")
+        (self.root/'one.jsonl').write_text(json.dumps(message())+'\n')
+        cfg={'sources':[dict(name='claude',path=str(self.root),kind='jsonl',route='claude-code')]}
+        self.assertTrue(prepare_normalization(self.store,cfg))
+        with self.store.connect() as c:
+            self.assertEqual({r[0] for r in c.execute('SELECT account FROM events')},{'claude-code:fixture'})
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM usage_links WHERE scope_id='claude:detail-session'").fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM usage_origins').fetchone()[0],2)
+        self.assertEqual(token_total(self.store.usage(period='all',now=NOW)['totals']),520)
 
 
 if __name__=='__main__':unittest.main()

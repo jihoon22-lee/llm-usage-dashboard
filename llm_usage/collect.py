@@ -436,15 +436,34 @@ def prepare_normalization(store,settings):
                 missing+=c.execute('''SELECT COUNT(*) FROM codex_points p
                   WHERE NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=p.id)
                   AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=p.id)''').fetchone()[0]
+                missing+=c.execute('''SELECT COUNT(*) FROM codex_responses p WHERE NOT EXISTS
+                  (SELECT 1 FROM staged.codex_responses n WHERE n.id=p.id AND n.session=p.session AND n.usage=p.usage
+                   AND (p.account IS NULL OR n.account IS NULL OR p.account=n.account))''').fetchone()[0]
                 if bad or missing:
                     store.source(c,'normalization','error','원본을 모두 복구할 수 없어 보정을 보류했습니다. 기존 통계를 유지합니다.')
                     return False
                 c.execute('DELETE FROM codex_points')
                 c.execute('INSERT INTO codex_points SELECT * FROM staged.codex_points')
+                c.execute('''UPDATE staged.codex_responses SET account=
+                  (SELECT p.account FROM main.codex_responses p WHERE p.id=staged.codex_responses.id) WHERE account IS NULL''')
+                c.execute('DELETE FROM codex_response_links')
+                c.execute('DELETE FROM codex_responses')
+                c.execute('INSERT INTO codex_responses SELECT * FROM staged.codex_responses')
+                c.execute('INSERT INTO codex_response_links SELECT * FROM staged.codex_response_links')
                 c.execute('INSERT OR IGNORE INTO inherited_points SELECT * FROM staged.inherited_points')
                 c.execute('DELETE FROM session_quality')
+                # Replaying files is not new account evidence. Keep proven parent
+                # ownership, including for newly recovered advisor children.
+                c.execute('''UPDATE staged.events SET account=COALESCE(
+                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.id),
+                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.parent_id)) WHERE account IS NULL''')
                 c.execute("DELETE FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
                 c.execute("INSERT INTO events SELECT * FROM staged.events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
+                # Native projection and cloud/telemetry deduplication require the
+                # same evidence that produced the copied events and checkpoints.
+                c.execute('INSERT OR IGNORE INTO usage_aliases SELECT * FROM staged.usage_aliases')
+                c.execute('INSERT OR IGNORE INTO usage_links SELECT * FROM staged.usage_links')
+                c.execute('INSERT OR IGNORE INTO usage_origins SELECT * FROM staged.usage_origins')
                 c.execute("DELETE FROM state WHERE key LIKE 'file:%' OR key LIKE 'permanent_errors:%'")
                 c.execute("DELETE FROM import_errors WHERE source LIKE 'file:%'")
                 c.execute("INSERT INTO state SELECT * FROM staged.state WHERE key LIKE 'file:%'")

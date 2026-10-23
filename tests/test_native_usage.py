@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from llm_usage.collect import collect_file, collect_local
+from llm_usage.collect import collect_file, collect_local, prepare_normalization
 from llm_usage.record_files import zstd
 from llm_usage.verify import _codex
 from llm_usage.store import Store
@@ -84,6 +84,22 @@ class NativeCodexTests(unittest.TestCase):
         self.store=Store(self.root/'usage.db')
         self.collect([point(usage(100,20))],append=True)
         self.assertEqual(self.totals(),(1,120))
+
+    def test_pre_v3_normalization_copies_native_evidence_before_accepting_checkpoints(self):
+        self.collect([meta(),model(),point(usage(100,20))])
+        with self.store.connect() as c:self.store.save_state(c,'normalized_version',2)
+        rows=[meta(),model(),response('one',usage(100,20)),point(usage(100,20))]
+        self.path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        cfg={'sources':[dict(name='native',path=str(self.root),kind='jsonl',route='codex')]}
+        self.assertTrue(prepare_normalization(self.store,cfg))
+        self.assertEqual(self.totals(),(1,120))
+        with self.store.connect() as c:
+            for table in ('codex_responses','codex_response_links','usage_aliases'):
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0],1,table)
+            self.assertEqual(self.store.state(c,'normalized_version'),4)
+        collect_local(self.store,cfg,include_derived=False)
+        self.assertTrue(prepare_normalization(self.store,cfg))
+        self.assertEqual(self.totals(),(1,120));self.assertTrue(self.store.rollup_matches())
 
     def test_rebuilding_native_events_preserves_the_historical_project_label(self):
         self.collect([meta(),model(),response('one',usage(100,20)),point(usage(100,20))])

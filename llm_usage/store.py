@@ -627,7 +627,7 @@ class Store:
             key=(row['route'],row['bucket'],int(resets//60),round(used,3))
             if key not in memo:
                 where,args=route_events(row['route'])
-                r=c.execute('SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COUNT(*) FROM events '
+                r=c.execute('SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COALESCE(SUM(requests),0) FROM events '
                             'WHERE '+where+' AND ts>=? AND ts<?',(*args,resets-span,resets)).fetchone()
                 memo[key]=dict(resets=resets,used_points=used,tokens=r[0],requests=r[1],tokens_per_point=r[0]/used if r[0] else None)
             if memo[key]['tokens_per_point']:result.append(memo[key])
@@ -855,7 +855,7 @@ class Store:
                 if part is not None:m['cost']=(m['cost'] or 0)+part
                 d=daily.setdefault(row['day'],dict(day=row['day'],tokens=0,requests=0));d['tokens']+=tokens;d['requests']+=row['requests']
             sessions=[dict(session=r[0],route=r[1],tokens=r[2],requests=r[3],first_ts=r[4],last_ts=r[5]) for r in c.execute(
-                'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),COUNT(*),MIN(ts),MAX(ts) FROM events'
+                'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),SUM(requests),MIN(ts),MAX(ts) FROM events'
                 +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',(project,start.timestamp()))]
         from .reconciliation import supplements
         with self.connect() as c:extra,conflicts=supplements(c)
