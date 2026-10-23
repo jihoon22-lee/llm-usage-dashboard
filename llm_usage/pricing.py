@@ -13,10 +13,10 @@ import re
 # unestimated by design, so they are not reported as missing a rate.
 NO_PUBLIC_PRICE=frozenset({'compactor','codex-auto-review','gpt-reserve','unknown'})
 BUILTIN={
-    'claude-opus-4':dict(input=15,cached=1.5,output=75,cache_write=18.75),
-    'claude-sonnet-4':dict(input=3,cached=0.3,output=15,cache_write=3.75),
-    'claude-haiku-4':dict(input=1,cached=0.1,output=5,cache_write=1.25),
-    'claude-opus-5-5':dict(input=4,cached=0.2,output=20,cache_write=5),
+    'claude-opus-4':dict(input=15,cached=1.5,output=75,cache_write=18.75,cache_write_1h=30),
+    'claude-sonnet-4':dict(input=3,cached=0.3,output=15,cache_write=3.75,cache_write_1h=6),
+    'claude-haiku-4':dict(input=1,cached=0.1,output=5,cache_write=1.25,cache_write_1h=2),
+    'claude-opus-5-5':dict(input=4,cached=0.2,output=20,cache_write=5,cache_write_1h=8),
     'gpt-5':dict(input=1.25,cached=0.125,output=10,cache_write=1.25),
     'gpt-5-mini':dict(input=0.25,cached=0.025,output=2,cache_write=0.25),
     'gpt-6-sol':dict(input=2,cached=0.2,output=10,cache_write=2.5),
@@ -210,7 +210,7 @@ def upcoming_for(model,pricing,today):
     return None
 
 
-def edited_rates(entry,rates,today):
+def edited_rates(entry,rates,today,remove=()):
     """Merge a web edit into the effective entry for one model.
 
     A dated series gains an entry taking effect today (KST); earlier days keep
@@ -218,14 +218,22 @@ def edited_rates(entry,rates,today):
     every day as before.
     """
     if isinstance(entry,list):
-        current={k:v for k,v in (_at(entry,today) or {}).items() if k!='since'}
+        current={k:v for k,v in (_at(entry,today) or {}).items() if k!='since' and k not in remove}
         change={**current,**rates,'since':today}
         return sorted([e for e in entry if e.get('since')!=today]+[change],key=lambda e:e.get('since',''))
-    return {**(entry if isinstance(entry,dict) else {}),**rates}
+    return {**{k:v for k,v in (entry if isinstance(entry,dict) else {}).items() if k not in remove},**rates}
 
 
 def estimate(values,rates):
+    default=rates.get('cache_write',rates['input'])
+    five=values.get('cache_creation_5m',0);hour=values.get('cache_creation_1h',0)
+    unspecified=max(0,values.get('cache_creation',0)-five-hour)
     return (values.get('uncached_input',0)*rates['input']
             +values.get('cached_input',0)*rates.get('cached',rates['input'])
             +values.get('output',0)*rates['output']
-            +values.get('cache_creation',0)*rates.get('cache_write',rates['input']))/1e6
+            +unspecified*default+five*rates.get('cache_write_5m',default)+hour*rates.get('cache_write_1h',default))/1e6
+
+
+def cache_estimated_tokens(values,rates):
+    """Claude writes priced by a fallback because their TTL or hourly rate is unknown."""
+    return values.get('cache_creation_unknown',0)+(values.get('cache_creation_1h',0) if 'cache_write_1h' not in rates else 0)

@@ -130,12 +130,14 @@ const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'�
 function thisWeekHtml(w){
  if(!w)return '';
  const p=w.prior,change=priorChange(p,'',p?.current_tokens??w.tokens,p?total(p):null,'지난주');
- return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${fmt(w.requests)}회${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
+ return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${callText(w)}${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
+  +(w.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(w))}${w.cache_estimated_tokens?` · 캐시 ${compact(w.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
   +(w.routes.length?`<p class="hint">서비스별: ${w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')}</p>`:'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
   +(w.accounts?`<p class="hint">Claude 계정별: ${accountParts(w.accounts)}</p>`:'')+'</div>';
 }
 function reportHtml(r){
- return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${fmt(r.totals.requests)}회 · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
+ return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${callText(r.totals)} · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
+  +(r.totals.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(r.totals))}${r.totals.cache_estimated_tokens?` · 캐시 ${compact(r.totals.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
   +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th class="col-req">요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td><span class="svc-full">${esc(routeNames[x.route]||x.route)}</span><span class="svc-short">${esc(shortService[x.route]||x.route)}</span></td><td data-tip="${fmt(x.tokens)}">${compact(x.tokens)}</td><td class="col-req">${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
   +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
   +(r.accounts?`<p class="hint">Claude 계정별: ${accountParts(r.accounts)}</p>`:'')
@@ -164,7 +166,8 @@ function monthHtml(m){
  }).join('');
  const codex=subs.some(s=>s.route==='codex')&&m.totals.residual_tokens;
  const from=m.quota_from!=null&&m.quota_from>monthStart(m)?` · ${esc(when(m.quota_from))}부터 보존된 이력`:'';
- return `<p class="report-head"><strong>${esc(m.month)}</strong> · ${esc(m.start.slice(5))} ~ ${esc(m.end.slice(5))} · ${compact(m.totals.tokens)} 토큰 · ${fmt(m.totals.requests)}회${m.totals.cost!=null?' · 공개 단가 환산 '+usd(m.totals.cost):''}${m.partial?` · 부분 월(기록 ${esc(m.records_from.slice(5))}부터)`:''}</p>`
+ return `<p class="report-head"><strong>${esc(m.month)}</strong> · ${esc(m.start.slice(5))} ~ ${esc(m.end.slice(5))} · ${compact(m.totals.tokens)} 토큰 · ${callText(m.totals)}${m.totals.cost!=null?' · 공개 단가 환산 '+usd(m.totals.cost):''}${m.partial?` · 부분 월(기록 ${esc(m.records_from.slice(5))}부터)`:''}</p>`
+  +(m.totals.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(m.totals))}${m.totals.cache_estimated_tokens?` · 캐시 ${compact(m.totals.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
   +(rows||'<p class="hint">이 달에 결산할 구독이 없습니다.</p>')
   +(codex?`<p class="hint">Codex 토큰에는 이 PC에 기록이 없는 ${esc(residualName)} <span data-tip="${fmt(m.totals.residual_tokens)} 토큰">${compact(m.totals.residual_tokens)}</span> 토큰이 들어 있고, 환산 가치는 요청 기록만 계산합니다.</p>`:'')
   +`<p class="hint">상위 모델: ${m.models.map(x=>`${esc(x.model)} ${compact(x.tokens)}`).join(' · ')||'—'}</p>`
@@ -192,9 +195,9 @@ function sessionDetailHtml(d){
  if(!d.models.length)return '<tr class="sess-detail-row"><td colspan="8"><p class="hint">이 세션의 기록이 더 이상 없습니다.</p></td></tr>';
  const peak=Math.max(1,...d.hours.map(h=>h.tokens));
  const bars=d.hours.map((h,i)=>{const bh=Math.max(1,h.tokens/peak*36);return `<rect x="${i*8}" y="${40-bh}" width="6" height="${bh}" data-tip="${esc(when(h.hour))} KST · ${fmt(h.tokens)} 토큰 · ${fmt(h.requests)}회"></rect>`;}).join('');
- return `<tr class="sess-detail-row"><td colspan="8"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project||'프로젝트 미분류')}</strong> · ${esc(KIND_NAMES[d.kind]||d.kind||'—')} · ${esc(when(d.first_ts))} ~ ${esc(when(d.last_ts))} KST · ${fmt(d.requests)}회 · 캐시 읽기 비중 ${percent(d.cache_share)} · 비용 추정 ${usd(d.cost)}</p>`
+ return `<tr class="sess-detail-row"><td colspan="8"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project||'프로젝트 미분류')}</strong> · ${esc(KIND_NAMES[d.kind]||d.kind||'—')} · ${esc(when(d.first_ts))} ~ ${esc(when(d.last_ts))} KST · ${callText({...d,...d.totals})} · 캐시 읽기 비중 ${percent(d.cache_share)} · 비용 추정 ${usd(d.cost)}</p>`
   +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.hours.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="시간대별 토큰 ${d.hours.length}시간">${bars}</svg>`
-  +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>합계 토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(m=>`<tr><td>${esc(m.model)}</td><td>${esc(shortService[m.route]||m.route)}</td><td>${fmt(m.requests)}</td><td>${fmt(total(m))}</td><td>${usd(m.cost)}</td></tr>`).join('')}</tbody></table></div></td></tr>`;
+  +`<p class="hint">${esc(usageDetailsText(d.totals||{}))}</p><table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>합계 토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(m=>`<tr><td>${esc(m.model)}</td><td>${esc(shortService[m.route]||m.route)}</td><td>${callText(m)}</td><td>${fmt(total(m))}</td><td>${usd(m.cost)}</td></tr>`).join('')}</tbody></table></div></td></tr>`;
 }
 $('sessions').addEventListener('click',async event=>{
  const button=event.target.closest('.sess-open');if(!button)return;

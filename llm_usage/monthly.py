@@ -14,7 +14,7 @@ from .store import KST
 KEEP=12
 # Bumped when what a settlement holds changes, so the stored months are rebuilt once.
 # 2: account boundaries also constrain the month's quota exhaustion counts.
-MONTH_FORMAT=2
+MONTH_FORMAT=3
 
 
 def month_start(now):
@@ -52,7 +52,7 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
     from .insights import token_total
     from .reconciliation import RESIDUAL,held
     from .claude_accounts import FAMILY,registry
-    from .reports import _accounts,_names,quota_covered_from,quota_rows,residual_share
+    from .reports import _accounts,_names,_totals,quota_covered_from,quota_rows,residual_share
     end=shift(start,1)
     day=lambda d:d.strftime('%Y-%m-%d')
     if stored is not None:prices,gone={s['route']:s['monthly_usd'] for s in stored.get('subscriptions') or []},set()
@@ -88,10 +88,9 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
     partial=first is not None and first>start.timestamp()
     return dict(month=start.strftime('%Y-%m'),start=day(start),end=day(end-timedelta(days=1)),built=now,
                 partial=partial,records_from=day(datetime.fromtimestamp(first,KST)) if partial else None,
-                totals=dict(tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'),
-                            residual_tokens=(usage.get('reconciliation') or {}).get('residual_tokens',0)),
+                totals=dict(**_totals(usage),residual_tokens=(usage.get('reconciliation') or {}).get('residual_tokens',0)),
                 subscriptions=subs,
-                models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost')) for r in top],
+                models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost'),advisor_calls=r.get('advisor_calls',0)) for r in top],
                 projects=[dict(project=p['project'],tokens=token_total(p),cost=p.get('cost')) for p in projects],
                 accounts=accounts,residual=residual,quota_use=use,quota_from=quota_from if use is not None else None)
 
@@ -103,12 +102,12 @@ def ensure_months(store,now,pricing=None,prices=None,ended=None):
     Returns the months (re)built; nothing is announced."""
     from .reconciliation import held,supplements
     from .reports import SETTLE_AFTER
-    from .store import identity,TOKENS
+    from .store import identity,METRICS
     current=month_start(now-SETTLE_AFTER);last=shift(current,-1)
     with held():
         with store.connect() as c:
             low,high=shift(last,-1).timestamp(),current.timestamp()
-            sums=','.join('SUM('+k+')' for k in TOKENS)
+            sums=','.join('SUM('+k+')' for k in METRICS)
             # Project and account too: attributing records later keeps every token sum.
             records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,project,account,SUM(requests),"+sums+
                                                  ' FROM usage_hourly WHERE ts>=? AND ts<? GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5',(low,high))]

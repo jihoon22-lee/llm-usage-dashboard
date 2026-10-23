@@ -1,7 +1,7 @@
 'use strict';
 // Settings: subscription prices, model rates, thresholds, external alerts and budgets.
-const RATE_KEYS=['input','cached','output','cache_write'];
-const RATE_LABELS={input:'입력',cached:'캐시 읽기',output:'출력',cache_write:'캐시 쓰기'};
+const RATE_KEYS=['input','cached','output','cache_write','cache_write_5m','cache_write_1h'];
+const RATE_LABELS={input:'입력',cached:'캐시 읽기',output:'출력',cache_write:'캐시 쓰기 기본',cache_write_5m:'캐시 쓰기 5분',cache_write_1h:'캐시 쓰기 1시간'};
 const THRESHOLD_FIELDS=[['stale_seconds','stale 판정','초 · 60~86400'],['retention_days','한도 이력 보존','일 · 1~365'],['low_percent','잔여 적음 배지','% · 1~50'],['quota_hide_days','관측 중단 접기','일 · 1~90'],
  ['unused_percent','초기화 전 남은 한도 알림 · 잔여','% 이상 · 10~100'],['unused_hours','초기화 전 남은 한도 알림 · 초기화까지','시간 이내 · 1~72']];
 function cfgMsg(id,text){const el=$(id);el.textContent=text;el.setAttribute('role','status');}
@@ -125,7 +125,7 @@ async function loadConfig(){
   +(routes.includes('codex')?`<div class="cfg-row cfg-sub"><span>Codex 계정 합계 차이 이름<small>계정 일별 합계 − 이 PC 기록 · 모델·프로젝트 보기의 별도 항목 · 비우면 ‘${esc(RESIDUAL_DEFAULT)}’</small></span>`
    +`<span class="cfg-sub-controls"><input type="text" maxlength="20" class="cfg-account-name" id="cfg-residual-label" value="${esc(cfg.residual_label??'')}" placeholder="${esc(RESIDUAL_DEFAULT)}" aria-label="Codex 계정 합계 차이 표시 이름"></span></div>`:'')
   +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="구독 설정 저장">저장</button>';
- $('cfg-pricing').innerHTML='<div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th><th>입력</th><th>캐시 읽기</th><th>출력</th><th>캐시 쓰기</th><th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
+ $('cfg-pricing').innerHTML='<p class="hint">보존 시간별 단가가 비어 있으면 기본 캐시 쓰기 단가를 사용합니다. 보존 시간이 없는 기록은 기본 단가로 추정합니다.</p><div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th>'+RATE_KEYS.map(k=>'<th>'+RATE_LABELS[k]+'</th>').join('')+'<th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
  renderNotifySettings(cfg.notify||{});renderBudgets(cfg.project_budgets||{});
  $('cfg-thresholds').innerHTML=THRESHOLD_FIELDS.map(([k,label,unit])=>`<label class="cfg-row"><span>${label}<small>${unit}</small></span><input type="number" step="1" id="cfg-${k}" value="${cfg.thresholds[k]}"></label>`).join('')+'<button type="button" class="mini-btn" id="cfg-thresholds-save" aria-label="임계값 저장">저장</button>';
@@ -156,7 +156,10 @@ function priceBody(model){
  const body={model};
  for(const k of RATE_KEYS){
   const input=$('cfg-pricing').querySelector(`input[data-model="${CSS.escape(model)}"][data-key="${k}"]`);
-  if(input.value==='')continue;
+  if(input.value===''){
+   if(k==='cache_write_5m'||k==='cache_write_1h')body[k]=null;
+   continue;
+  }
   const v=parseFloat(input.value);
   if(!Number.isFinite(v)||v<0)throw Error('단가를 확인하세요: '+model);
   body[k]=v;

@@ -12,8 +12,9 @@ const tableNumber=v=>compactNumbers()?`<span data-tip="${fmt(v)}">${compact(v)}<
 const tableCells=(row,denom)=>fields.map(k=>{
  const cls=k==='total'?'total-cell':DETAIL_COLS.has(k)?'col-detail':'';
  if(k!=='total'&&row.unclassified_tokens&&!row.recorded_tokens)return `<td class="${cls}"><span class="na-text">미제공</span></td>`;
- if(k==='reasoning'&&REASONING_UNREPORTED.has(row.route)&&!row.reasoning)return `<td class="${cls}"><span class="na-text" data-tip="이 경로는 추론 토큰을 따로 기록하지 않습니다">미제공</span></td>`;
- const cell=`<td${cls?` class="${cls}"`:''}>${tableNumber(k==='total'?modelTotal(row):row[k])}${k==='reasoning'&&row.output?`<small>${(row.reasoning/row.output*100).toFixed(0)}%</small>`:''}</td>`;
+ if(k==='reasoning'&&!reasoningKnown(row))return `<td class="${cls}"><span class="na-text" data-tip="이 범위에 추론 세부값을 받은 기록이 없습니다">미제공</span></td>`;
+ const note=k==='reasoning'?`수신 ${fmt(row.reasoning_observed)}건`:k==='cache_creation'?cacheTTLText(row):'';
+ const cell=`<td${cls?` class="${cls}"`:''}>${tableNumber(k==='total'?modelTotal(row):row[k])}${note?`<small>${esc(note)}</small>`:''}</td>`;
  return k==='total'?cell+`<td class="share-cell">${denom?percent(modelTotal(row)/denom*100):'—'}</td>`:cell;
 }).join('');
 let colors=[],mutedColor='#888';

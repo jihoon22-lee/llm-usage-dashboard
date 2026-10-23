@@ -226,7 +226,7 @@ with sync_playwright() as p:
     # Monthly settlements: the last month in full, each subscription against the price it
     # was settled with; the month-by-month table; older months folded.
     monthly = page.locator('#monthly')
-    expect(monthly).to_contain_text('2026-09 · 09-01 ~ 09-30 · 5.2B 토큰 · 40,000회 · 공개 단가 환산 $4,100')
+    expect(monthly).to_contain_text('2026-09 · 09-01 ~ 09-30 · 5.2B 토큰 · 40,000회 요청 · 공개 단가 환산 $4,100')
     expect(monthly.locator(':scope > .sub-row')).to_have_count(3)
     expect(monthly.locator(':scope > .sub-row .value-bar')).to_have_count(2)
     codex = monthly.locator(':scope > .sub-row', has_text='OpenAI / Codex')

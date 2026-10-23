@@ -8,7 +8,7 @@ import unittest
 
 from llm_usage.antigravity import collect_database,collect_databases,message,InvalidProtobuf
 from llm_usage.collect import model_provider
-from llm_usage.store import Store,stamp
+from llm_usage.store import Store,stamp,DETAILS
 
 
 def varint(value):
@@ -78,7 +78,7 @@ class AntigravityHistoryTests(unittest.TestCase):
         aggregate=usage(input=40,cached=290,output=60,creation=7,thinking=13)
         self.write([(0,metadata(first,self.when)),(1,metadata(second,self.when+120))],[(0,generator(aggregate))])
         self.collect();data=self.store.usage(period='all',group='provider')
-        self.assertEqual(data['totals'],dict(uncached_input=40,cached_input=290,output=60,cache_creation=7,reasoning=13,requests=2))
+        self.assertEqual(data['totals'],{**dict.fromkeys(DETAILS,0),**dict(uncached_input=40,cached_input=290,output=60,cache_creation=7,reasoning=13,requests=2,reasoning_observed=2)})
         self.assertEqual(data['labels'],['Google']);self.assertEqual(len(self.events()),2)
         today=self.store.usage(period='custom',start='2026-09-09',end='2026-09-09')
         self.assertEqual(today['totals']['output'],40)

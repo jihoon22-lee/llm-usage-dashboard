@@ -54,12 +54,23 @@ function costCsvFields(values){
 }
 const percent=v=>v==null?'—':Number(v).toFixed(1)+'%';
 const signed=v=>(v>0?'+':'')+fmt(v);
-// These sources do not report reasoning separately: their 0 means not provided.
-const REASONING_UNREPORTED=new Set(['claude-code','devin']);
+const reasoningKnown=v=>(v.reasoning_observed||0)>0||(v.reasoning||0)>0;
+const callText=v=>`${fmt(v.requests)}회 요청${v.advisor_calls?` · Advisor ${fmt(v.advisor_calls)}회`:''}`;
+const cacheTTLText=v=>[
+ (v.cache_ttl_observed||v.cache_creation_5m)?`5분 ${compact(v.cache_creation_5m)}`:'',
+ (v.cache_ttl_observed||v.cache_creation_1h)?`1시간 ${compact(v.cache_creation_1h)}`:'',
+ v.cache_creation_unknown?`보존 시간 미확인 ${compact(v.cache_creation_unknown)}`:''
+].filter(Boolean).join(' · ');
+const usageDetailsText=v=>`추론 ${reasoningKnown(v)?compact(v.reasoning):'미제공'} · 수신 ${fmt(v.reasoning_observed)}건`
+ +(cacheTTLText(v)?` · 캐시 생성 ${cacheTTLText(v)}`:'')+(v.cache_ttl_conflict?` · 캐시 관측 상충 ${fmt(v.cache_ttl_conflict)}건`:'');
+const DETAIL_CSV_HEADER=['Advisor 내부 호출','추론 수신 건수','캐시 생성 5분','캐시 생성 1시간','캐시 생성 TTL 미확인','캐시 TTL 수신 건수','캐시 TTL 관측 상충'];
+const detailCsvFields=v=>[v.advisor_calls||0,v.reasoning_observed||0,v.cache_ttl_observed?v.cache_creation_5m||0:'',
+ v.cache_ttl_observed?v.cache_creation_1h||0:'',v.cache_creation_unknown||0,v.cache_ttl_observed||0,v.cache_ttl_conflict||0];
 const KIND_NAMES={main:'메인',sub:'서브 에이전트',fork:'포크',unattributed:'미귀속'};
 // Period rows priced at one rate (USD per 1M tokens), cache reads at its cached rate.
-const estimateWith=(rows,rate)=>rows.reduce((s,r)=>s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)
- +(r.output||0)*rate.output+(r.cache_creation||0)*(rate.cache_write??rate.input))/1e6,0);
+const estimateWith=(rows,rate)=>rows.reduce((s,r)=>{const basic=rate.cache_write??rate.input,five=r.cache_creation_5m||0,hour=r.cache_creation_1h||0;
+ return s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)+(r.output||0)*rate.output
+ +Math.max(0,(r.cache_creation||0)-five-hour)*basic+five*(rate.cache_write_5m??basic)+hour*(rate.cache_write_1h??basic))/1e6;},0);
 const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
 // A period card's change against the window it is compared with (API `prior`, cut at the
 // same elapsed time): '직전 7일 같은 시점 대비 +12.3%', or a multiple from twice as much

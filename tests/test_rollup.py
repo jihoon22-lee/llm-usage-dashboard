@@ -4,7 +4,7 @@ import random
 import tempfile
 import unittest
 
-from llm_usage.store import TOKENS, Store, stamp
+from llm_usage.store import TOKENS, METRICS, Store, stamp
 
 NOW=stamp('2026-10-03T03:30:00Z')
 PRICING={'m1':dict(input=1,cached=0.1,output=10,cache_write=1),
@@ -14,7 +14,7 @@ PRICING={'m1':dict(input=1,cached=0.1,output=10,cache_write=1),
 def fresh_rollup(c):
     return sorted((tuple(r) for r in c.execute(
         'SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-        +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*),account FROM events GROUP BY 1,2,3,4,5,6,account')),key=repr)
+        +','.join(f'SUM({k})' for k in METRICS)+',SUM(requests),account FROM events GROUP BY 1,2,3,4,5,6,account')),key=repr)
 
 
 class RollupTests(unittest.TestCase):

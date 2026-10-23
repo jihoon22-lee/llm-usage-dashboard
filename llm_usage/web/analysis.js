@@ -24,20 +24,20 @@ function downloadCsv(kind,header,rows){
 $('csv-export').addEventListener('click',()=>{
  if(!lastUsage)return;
  const denom=modelTotal(lastUsage.totals);
- downloadCsv('models',['제작사','사용 서비스','모델','요청 수','평균 토큰/요청','비중 %','Uncached Input','Cached Input','Output','Total (incl. cache creation)','Cache creation','Reasoning','비용 추정 USD'],
-  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,residualText(r.model),r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,REASONING_UNREPORTED.has(r.route)&&!r.reasoning?'':r.reasoning||0,r.est_cost??'']));
+ downloadCsv('models',['제작사','사용 서비스','모델','요청 수','평균 토큰/요청','비중 %','Uncached Input','Cached Input','Output','Total (incl. cache creation)','Cache creation','Reasoning','비용 추정 USD',...DETAIL_CSV_HEADER],
+  sortedModelRows(lastUsage).map(r=>[r.provider,routeNames[r.route]||r.route,residualText(r.model),r.supplemental_tokens&&!r.requests?'':r.requests||0,r.requests?Math.round((r.recorded_tokens??modelTotal(r))/r.requests):'',denom?(modelTotal(r)/denom*100).toFixed(1):'',r.unclassified_tokens&&!r.recorded_tokens?'':r.uncached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.cached_input||0,r.unclassified_tokens&&!r.recorded_tokens?'':r.output||0,modelTotal(r),r.unclassified_tokens&&!r.recorded_tokens?'':r.cache_creation||0,reasoningKnown(r)?r.reasoning||0:'',r.est_cost??'',...detailCsvFields(r)]));
 });
 $('csv-sessions').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.sessions)return;
  const accounts=multiClaude();
- downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD',...(accounts?['Claude 계정']:[])],
+ downloadCsv('sessions',['서비스','세션','프로젝트','종류','첫 활동 KST','마지막 활동 KST','요청 수','토큰','비용 추정 USD',...(accounts?['Claude 계정']:[]),'Reasoning',...DETAIL_CSV_HEADER],
   lastUsage.sessions.map(s=>[routeNames[s.route]||s.route,s.session,s.project||'',KIND_NAMES[s.kind]||s.kind||'',when(s.first_ts),when(s.last_ts),s.requests||0,total(s),s.cost??'',
-   ...(accounts?[familyOf(s.route)==='claude-code'?(s.accounts||[]).map(a=>accountLabel(a)||a).join(' · '):'']:[])]));
+   ...(accounts?[familyOf(s.route)==='claude-code'?(s.accounts||[]).map(a=>accountLabel(a)||a).join(' · '):'']:[]),reasoningKnown(s)?s.reasoning||0:'',...detailCsvFields(s)]));
 });
 $('csv-projects').addEventListener('click',()=>{
  if(!lastUsage||!lastUsage.projects)return;
- downloadCsv('projects',['프로젝트','세션','요청 수','토큰','비용 추정 USD','최근 활동 KST'],
-  lastUsage.projects.map(p=>[residualText(p.project),p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts)]));
+ downloadCsv('projects',['프로젝트','세션','요청 수','토큰','비용 추정 USD','최근 활동 KST','Reasoning',...DETAIL_CSV_HEADER],
+  lastUsage.projects.map(p=>[residualText(p.project),p.sessions||'',p.requests||0,total(p),p.cost??'',when(p.last_ts),reasoningKnown(p)?p.reasoning||0:'',...detailCsvFields(p)]));
 });
 $('csv-series').addEventListener('click',event=>{
  event.preventDefault();event.stopPropagation();
@@ -231,14 +231,14 @@ function renderUsage(data){
  const tokens=total(data.totals);
  const cost=data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?data.cost:null;
  $('cards').innerHTML=card('전체 토큰',compact(tokens),fmt(tokens),
-   change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small>`)
+   change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small><small>${callText(data.totals)}</small>`)
   +(cost?card('비용 추정',usd(cost.period),usd(cost.period),
    change(cost.period,prior?prior.cost??(total(prior)?null:0):null)
-   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}</small>`):'')
+   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}${cost.cache_estimated_tokens?` · 캐시 ${compact(cost.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</small>`):'')
   +[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output']].map(([label,k])=>
    card(label,compact(data.totals[k]),fmt(data.totals[k]),`<small>선택 기간 · 전체 누계 ${compact(data.lifetime[k])}</small>`)).join('');
  renderModelTable(data);renderHeatmap(data.heatmap);
- $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note;
+ $('coverage').textContent=data.coverage;$('token-note').textContent=data.token_note+' '+usageDetailsText(data.totals);
  renderAccountGap(data.account_gap);
  renderReconciliation(data.reconciliation);
  renderSources(data.sources||[]);
@@ -336,8 +336,8 @@ function renderModelTable(data){
  $('model-search-count').textContent=modelFilter?`${shown.length}/${all.length}개`:'';
  const avg=r=>r.requests?(r.recorded_tokens??modelTotal(r))/r.requests:null;
  const residualRow=r=>`<tr class="residual-row"><td class="row-rank">—</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(residualName)}<small>계정 합계 − 이 PC 기록 · 모델 구분 없음</small></td><td class="col-detail">—</td><td>—</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`;
- $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')+residual.map(residualRow).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
- $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${fmt(row.requests)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
+ $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}${r.advisor_calls?`<small>Advisor ${fmt(r.advisor_calls)}회</small>`:''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')+residual.map(residualRow).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
+ $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${callText(row)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
  document.querySelectorAll('[data-sort]').forEach(button=>{
   const selected=button.dataset.sort===tableSort.key;
   button.closest('th').setAttribute('aria-sort',selected?(tableSort.direction==='desc'?'descending':'ascending'):'none');

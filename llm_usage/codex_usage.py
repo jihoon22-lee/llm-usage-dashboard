@@ -5,6 +5,7 @@ Only an explicitly linked legacy observation is replaced in the effective events
 """
 import json
 import re
+import sqlite3
 
 from .store import identity
 
@@ -24,6 +25,11 @@ def initialize(c):
         response_id TEXT NOT NULL, point_id TEXT NOT NULL, PRIMARY KEY(response_id,point_id));
       CREATE INDEX IF NOT EXISTS codex_response_link_point ON codex_response_links(point_id);
     ''')
+    for table in ('codex_points','codex_responses'):
+        if 'reasoning_observed' not in {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}:
+            try:c.execute(f'ALTER TABLE {table} ADD COLUMN reasoning_observed INTEGER NOT NULL DEFAULT 0')
+            except sqlite3.OperationalError as exc:
+                if 'duplicate column' not in str(exc):raise
 
 
 def counters(value):
@@ -42,6 +48,7 @@ def record(store,c,payload,ts,state,provider,route):
     if not isinstance(rid,str) or not re.fullmatch(r'[A-Za-z0-9._:/-]{1,200}',rid):
         raise ValueError('invalid response identity')
     nums=counters(payload.get('usage'))
+    observed=int(payload['usage'].get('reasoning_output_tokens') is not None)
     total=counters(payload.get('thread_token_usage') or payload.get('usage'))
     key=identity('codex-response',route,rid);session=identity(state['session'])
     old=c.execute('SELECT * FROM codex_responses WHERE id=?',(key,)).fetchone()
@@ -53,10 +60,12 @@ def record(store,c,payload,ts,state,provider,route):
         if old['model']=='unknown' and state.get('model'):
             c.execute('UPDATE codex_responses SET model=?,provider=? WHERE id=?',(state['model'],provider,key))
             state['_dirty']=session
+        if observed and not old['reasoning_observed']:
+            c.execute('UPDATE codex_responses SET reasoning_observed=1 WHERE id=?',(key,));state['_dirty']=session
     else:
-        c.execute('INSERT INTO codex_responses VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0)',
+        c.execute('INSERT INTO codex_responses VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?)',
                   (key,session,ts,provider,route,state.get('model') or 'unknown',json.dumps(nums),json.dumps(total),
-                   state['session'],state.get('project'),state.get('agent_kind'),state.get('account')))
+                   state['session'],state.get('project'),state.get('agent_kind'),state.get('account'),observed))
         state['_dirty']=session
     from .reconciliation import aliases
     aliases(c,route,key,rid)
@@ -118,7 +127,7 @@ def project(store,c,session,groups,projects):
         inp,cached,out,creation,reasoning=json.loads(row['usage'])
         store.event(c,row['id'],row['ts'],row['provider'],row['route'],row['model'],
                     dict(uncached_input=inp-cached-creation,cached_input=cached,output=out,
-                         cache_creation=creation,reasoning=reasoning),session=row['original_session'],
+                         cache_creation=creation,reasoning=reasoning,reasoning_observed=row['reasoning_observed']),session=row['original_session'],
                     project=project_name,agent_kind=row['agent_kind'],account=row['account'])
         c.execute('UPDATE codex_responses SET projected=1 WHERE id=?',(row['id'],))
 

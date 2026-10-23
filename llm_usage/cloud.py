@@ -19,7 +19,7 @@ from .store import identity, project_label, stamp
 API='https://api.anthropic.com'
 SESSIONS_BETA='ccr-byoc-2025-07-29'
 MAX_PAGES=100
-PARSER_VERSION=2
+PARSER_VERSION=3
 
 
 class IncompletePages(ValueError):
@@ -127,19 +127,13 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
                          account_key=account_key,checked=time.time())
             continue
         if d.get('type')!='assistant':continue
-        m=d.get('message') or {};u=m.get('usage');ts=stamp(d.get('timestamp'))
-        if not u or not m.get('id') or not ts:continue
         sid=d.get('sessionId') or d.get('session_id') or item['id']
-        eid=identity('claude-code',m['id'])
         # Same identity as a local transcript line, so a teleported copy merges.
-        store.event(c,eid,ts,model_provider(m.get('model','')),'claude-code',m.get('model'),dict(
-            uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
-            output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0),reasoning=u.get('reasoning_output_tokens',0)),
-            session=sid,project=project,agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main',
-            account=account)
-        link(c,'claude:'+sid,eid,'claude-cloud:'+endpoint,'provisional' if endpoint=='events' else 'final')
-        aliases(c,'claude-code',eid,m.get('id'),d.get('requestId'),d.get('request_id'),d.get('uuid'))
-        count+=1
+        from .claude_usage import ingest_message
+        count+=ingest_message(store,c,'claude-code',d,session=sid,project=project,account=account,
+                              source='claude-cloud:'+endpoint,finality='provisional' if endpoint=='events' else 'final')
+    from .claude_usage import summary
+    summary(store,c)
     return count
 
 

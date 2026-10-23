@@ -16,7 +16,7 @@ from .sqlite_ro import open_readonly
 from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
 
-PARSER_VERSION=2
+PARSER_VERSION=3
 
 
 def model_provider(model):
@@ -100,17 +100,8 @@ def parse_line(store,c,route,d,state):
             keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
             bind_pending(c,state,identity('codex-point',state['session'],ts,[max(0,int(usage.get(k) or 0)) for k in keys]))
     elif typ=='assistant':
-        m=d.get('message',{});u=m.get('usage');ts=stamp(d.get('timestamp'))
-        if not u or not m.get('id') or not ts:return
-        key=identity(route,m['id'])
-        store.event(c,key,ts,model_provider(m.get('model','')),route,m.get('model'),dict(
-            uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
-            output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0),reasoning=u.get('reasoning_output_tokens',0)),
-            session=d.get('sessionId'),project=project_label(d.get('cwd')),
-            agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main')
-        from .reconciliation import aliases,link
-        aliases(c,route,key,m.get('id'),d.get('requestId'),d.get('request_id'),d.get('uuid'))
-        if route=='claude-code' and d.get('sessionId'):link(c,'claude:'+d['sessionId'],key,'local')
+        from .claude_usage import ingest_message
+        ingest_message(store,c,route,d)
 
 
 # Bytes just before the read offset identify the consumed prefix (as a digest only).
@@ -206,6 +197,7 @@ def collect_opencode(store,path):
         with store.connect() as c:
             key='opencode:'+str(path)
             checkpoint=store.state(c,key,0)
+            if not store.state(c,key+':details-v1'):checkpoint=0
             newest=checkpoint
             cols={r[1] for r in src.execute('PRAGMA table_info(message)')}
             has_session='session_id' in cols and src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
@@ -221,7 +213,8 @@ def collect_opencode(store,path):
                         # OpenCode output excludes reasoning, input excludes cache read/write.
                         store.event(c,identity('opencode',mid),created/1000,model_provider(model),d.get('providerID','opencode'),model,
                                     dict(uncached_input=t.get('input',0),cached_input=cache.get('read',0),cache_creation=cache.get('write',0),
-                                         output=t.get('output',0)+t.get('reasoning',0),reasoning=t.get('reasoning',0)),
+                                         output=t.get('output',0)+t.get('reasoning',0),reasoning=t.get('reasoning',0),
+                                         reasoning_observed=int(t.get('reasoning') is not None)),
                                     session=sid,project=project_label(directory),
                                     agent_kind='sub' if parent_id else 'main')
                     c.execute('DELETE FROM import_errors WHERE source=? AND record=?',(key,mid))
@@ -238,6 +231,7 @@ def collect_opencode(store,path):
             for row in src.execute(sel+(' WHERE m.time_updated>=? ORDER BY m.time_updated' if has_session else ' WHERE time_updated>=? ORDER BY time_updated'),(checkpoint,)):
                 newest=max(newest,row[2]);ingest(row)
             store.save_state(c,key,newest)
+            store.save_state(c,key+':details-v1',True)
             return store.error_count(c,key)
     finally:src.close()
 
@@ -288,6 +282,8 @@ def collect_local(store,settings,*,include_derived=True):
     with store.connect() as c:
         from .codex_usage import summary
         summary(store,c)
+        from .claude_usage import summary as claude_summary
+        claude_summary(store,c)
         store.save_state(c,'last_local',time.time())
 
 
