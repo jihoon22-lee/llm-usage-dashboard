@@ -247,7 +247,7 @@ def series_label(e, group):
     return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
 
 
-def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start):
+def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None):
     """Overlay a COPY of the cached request-only response; never mutate the cache."""
     data=copy.deepcopy(body)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
@@ -261,6 +261,15 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     a,b=stamp(data['start']),stamp(data['end_exclusive'])
     conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
     if not entries and not conflicts:return data
+    # Recover only supplemented candidates omitted from the cached top 100. They
+    # are already counted in sessions_total and need their real request metadata.
+    # Keeping all local sessions in every cached response would make large ranges costly.
+    if data.get('sessions_total',0)>len(data.get('sessions') or []):
+        from .store import Store
+        present={s['session'] for s in data['sessions']}
+        missing=sorted({e['session'] for e in entries if e['session'] and a<=e['start'] and e['end']<=b}-present)
+        for offset in range(0,len(missing),500):
+            data['sessions'].extend(Store.session_rows(c,a,b,pricing,scope,missing[offset:offset+500]).values())
     accepted=[];unallocated=[];overlapping=[]
     for e in entries:
         if e['end']<=a or e['start']>=b:continue
@@ -312,7 +321,10 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                         'requests':0,'sessions':0,'cost':None,'first_ts':e['start'],'last_ts':e['end'],**dict.fromkeys(TOKENS,0)}
                 data[collection].append(target)
                 if collection=='sessions':data['sessions_total']=data.get('sessions_total',0)+1
-            if target is not None:add(target,e)
+            if target is not None:
+                add(target,e)
+                if collection=='sessions' and e['route']=='claude-code':
+                    target['accounts']=sorted(set(target.get('accounts') or [])|{e.get('account') or 'claude-code'})
         for kind in ('route','provider','model','project','account'):
             # The residual is not an unknown model or an unassigned project to filter by.
             if residual(e) and kind in ('model','project'):continue
@@ -335,6 +347,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         # otherwise its share is missing there, not zero.
         if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
     if data.get('claude_split'):data['claude_split'].sort(key=lambda x:(-x['tokens'],x['account']))
+    if 'sessions' in data:data['sessions']=sorted(data['sessions'],key=lambda s:(-total(s),s['session']))[:100]
     for e in entries:add(data['lifetime'],e)
     for e in entries:
         begin=datetime.fromtimestamp(e['start'],KST)
