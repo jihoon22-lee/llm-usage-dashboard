@@ -402,6 +402,94 @@ class AccountTests(unittest.TestCase):
         with self.store.connect() as c:
             self.assertIsNone(c.execute("SELECT 1 FROM sources WHERE name='claude-accounts'").fetchone())
 
+    def unbound_folder(self, sessions):
+        """Only the separate config home is identified; its transcripts are not shared."""
+        (self.h.home / '.claude.json').write_text('{}')
+        (self.h.managed / 'projects').unlink()
+        folder = self.h.managed / 'projects'
+        folder.mkdir()
+        for session in sessions:
+            self.h.transcript(session, [NOW - 100]).rename(folder / (session + '.jsonl'))
+        self.cfg['sources'] = [dict(name='separate Claude home', route=FAMILY, kind='jsonl', path=str(folder))]
+        return folder
+
+    def test_separate_home_without_a_primary_account_keeps_its_registered_route(self):
+        self.unbound_folder(['separate'])
+        contexts = self.accounts_by_route()
+        self.assertIn(R_SECOND, contexts)
+        self.collect()
+        self.assertEqual(self.accounts_of('separate'), [R_SECOND])
+        usage = self.store.usage(period='7d', now=NOW, subscriptions={R_SECOND: 20},
+                                 pricing={'claude-test': dict(input=1, output=2)})
+        sub = next(s for s in usage['subscriptions'] if s['route'] == R_SECOND)
+        self.assertEqual(sub['period_tokens'], 15)
+        self.assertAlmostEqual(sub['period_cost'], .00002)
+        self.assertEqual([(r['account'], r['tokens']) for r in usage['claude_split']], [(R_SECOND, 15)])
+        from llm_usage.webapp import create_app
+        app = create_app(dict(
+            database=self.store.path, origin='https://dashboard.test', secret_key='fixture', allowed_logins=['fixture']))
+        from types import SimpleNamespace
+        import socket
+        with app.test_client() as client:
+            cfg = client.get('/api/config', base_url='https://dashboard.test', headers={'Tailscale-User-Login': 'fixture'},
+                             environ_overrides={'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)}).json
+        self.assertIn(R_SECOND, cfg['subscription_routes'])
+
+    def test_unbound_folder_repair_keeps_cloud_and_confirmed_accounts_and_is_idempotent(self):
+        self.unbound_folder(['fallback', 'cloud', 'confirmed'])
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        from llm_usage.reconciliation import link
+        with self.store.connect() as c:
+            c.execute("UPDATE events SET account=?", (FAMILY,))
+            c.execute("UPDATE events SET account=? WHERE session='confirmed'", (R_SECOND,))
+            cloud_id = c.execute("SELECT id FROM events WHERE session='cloud'").fetchone()[0]
+            link(c, 'claude:cloud', cloud_id, 'claude-cloud:teleport-events')
+            self.store.save_state(c, 'claude_accounts:cloud-v1', True)
+            before = tuple(c.execute('SELECT COUNT(*),SUM(uncached_input),SUM(output) FROM events').fetchone())
+        self.assertEqual(refresh(self.store, self.cfg), 1)
+        self.assertEqual(self.accounts_of('fallback'), [R_SECOND])
+        self.assertEqual(self.accounts_of('cloud'), [FAMILY])
+        self.assertEqual(self.accounts_of('confirmed'), [R_SECOND])
+        self.assertEqual(refresh(Store(self.store.path), self.cfg), 0)
+        with self.store.connect() as c:
+            self.assertEqual(tuple(c.execute('SELECT COUNT(*),SUM(uncached_input),SUM(output) FROM events').fetchone()), before)
+        self.assertTrue(self.store.rollup_matches())
+
+    def test_bound_primary_does_not_guess_an_old_fallbacks_account(self):
+        self.unbound_folder(['old'])
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        with self.store.connect() as c:
+            c.execute('UPDATE events SET account=?', (FAMILY,))
+            self.store.save_state(c, 'claude_primary_account', K_MAIN)
+            self.store.save_state(c, 'claude_accounts:cloud-v1', True)
+        self.assertEqual(refresh(self.store, self.cfg), 0)
+        self.assertEqual(self.accounts_of('old'), [FAMILY])
+
+    def test_unbound_repair_retries_after_a_new_primary_was_bound(self):
+        self.unbound_folder(['retry'])
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        with self.store.connect() as c:
+            c.execute('UPDATE events SET account=?', (FAMILY,))
+            self.store.save_state(c, 'claude_accounts:cloud-v1', True)
+        Homes.write_account(self.h.home / '.claude.json', MAIN)
+        with patch('llm_usage.claude_attribution.repair_unbound_folders', side_effect=RuntimeError('fixture failure')):
+            self.assertEqual(refresh(self.store, self.cfg), 0)
+        self.assertEqual(self.accounts_of('retry'), [FAMILY])
+        self.assertEqual(refresh(Store(self.store.path), self.cfg), 1)
+        self.assertEqual(self.accounts_of('retry'), [R_SECOND])
+
+    def test_unbound_repair_does_not_choose_between_copies_in_different_roots(self):
+        folder = self.unbound_folder(['copied'])
+        import shutil
+        shutil.copy2(folder / 'copied.jsonl', self.h.project / 'copied.jsonl')
+        self.cfg['sources'].append(dict(name='another root', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects')))
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        with self.store.connect() as c:
+            c.execute('UPDATE events SET account=?', (FAMILY,))
+            self.store.save_state(c, 'claude_accounts:cloud-v1', True)
+        self.assertEqual(refresh(self.store, self.cfg), 0)
+        self.assertEqual(self.accounts_of('copied'), [FAMILY])
+
     # --- status lines, usage and the hook installer ---------------------------------------------
 
     def status_lines(self):

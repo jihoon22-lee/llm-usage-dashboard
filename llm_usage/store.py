@@ -1112,10 +1112,12 @@ class Store:
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
         subs=[]
         claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
+        # A sole identified non-default home still has its own subscription route.
+        separate_claude=any(route!='claude-code' for route in claude_routes)
         # Several Claude accounts: the Claude Code total split by account, 계정 미확인
         # included, so the parts add up to the service (reconciliation adds supplements).
         claude_split=None
-        if len(claude_routes)>1 and period!='1h':
+        if separate_claude and period!='1h':
             split={}
             for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
                                ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
@@ -1125,7 +1127,7 @@ class Store:
                 rate=rate_for(r['model'],pricing,r['day']) if pricing else None
                 if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
             claude_split=sorted(split.values(),key=lambda e:(-e['tokens'],e['account']))
-        if (subscriptions or len(claude_routes)>1) and period!='1h':
+        if (subscriptions or separate_claude) and period!='1h':
             by_route={};tokens_by_route={}
             for row in rows:
                 tokens_by_route[row['route']]=tokens_by_route.get(row['route'],0)+token_total(row)
@@ -1142,7 +1144,7 @@ class Store:
             days=max(1,(min(b,now)-a).total_seconds()/86400)
             prices=dict(subscriptions or {})
             # Several Claude accounts: list each one, priced or not, so a missing price is visible.
-            if len(claude_routes)>1:
+            if separate_claude:
                 for route in claude_routes:
                     if route not in ended:prices.setdefault(route,None)
             for route,monthly in prices.items():

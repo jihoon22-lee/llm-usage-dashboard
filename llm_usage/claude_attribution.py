@@ -213,14 +213,14 @@ def policies(store, settings, homes, primary):
             # A home without a readable identity is a separate (unknown) owner.
             keys = {h['key'] for h in owners}
             native = next((h for h in owners if not (Path(h['path'])/'projects').is_symlink()), owners[0] if owners else None)
-            native_route = route_for(native['key'], primary) if native and native['key'] and primary else FAMILY
+            native_route = route_for(native['key'], primary) if native and native['key'] else FAMILY
             state_key = 'claude_cutover:' + str(root)
             stored = store.state(c, state_key)
             # Once shared, a folder stays shared: later requests without evidence
             # may still come from the account that joined it.
             if len(keys) <= 1 and not _finite(stored):
                 only = next(iter(keys), None)
-                result[str(root)] = ('single', route_for(only, primary) if only and primary else FAMILY)
+                result[str(root)] = ('single', route_for(only, primary) if only else FAMILY)
                 continue
             cutover = min([v for v in (stored, *joined) if _finite(v)] or [time.time()])
             if stored != cutover:
@@ -229,8 +229,11 @@ def policies(store, settings, homes, primary):
     return result
 
 
-def session_roots(c, roots):
-    """Session ID -> transcript root, from the collector's own file checkpoints."""
+def session_roots(c, roots, *, unambiguous=False):
+    """Session ID -> transcript root, from the collector's own file checkpoints.
+
+    A repair asks for unambiguous roots: copies in different folders prove no owner.
+    """
     found = {}
     for root in roots:
         prefix = 'file:' + root + '/'
@@ -238,8 +241,35 @@ def session_roots(c, roots):
             path = Path(key[5:])
             session = path.parent.parent.name if path.parent.name == 'subagents' else path.stem
             if SESSION.match(session):
-                found.setdefault(session, root)
+                if session not in found:
+                    found[session] = root
+                elif unambiguous and found[session] is not None and os.path.realpath(found[session]) != os.path.realpath(root):
+                    found[session] = None
     return found
+
+
+def repair_unbound_folders(c, rules, primary):
+    """Repair the old default-route fallback only before any primary account was bound.
+
+    The known owner must name one retained transcript root. Cloud assignments and
+    already resolved non-default accounts are not candidates; retained turn evidence
+    still takes precedence over a folder. No token or request identity is rewritten.
+    """
+    updates = []
+    for session, root in session_roots(c, list(rules), unambiguous=True).items():
+        policy = rules.get(root)
+        if not policy or policy[1] in (FAMILY, UNKNOWN):
+            continue
+        evidence = [(ts, route_for(key, primary)) for ts, key in c.execute(
+            'SELECT ts,account_key FROM claude_evidence WHERE session=? ORDER BY ts', (session,))]
+        for event_id, ts in c.execute("""SELECT id,ts FROM events WHERE route='claude-code' AND session=? AND account=?
+                AND NOT EXISTS (SELECT 1 FROM usage_origins o WHERE o.event_id=events.id AND o.source LIKE 'claude-cloud:%')""",
+                (session, FAMILY)):
+            target = account_for(ts, evidence, policy, FAMILY)
+            if target != FAMILY:
+                updates.append((target, event_id))
+    c.executemany('UPDATE events SET account=? WHERE id=?', updates)
+    return len(updates)
 
 
 def resolve(store, settings, limit=None):
@@ -253,10 +283,19 @@ def _resolve(store, settings, limit=None):
         known = observed_homes(store, c)
     homes = [inspect(h) for h in home_candidates(settings, known)]
     with store.connect() as c:
+        unbound = False
+        if not store.state(c, 'claude_accounts:folder-routes-v1'):
+            unbound = store.state(c, 'claude_accounts:folder-repair-unbound')
+            if unbound is None:
+                unbound = not store.state(c, 'claude_primary_account')
+                # Binding a newly signed-in default home commits before resolution.
+                # Keep the pre-upgrade condition if a later repair transaction fails.
+                store.save_state(c, 'claude_accounts:folder-repair-unbound', unbound)
         primary = bind_primary(store, c, homes)
     accounts = len({h['key'] for h in homes if h['key']})
     with store.connect() as c:
-        idle = (store.state(c, 'claude_accounts:cloud-v1') and not c.execute('SELECT 1 FROM claude_dirty LIMIT 1').fetchone()
+        idle = (store.state(c, 'claude_accounts:cloud-v1') and store.state(c, 'claude_accounts:folder-routes-v1')
+                and not c.execute('SELECT 1 FROM claude_dirty LIMIT 1').fetchone()
                 and not c.execute("SELECT 1 FROM events WHERE route='claude-code' AND account IS NULL LIMIT 1").fetchone())
     if idle:
         return 0, accounts  # nothing pending: no write transaction every few seconds
@@ -271,6 +310,10 @@ def _resolve(store, settings, limit=None):
             c.execute("""UPDATE events SET account=? WHERE route='claude-code' AND account IS NULL AND id IN
                          (SELECT event_id FROM usage_origins WHERE source LIKE 'claude-cloud:%')""", (FAMILY,))
             store.save_state(c, 'claude_accounts:cloud-v1', True)
+        if not store.state(c, 'claude_accounts:folder-routes-v1'):
+            changed = repair_unbound_folders(c, rules, primary) if unbound else 0
+            store.save_state(c, 'claude_accounts:folder-routes-v1', dict(checked=time.time(), unbound=unbound, repaired=changed))
+            c.execute("DELETE FROM state WHERE key='claude_accounts:folder-repair-unbound'")
         roots = session_roots(c, list(rules))
         work = {r[0]: r[1] for r in c.execute('SELECT session,since FROM claude_dirty')}
         for (session,) in c.execute("SELECT DISTINCT session FROM events WHERE route='claude-code' AND account IS NULL"):

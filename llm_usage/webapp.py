@@ -233,7 +233,7 @@ def create_app(config=None):
             routes.update(r[0] for r in c.execute('SELECT DISTINCT route FROM events'))
             claude=describe(c,config.get('claude_account_names'),ended_routes(config))
             # Several Claude accounts: each is its own subscription row.
-            if len(claude)>1:routes.update(a['route'] for a in claude)
+            routes.update(a['route'] for a in claude)
         upcoming={m:e for m in {*models,*pricing} if (e:=upcoming_for(m,pricing,today))}
         from .notify import masked
         since=time.time()-30*86400
