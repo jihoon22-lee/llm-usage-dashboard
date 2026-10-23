@@ -82,7 +82,7 @@ function priceRowHtml(cfg,m){
   const rate=origin==='hidden'?{}:(currentRate(m)||resolved[m]||{});
   const up=(cfg.upcoming||{})[m];
   let state='',buttons;
-  if(origin==='hidden'){state='<small class="warn-text">숨김</small>';buttons=`<button type="button" class="mini-btn" data-price-del="${esc(m)}" aria-label="${esc(m)} 단가 숨김 해제">숨김 해제</button>`;}
+  if(origin==='hidden'){state='<small class="warn-text">숨김</small>';buttons=`<button type="button" class="mini-btn" data-price-del="${esc(m)}" data-price-unhide aria-label="${esc(m)} 단가 숨김 해제">숨김 해제</button>`;}
   else{
    state=(origin==='user'?'<small>사용자</small>':origin==='builtin'?'<small>내장</small>':resolved[m]?'<small>상위 단가 상속</small>':'<small class="warn-text">미설정</small>')
     +(Array.isArray(entry)?'<small>날짜별 이력</small>':'')
@@ -185,7 +185,7 @@ async function savePrice(model,body){
   await settingsApi('/api/config/pricing',body);
   const cfg=await api('/api/config');
   if(epoch!==settingsEpoch||!settingsOnline)return false;
-  priceMessages.set(model,body.delete?'복원했습니다.':body.hide?'숨겼습니다.':'저장했습니다.');
+  priceMessages.set(model,body.delete||body.unhide?'복원했습니다.':body.hide?'숨겼습니다.':'저장했습니다.');
   if(priceModels(cfg).includes(model))row.outerHTML=priceRowHtml(cfg,model);else row.remove();
   applyPriceFilter();return true;
  }catch(error){
@@ -221,7 +221,7 @@ $('cfg-pricing').addEventListener('click',async e=>{
  if(!save&&!del&&!hide)return;
  const model=save||del||hide;
  if(hide&&!confirm(`"${model}" 단가를 숨길까요? 비용이 미산정으로 표시되고 설정에서 되돌릴 수 있습니다.`))return;
- const body=del?{model,delete:true}:hide?{model,hide:true}:undefined;
+ const body=del?{model,...(e.target.hasAttribute('data-price-unhide')?{unhide:true}:{delete:true})}:hide?{model,hide:true}:undefined;
  const ok=await savePrice(model,body);
  if(!settingsOnline)return;
  cfgMsg('cfg-pricing-msg',ok?'저장했습니다: '+model:'저장 실패: '+model+' · 해당 행의 안내를 확인하세요.');

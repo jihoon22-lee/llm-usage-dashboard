@@ -77,7 +77,8 @@ def pricing_layers(settings):
 
 def load_pricing(settings):
     """The merged rate table. The same object is returned until a layer changes, so
-    callers must treat it as read-only."""
+    callers must treat it as read-only. None entries explicitly block inheritance;
+    they also participate in usage caches and saved-report revision checks."""
     key=(json.dumps(settings.get('pricing') or {},sort_keys=True),
          tuple((str(p),_mtime(p)) for p in _layer_paths(settings)))
     cached=_table_cache.get('entry')
@@ -94,8 +95,8 @@ def _merge(settings):
             if rates=='builtin':
                 # Restore marker: drop lower-layer overrides, keep the builtin.
                 if model in BUILTIN:table[model]=BUILTIN[model]
-                else:table.pop(model,None)
-            elif rates is None:table.pop(model,None)  # deletion tombstone
+                else:table[model]=None
+            elif rates is None:table[model]=None  # retain the barrier to parent fallback
             elif _valid(rates):table[model]=rates
             elif isinstance(rates,list):
                 seq=sorted((e for e in rates if _valid(e)),key=lambda e:e.get('since',''))
@@ -192,6 +193,12 @@ def _at(entry,day):
 def rate_for(model,pricing,day=None):
     """day: 'YYYY-MM-DD' (KST). None resolves to the latest known rate."""
     return _at(_entry_for(model,pricing),day)
+
+
+def hidden(model,pricing):
+    """The exact model or the parent it would inherit was deliberately suppressed."""
+    key=entry_key(model,pricing)
+    return key is not None and pricing[key] is None
 
 
 def upcoming_for(model,pricing,today):

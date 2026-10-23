@@ -850,6 +850,35 @@ class WebTests(unittest.TestCase):
             self.assertEqual(post({'model':'m','input':1,'output':2}).status_code,200)
         self.assertEqual(held,[True])
 
+    def test_hidden_inherited_price_is_unpriced_in_every_api_and_restores(self):
+        model='gpt-5.6-sol (high)'
+        with self.store.connect() as c:
+            self.store.event(c,'hidden-price',time.time()-60,'OpenAI','codex',model,
+                             dict(uncached_input=1_000_000),session='hidden-session',project='hidden-project')
+        token=self.get('/api/bootstrap').json['csrf']
+        headers={**self.headers,'Origin':self.origin,'X-CSRF-Token':token}
+        post=lambda body:self.client.post('/api/config/pricing',json=body,base_url=self.origin,headers=headers,environ_overrides=self.env)
+        original=self.get('/api/usage?period=all').json['cost']['period']
+        self.assertEqual(post({'model':model,'input':8}).status_code,200)
+        self.assertEqual(self.get('/api/usage?period=all').json['cost']['period'],8)
+        self.assertEqual(post({'model':model,'hide':True}).status_code,200)
+        cfg=self.get('/api/config').json
+        self.assertEqual(cfg['pricing_origins'][model],'hidden')
+        self.assertNotIn(model,cfg['pricing'])
+        self.assertIsNone(next(m['rate'] for m in cfg['models'] if m['model']==model))
+        usage=self.get('/api/usage?period=all').json
+        self.assertIsNone(usage['cost']['period'])
+        self.assertNotIn(model,usage['unpriced_models'])
+        self.assertIsNone(self.get('/api/session?id=hidden-session').json['cost'])
+        self.assertIsNone(self.get('/api/project?name=hidden-project').json['models'][0]['cost'])
+        for _ in range(2):
+            self.assertEqual(post({'model':model,'unhide':True}).status_code,200)
+            self.assertEqual(self.get('/api/usage?period=all').json['cost']['period'],original)
+        self.assertEqual(post({'model':'gpt-5.6-sol','hide':True}).status_code,200)
+        inherited=self.get('/api/usage?period=all').json
+        self.assertIsNone(inherited['cost']['period'])
+        self.assertNotIn(model,inherited['unpriced_models'])
+
     def test_pricing_delete_restores_builtin_and_hide_suppresses(self):
         config_dir=self.root/'conf';config_dir.mkdir()
         data=self.root/'data';data.mkdir()
@@ -886,6 +915,9 @@ class WebTests(unittest.TestCase):
         cfg=get('/api/config').json
         self.assertNotIn('legacy-model',cfg['pricing'])
         self.assertEqual(cfg['pricing_origins']['legacy-model'],'hidden')
+        for _ in range(2):
+            self.assertEqual(post({'model':'legacy-model','unhide':True}).status_code,200)
+            self.assertEqual(get('/api/config').json['pricing']['legacy-model'],{'input':1,'output':2})
         # A dated builtin keeps its history after a user edit and restores it.
         self.assertEqual(post({'model':'gpt-5.6-sol','input':4,'cached':0.4,'output':20,'cache_write':5}).status_code,200)
         saved=json.loads((data/'pricing.json').read_text())
@@ -894,5 +926,20 @@ class WebTests(unittest.TestCase):
         cfg=get('/api/config').json
         self.assertIsInstance(cfg['pricing']['gpt-5.6-sol'],list)
         self.assertEqual(cfg['pricing_origins']['gpt-5.6-sol'],'builtin')
+
+    def test_pricing_delete_does_not_treat_the_writable_file_as_a_lower_layer(self):
+        model='review-model (high)'
+        with self.store.connect() as c:
+            self.store.event(c,'same-path',time.time()-60,'OpenAI','codex',model,dict(uncached_input=1_000_000))
+        self.app=create_app(dict(database=self.store.path,origin=self.origin,secret_key='s',allowed_logins=['owner'],
+                                config_file=str(self.root/'config.json'),pricing={'review-model':dict(input=1,output=2)}))
+        self.client=self.app.test_client()
+        headers={**self.headers,'Origin':self.origin,'X-CSRF-Token':self.get('/api/bootstrap').json['csrf']}
+        post=lambda body:self.client.post('/api/config/pricing',json=body,base_url=self.origin,headers=headers,environ_overrides=self.env)
+        self.assertEqual(post({'model':model,'input':8}).status_code,200)
+        self.assertEqual(self.get('/api/usage?period=all').json['cost']['period'],8)
+        self.assertEqual(post({'model':model,'delete':True}).status_code,200)
+        self.assertEqual(self.get('/api/usage?period=all').json['cost']['period'],1)
+        self.assertNotIn(model,json.loads((self.root/'pricing.json').read_text()))
 
 if __name__=='__main__':unittest.main()
