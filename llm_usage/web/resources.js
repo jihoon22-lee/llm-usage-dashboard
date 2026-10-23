@@ -66,7 +66,7 @@ function resourceCard(row,opened){
  return `<article class="resource-card ${esc(row.status)}" data-resource-id="${esc(row.id)}"><div class="resource-main"><h3><span class="resource-service">${esc(service)}</span> ${esc(name)}${badge}</h3><strong class="resource-value"${exact!=null&&exact!==amountText(row.amount,row.unit)?` data-tip="정확한 값 ${esc(exact)}"`:''}>${esc(resourceValue(row))}${current?'':'<small>이전 확인값</small>'}</strong></div>${expiry}${scopeText||restriction?`<p class="resource-scope">${esc(scopeText)}${row.model?' · '+esc(row.model):''}${restriction?`<span class="resource-condition">${scopeText?' · ':''}${esc(restriction)}</span>`:''}</p>`:''}${duplicate}<details data-resource-detail="${esc(row.id)}"${opened.has(row.id)?' open':''}><summary>상세 <small class="resource-checked">${esc(checkedText)}</small></summary>${conditions.length?`<p>${conditions.map(esc).join(' · ')}</p>`:''}${expiryNote?`<p>${esc(expiryNote)}</p>`:''}${pastGrants}${row.reported_total!=null&&row.reported_total!==row.amount?`<p>제공사 전체 잔액 ${esc(resourceValue(row,row.reported_total))} 중 범용 잔액만 위에 표시합니다.</p>`:''}${row.rate_per_hour!=null?`<p>최근 확인한 지출 ${esc(resourceValue(row,row.rate_per_hour))}/시간 · 같은 결제기간 원본 누적 지출 기준</p>`:''}${row.kind==='reset'&&!row.details_known&&row.origin==='auto'?'<p>초기화권별 적용 범위·만료 상세를 받지 못했습니다.</p>':''}<p>${checked?'마지막 확인 '+esc(when(checked))+' KST · ':''}${row.origin==='manual'?(row.account_scope==='independent'?'별도 API 자원 수동 기록':'수동 확인 기록 · 현재 계정의 제공사 화면에서 재확인'):(row.identity_verified?'기본 로그인 계정 기준 자동 조회':'계정 식별 미확인 · 제공사에서 계정을 확인하세요.')}</p>${row.check_url?`<a href="${esc(row.check_url)}" target="_blank" rel="noopener noreferrer">제공사에서 확인 ↗</a>`:''}</details>${row.origin==='manual'?`<div class="resource-actions"><button type="button" class="mini-btn" data-resource-edit="${esc(row.id)}">수정</button><button type="button" class="mini-btn" data-resource-delete="${esc(row.id)}">삭제</button></div>`:''}</article>`;
 }
 // Manual records can name a Claude account once there are several.
-function syncResourceRoutes(){
+function syncResourceRoutes(selected=$('resource-route').value){
  const select=$('resource-route'),claude=select.querySelector('option[value="claude-code"]');
  if(!claude)return;
  select.querySelectorAll('option[data-account]').forEach(option=>option.remove());
@@ -75,6 +75,15 @@ function syncResourceRoutes(){
  if(multiClaude())for(const account of claudeAccounts.list.filter(a=>a.route!=='claude-code'&&a.route!=='claude-code:unknown')){
   const option=new Option(serviceShort(account.route),account.route);option.dataset.account='1';after.after(option);after=option;
  }
+ // The aging timer also renders resources while this form is open. Removing a
+ // selected option resets a select to Codex; restore the draft's exact account.
+ const missing=selected&&![...select.options].some(option=>option.value===selected);
+ if(missing){
+  const option=new Option('선택한 계정 · 목록 확인 필요',selected);
+  option.dataset.account='1';option.disabled=true;select.add(option);
+ }
+ select.value=selected;
+ select.setCustomValidity(missing?'선택한 계정을 확인할 수 없습니다. 목록을 다시 불러오거나 계정을 선택하세요.':'');
 }
 function renderResources(data){
  syncResourceRoutes();
@@ -113,6 +122,7 @@ function editResource(row=null){
  const defaults={route:selectedQuota||'codex',kind:'usage_credit',label:'',amount:'',unit:'credit',scope:'subscription',model:'',checked:observedNow(),expires:null};
  const values={...defaults,...row};
  for(const name of ['route','kind','label','amount','unit','scope','model'])$('resource-'+name).value=values[name]??'';
+ syncResourceRoutes(values.route);
  $('resource-checked').value=resourceTime(values.checked);$('resource-expires').value=resourceTime(values.expires);
  for(const [id,key] of [['resource-enabled','enabled'],['resource-auto-reload','auto_reload'],['resource-unlimited','spend_unlimited']])$(id).value=values[key]==null?'':String(values[key]);
  $('resource-spend').value=values.spend_remaining??'';
@@ -148,7 +158,7 @@ $('resource-kind').addEventListener('change',()=>{
  $('resource-unit').value=kind==='reset'?'count':kind==='api_credit'?'USD':'credit';
  $('resource-scope').value=kind==='reset'?'unknown':kind==='api_credit'?'api':'subscription';resourceLinks();
 });
-$('resource-route').addEventListener('change',()=>resourceLinks());
+$('resource-route').addEventListener('change',()=>{$('resource-route').setCustomValidity('');resourceLinks();});
 $('resource-linked').addEventListener('change',()=>{
  const row=lastLimits?.resources?.items.find(r=>r.id===$('resource-linked').value);
  if(row){$('resource-unit').value=row.unit;$('resource-scope').value=row.scope;}
