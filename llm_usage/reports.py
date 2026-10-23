@@ -100,7 +100,7 @@ def _names(c):
         return json.loads(row[0]) if row else None
     from .claude_accounts import describe
     accounts=describe(c)
-    names={a['route']:a['label'] for a in accounts} if len(accounts)>1 else {}
+    names={a['route']:a['label'] for a in accounts} if any(a['route']!='claude-code' for a in accounts) else {}
     return label,names
 
 

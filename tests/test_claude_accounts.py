@@ -434,6 +434,11 @@ class AccountTests(unittest.TestCase):
             cfg = client.get('/api/config', base_url='https://dashboard.test', headers={'Tailscale-User-Login': 'fixture'},
                              environ_overrides={'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)}).json
         self.assertIn(R_SECOND, cfg['subscription_routes'])
+        quota=next(r for r in self.store.limits(NOW)['limits'] if r['route']==R_SECOND)
+        self.assertEqual(quota['account_label'],'Max 5x')
+        from llm_usage.reports import _names
+        with self.store.connect() as c:
+            self.assertEqual(_names(c)[1][R_SECOND],'Max 5x')
 
     def test_unbound_folder_repair_keeps_cloud_and_confirmed_accounts_and_is_idempotent(self):
         self.unbound_folder(['fallback', 'cloud', 'confirmed'])

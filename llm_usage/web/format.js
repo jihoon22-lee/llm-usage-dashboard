@@ -20,17 +20,17 @@ const names={'codex':'OpenAI / Codex','claude-code':'Anthropic / Claude Code','a
 const routeNames={...names,opencode:'OpenCode'};
 // Several Claude accounts are one Claude Code service. Each keeps an internal route
 // ('claude-code' for the original account, 'claude-code:<hash>' for another one);
-// labels come from the API and are shown only once a second account exists.
+// labels also identify a sole non-default account when the original home is unknown.
 const familyOf=route=>typeof route==='string'&&route.startsWith('claude-code')?'claude-code':route;
 const claudeAccounts={labels:{},list:[]};
 // True when the shown names changed, so what was drawn with the old ones can be drawn again.
 function setClaudeAccounts(list){
  const before=JSON.stringify(claudeAccounts.labels);
  claudeAccounts.list=Array.isArray(list)?list:[];
- claudeAccounts.labels=claudeAccounts.list.length>1?Object.fromEntries(claudeAccounts.list.map(a=>[a.route,a.label])):{};
+ claudeAccounts.labels=multiClaude()?Object.fromEntries(claudeAccounts.list.map(a=>[a.route,a.label])):{};
  return JSON.stringify(claudeAccounts.labels)!==before;
 }
-const multiClaude=()=>claudeAccounts.list.length>1;
+const multiClaude=()=>claudeAccounts.list.some(a=>a.route!=='claude-code');
 const HOME_KINDS={default:'기본 Claude 홈',zerosub:'zerosub 관리 홈',configured:'설정한 홈',observed:'관측된 홈',windows:'Windows 홈'};
 // Where an account signs in, without paths: '기본 Claude 홈' or 'zerosub 관리 홈 claude-0123abcd4567'.
 const accountWhere=a=>(a?.homes||[]).filter(h=>h.kind!=='windows').map(h=>(HOME_KINDS[h.kind]||h.kind)+(h.kind==='default'?'':' '+String(h.name||'').slice(0,24))).join(' · ');

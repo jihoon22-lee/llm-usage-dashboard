@@ -466,8 +466,8 @@ class Store:
             resources=inventory(c,now,sources)
             history=quota_history(c,now,selected_sources={(r['route'],r['bucket']):r['source'] for r in rows},
                                   since_by_route={route:a['since'] for route,a in accounts.items()})
-        # Account labels appear only once a second Claude account is known.
-        labels={a['route']:a['label'] for a in claude} if len(claude)>1 else {}
+        # A sole non-default home still needs its account label beside the original route.
+        labels={a['route']:a['label'] for a in claude} if any(a['route']!='claude-code' for a in claude) else {}
         for route in routes:
             if not any(r['route']==route for r in rows):
                 rows.append(dict(route=route,bucket='미제공',remaining=None,resets=None,checked=None,source=route))

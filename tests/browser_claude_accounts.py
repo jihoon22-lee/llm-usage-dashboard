@@ -218,6 +218,10 @@ with sync_playwright() as p:
         assert not editor.locator('#resource-route').evaluate('(s)=>s.checkValidity()')
         editor.locator('#resource-route').select_option('codex')
         assert editor.locator('#resource-route').evaluate('(s)=>s.checkValidity()')
+        # The same account is selectable when the default home is unidentified.
+        editor.evaluate("setClaudeAccounts([{route:'claude-code:abababababab',label:'Max'}]);syncResourceRoutes()")
+        editor.locator('#resource-route').select_option(SECOND)
+        assert editor.locator('#resource-route').evaluate('(s)=>s.checkValidity()')
         context.close()
     browser.close()
 folder.cleanup()
