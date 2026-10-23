@@ -23,12 +23,12 @@ sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release
 --prepare는 읽기 전용 명령이 아닙니다. 코드를 `~/.local/lib/llm-usage/releases/<commit>`으로 내보내고 current 링크로 선택합니다.
 아래 기존 배포기는 코드만 전환합니다. uv 의존성 변경을 포함한 업데이트에는 사용하지 마세요. 운영 `.venv`에 `uv sync`를 실행하면 실행 중인 패키지가 바뀝니다. 임시 환경의 사전 검증과 실제 배포 시 코드·환경의 동시 전환이 필요합니다.
 
-아래 명령은 운영 환경의 런타임 의존성이 대상 v0.7.1의 lock과 이미 일치하는 경우에만 사용합니다. 앱은 프로젝트 버전 표기를 읽지 않으므로 표기만 다를 때도 쓸 수 있습니다. 환경 동기화가 필요하면 먼저 아래의 **0.7.1 업데이트** 절차를 따르세요.
+아래 명령은 운영 환경의 런타임 의존성이 대상 v0.8.0의 lock과 이미 일치하는 경우에만 사용합니다. 앱은 프로젝트 버전 표기를 읽지 않으므로 표기만 다를 때도 쓸 수 있습니다. 먼저 아래의 **0.8.0 업데이트**에서 의존성과 DB 복구 조건을 확인하세요.
 
 ```bash
 git fetch origin --tags
 git switch main
-git merge --ff-only v0.7.1
+git merge --ff-only v0.8.0
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python packaging/deploy.py
 ```
@@ -46,6 +46,16 @@ git merge --ff-only v0.7.1
 실제 브라우저 검사는 `--smoke --smoke-origin HTTPS_ORIGIN`을 함께 지정해야 합니다. 생략한 기본 브라우저 스크립트는 합성 데이터 검사입니다.
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
+
+## 0.8.0 업데이트
+
+0.8.0은 Codex 요청별 사용량·압축 기록, Claude advisor·추론·캐시 보존 시간, 추가 Claude 홈과 telemetry 계정 근거를 보완합니다. 과거 원본 재처리와 자동 원본 대조 범위도 확대합니다([변경 기록](../CHANGELOG.md)).
+
+- 의존성: Python 3.11–3.13에는 잠긴 `backports.zstd`가 추가됩니다. 이 환경은 독립 checkout 검증 후 두 서비스 정지 → `uv sync --locked --no-dev` → 코드 전환·재시작 순서로 갱신합니다. Python 3.14는 표준 `compression.zstd`를 사용하므로 나머지 실제 런타임 패키지가 lock과 일치한다면 기존 코드 전환 경로를 사용할 수 있습니다. 운영 `.venv`를 실행 중에 동기화하지 않습니다.
+- DB: 요청별 Codex 원본·누계 연결·계정 근거 테이블, `codex_points.reasoning_observed`, 이벤트의 advisor/추론/TTL·요청 가중치·부모 열을 추가하고 시간별 롤업을 다시 만듭니다. 전환 직전에 SQLite backup API로 DB 복사본을 만들고 무결성을 검사합니다. 설정·개인 단가·기존 릴리스·Python 및 설치된 패키지 목록도 복구 지점으로 보존합니다.
+- 첫 수집: 로컬/클라우드 파서 버전 3으로 남은 원본을 재처리합니다. 일반·압축 사본은 원본 ID로 중복 제거합니다. 재처리는 수 분 이상 걸릴 수 있으며 `collecting`의 새 heartbeat는 진행 중이라는 뜻입니다. 수집 완료와 소스 상태·원본 대조까지 별도로 확인하세요. 주간 형식 5·월간 형식 3으로 저장 리포트를 다시 계산하며 기존 구독료와 알림 기록을 유지합니다.
+- 복구: **0.7.x로 돌아갈 때는 코드 링크만 되돌리면 안 됩니다.** 이전 Codex 파서는 새 열이 추가된 누계 테이블에 쓸 수 없습니다. 두 서비스를 정지한 상태에서 전환 전 DB 복사본과 그 릴리스의 환경·코드를 함께 복원하고 재시작해야 합니다. 배포기의 자동 rollback은 DB를 복원하지 않으므로 실패 후에는 이 절차가 필요합니다. 복구 지점 이후의 관측은 원본이 남은 범위에서만 다시 수집할 수 있습니다.
+- 확인 범위: native 원본과 해시 계정 연결은 실제 기록으로 대조했습니다. 선택적 CLI/SDK telemetry exporter의 지속 연결·실수신은 별도 설정과 검증이 필요합니다. 읽지 못한 기존 기록·사라진 원본·TTL 상충·모호한 과거 계정은 정상이나 0으로 채우지 않습니다.
 
 ## 0.7.1 업데이트
 
