@@ -13,7 +13,7 @@ KEEP=12
 # announced again). 2: the Codex account residual left the top models for its own line.
 # 3: Claude Code split by account, and the top projects.
 # 4: exhaustion counts use the same account boundary as observed quota time.
-REPORT_FORMAT=4
+REPORT_FORMAT=5
 # Readings up to 10 minutes past a week's or month's end close its last interval
 # (_points), and the quota history of a finished period does not change after them: it is
 # built once they are in, rather than frozen without them.
@@ -29,7 +29,10 @@ def last_week(now):
 
 def _totals(usage):
     from .insights import token_total
-    return dict(unallocated_tokens=(usage.get('reconciliation') or {}).get('unallocated_tokens',0),supplemental_tokens=(usage.get('reconciliation') or {}).get('supplemental_tokens',0),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'))
+    from .store import METRICS
+    return dict(unallocated_tokens=(usage.get('reconciliation') or {}).get('unallocated_tokens',0),supplemental_tokens=(usage.get('reconciliation') or {}).get('supplemental_tokens',0),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),cost=(usage.get('cost') or {}).get('period'),
+                cache_estimated_tokens=(usage.get('cost') or {}).get('cache_estimated_tokens',0),
+                **{k:usage['totals'].get(k,0) for k in METRICS})
 
 
 def _points(c,route,bucket,source,start,end,since=None):
@@ -246,8 +249,9 @@ def _build(store,now,pricing=None):
     from .insights import token_total
     routes={}
     for row in current['rows']:
-        e=routes.setdefault(row['route'],dict(route=row['route'],tokens=0,requests=0,cost=None))
+        e=routes.setdefault(row['route'],dict(route=row['route'],tokens=0,requests=0,advisor_calls=0,cost=None))
         e['tokens']+=token_total(row);e['requests']+=row.get('requests',0)
+        e['advisor_calls']+=row.get('advisor_calls',0)
         if row.get('est_cost') is not None:e['cost']=(e['cost'] or 0)+row['est_cost']
     before={}
     for row in previous['rows']:before[row['route']]=before.get(row['route'],0)+token_total(row)
@@ -274,7 +278,7 @@ def _build(store,now,pricing=None):
                 totals=totals,previous=prior,
                 change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if prior['tokens'] else None,
                 routes=sorted(routes.values(),key=lambda e:-e['tokens']),
-                models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost')) for r in top],
+                models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost'),advisor_calls=r.get('advisor_calls',0)) for r in top],
                 accounts=accounts,projects=[dict(project=p['project'],tokens=token_total(p),cost=p.get('cost')) for p in projects],
                 exhausted=exhausted,quota_use=use,residual=residual,busiest_day=busiest['time'][:10] if busiest and totals['tokens'] else None)
 
@@ -313,11 +317,11 @@ def _ensure_report(store,now,pricing=None):
     # re-send notifications for a report that already existed.
     with store.connect() as c:
         from .reconciliation import supplements
-        from .store import identity,TOKENS
+        from .store import identity,METRICS
         # Closed-week day/model totals also change when detailed records arrive,
         # and linked records can shrink an aggregate without a new snapshot.
         low=(monday-timedelta(weeks=KEEP)).timestamp();high=(monday+timedelta(days=7)).timestamp()
-        sums=','.join('SUM('+k+')' for k in TOKENS)
+        sums=','.join('SUM('+k+')' for k in METRICS)
         # Project and account too (the top projects, the account split): attributing records
         # later keeps every token sum.
         records=[tuple(r) for r in c.execute("SELECT date(ts,'unixepoch','+9 hours'),route,model,project,account,SUM(requests),"+sums+
@@ -370,8 +374,7 @@ def this_week(store,now,pricing=None):
     routes={}
     for row in usage['rows']:routes[row['route']]=routes.get(row['route'],0)+token_total(row)
     with store.connect() as c:accounts=_accounts(c,usage)
-    return dict(start=day(monday),end=day(monday+timedelta(days=6)),tokens=token_total(usage['totals']),requests=usage['totals'].get('requests',0),
-                cost=(usage.get('cost') or {}).get('period'),prior=usage.get('prior'),accounts=accounts,
+    return dict(start=day(monday),end=day(monday+timedelta(days=6)),**_totals(usage),prior=usage.get('prior'),accounts=accounts,
                 routes=[dict(route=route,tokens=tokens) for route,tokens in sorted(routes.items(),key=lambda x:-x[1]) if tokens])
 
 

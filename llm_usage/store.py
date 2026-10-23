@@ -18,7 +18,9 @@ from .claude_accounts import account_source, family, is_claude
 
 KST = ZoneInfo('Asia/Seoul')
 TOKENS = ('uncached_input', 'cached_input', 'output', 'cache_creation', 'reasoning')
-SERIES_KEYS = (*TOKENS, 'requests', 'cost', 'unpriced')
+DETAILS = ('cache_creation_5m','cache_creation_1h','cache_creation_unknown','cache_ttl_observed','cache_ttl_conflict','reasoning_observed','advisor_calls')
+METRICS = (*TOKENS,*DETAILS)
+SERIES_KEYS = (*METRICS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
@@ -131,7 +133,7 @@ class Store:
         self.path = str(path)
         # Whole-hour aggregations read usage_hourly; False reads events (equivalence checks).
         self.table='usage_hourly' if rollup else 'events'
-        self.rcount='COALESCE(SUM(requests),0) AS requests' if rollup else 'COUNT(*) AS requests'
+        self.rcount='COALESCE(SUM(requests),0) AS requests'
         self.thresholds={**self.DEFAULT_THRESHOLDS,**(thresholds or {})}
         self._memo={}
         self._usage_cache=OrderedDict()
@@ -195,16 +197,29 @@ class Store:
                 INSERT OR IGNORE INTO account_token_buckets
                   SELECT route,day,tokens,checked,'' FROM account_tokens;
             """)
-            for column in ('session','project','agent_kind','account'):
+            for column in ('session','project','agent_kind','account','parent_id'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
                     # The web and the collector start together after a deploy; the
                     # other process may add the column between the check and here.
                     try:c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
                     except sqlite3.OperationalError as exc:
                         if 'duplicate column' not in str(exc):raise
+            added_details=set()
+            for column in (*DETAILS,'requests'):
+                if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
+                    try:
+                        c.execute(f'ALTER TABLE events ADD COLUMN {column} INTEGER NOT NULL DEFAULT '+('1' if column=='requests' else '0'))
+                        added_details.add(column)
+                    except sqlite3.OperationalError as exc:
+                        if 'duplicate column' not in str(exc):raise
+            if 'cache_creation_unknown' in added_details:
+                c.execute("UPDATE events SET cache_creation_unknown=cache_creation WHERE route='claude-code' AND cache_ttl_observed=0")
+            if 'reasoning_observed' in added_details:
+                c.execute('UPDATE events SET reasoning_observed=1 WHERE reasoning>0')
             # Claude events whose account is not resolved yet (see claude_attribution).
             c.execute("CREATE INDEX IF NOT EXISTS events_claude_pending ON events(session) WHERE route='claude-code' AND account IS NULL")
             c.execute('CREATE INDEX IF NOT EXISTS events_session ON events(session)')
+            c.execute('CREATE INDEX IF NOT EXISTS events_parent ON events(parent_id) WHERE parent_id IS NOT NULL')
             # Quota windows and per-route scopes filter one route over a time range.
             c.execute('CREATE INDEX IF NOT EXISTS events_route_ts ON events(route,ts)')
             from .resources import initialize
@@ -215,6 +230,8 @@ class Store:
             initialize_attribution(c)
             from .reconciliation import initialize as initialize_usage
             initialize_usage(c)
+            from .codex_usage import initialize as initialize_responses
+            initialize_responses(c)
         self._ensure_rollup()
         os.chmod(path, 0o600)
 
@@ -224,23 +241,24 @@ class Store:
         transaction. Aggregations over whole hours read it instead of every event.
 
         ts is the hour start (KST is a whole-hour offset, so hours, days, weeks and
-        months group exactly as on events); requests is the event count."""
+        months group exactly as on events); advisor subcalls carry no API request."""
         key=",".join(['ts','provider','route','model',"IFNULL(project,char(0))","IFNULL(agent_kind,char(0))","IFNULL(account,char(0))"])
         match=' AND '.join(['ts=CAST(OLD.ts/3600 AS INTEGER)*3600','provider=OLD.provider','route=OLD.route','model=OLD.model',
                             'project IS OLD.project','agent_kind IS OLD.agent_kind','account IS OLD.account'])
         add=f"""INSERT INTO usage_hourly VALUES (CAST(NEW.ts/3600 AS INTEGER)*3600,NEW.provider,NEW.route,NEW.model,NEW.project,NEW.agent_kind,
-              {','.join('NEW.'+k for k in TOKENS)},1,NEW.account) ON CONFLICT({key}) DO UPDATE SET
-              {','.join(f'{k}={k}+excluded.{k}' for k in TOKENS)},requests=requests+1;"""
-        remove=f"""UPDATE usage_hourly SET {','.join(f'{k}={k}-OLD.{k}' for k in TOKENS)},requests=requests-1 WHERE {match};
-              DELETE FROM usage_hourly WHERE {match} AND requests<=0;"""
+              {','.join('NEW.'+k for k in METRICS)},NEW.requests,NEW.account) ON CONFLICT({key}) DO UPDATE SET
+              {','.join(f'{k}={k}+excluded.{k}' for k in METRICS)},requests=requests+excluded.requests;"""
+        remove=f"""UPDATE usage_hourly SET {','.join(f'{k}={k}-OLD.{k}' for k in METRICS)},requests=requests-OLD.requests WHERE {match};
+              DELETE FROM usage_hourly WHERE {match} AND requests+advisor_calls<=0;"""
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')  # the web and the collector may start together
-            # Version 2 adds the Claude account. An older release finds a different
+            # Version 3 adds detail coverage and separate advisor subcall counts.
+            # An older release finds a different
             # version and rebuilds its own table; this one does the same in return.
-            if self.state(c,'rollup_version')==2:return
+            if self.state(c,'rollup_version')==3:return
             for statement in ['DROP TABLE IF EXISTS usage_hourly',
                 f"""CREATE TABLE usage_hourly (ts INTEGER NOT NULL, provider TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL,
-                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in TOKENS)}, requests INTEGER NOT NULL, account TEXT)""",
+                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in METRICS)}, requests INTEGER NOT NULL, account TEXT)""",
                 f'CREATE UNIQUE INDEX usage_hourly_key ON usage_hourly({key})',
                 'CREATE INDEX usage_hourly_route_ts ON usage_hourly(route,ts)',
                 'DROP TRIGGER IF EXISTS events_rollup_insert','DROP TRIGGER IF EXISTS events_rollup_delete','DROP TRIGGER IF EXISTS events_rollup_update',
@@ -249,10 +267,10 @@ class Store:
                 f'CREATE TRIGGER events_rollup_update AFTER UPDATE ON events BEGIN {remove} {add} END',
                 self.ROLLUP_INSERT]:
                 c.execute(statement)
-            self.save_state(c,'rollup_version',2)
+            self.save_state(c,'rollup_version',3)
 
     ROLLUP_SELECT=('SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-                   +','.join(f'SUM({k})' for k in TOKENS)+',COUNT(*),account FROM events GROUP BY 1,2,3,4,5,6,account')
+                   +','.join(f'SUM({k})' for k in METRICS)+',SUM(requests),account FROM events GROUP BY 1,2,3,4,5,6,account')
     ROLLUP_INSERT='INSERT INTO usage_hourly '+ROLLUP_SELECT
 
     def rebuild_rollup(self):
@@ -286,20 +304,35 @@ class Store:
         finally:
             c.close()
 
-    def event(self, c, key, ts, provider, route, model, values, session=None, project=None, agent_kind=None, account=None):
+    def event(self, c, key, ts, provider, route, model, values, session=None, project=None, agent_kind=None, account=None,
+              parent_id=None, requests=1, allow_empty=False):
         # Streaming snapshots are monotonic maxima per globally stable request ID.
         numbers = [max(0, int(values.get(k) or 0)) for k in TOKENS]
-        if not any(numbers):return
+        if not any(numbers) and not allow_empty:return
+        details=[max(0,int(values.get(k) or 0)) for k in DETAILS]
+        # TTL splits are one coherent observation, never independent maxima.
+        # Conflicting splits of the same total stay unknown until a newer total.
+        conflict='(excluded.cache_creation=events.cache_creation AND (events.cache_ttl_conflict OR '
+        conflict+='(events.cache_ttl_observed AND excluded.cache_ttl_observed AND '
+        conflict+='(events.cache_creation_5m<>excluded.cache_creation_5m OR events.cache_creation_1h<>excluded.cache_creation_1h))))'
+        newer='(excluded.cache_creation>events.cache_creation OR (excluded.cache_creation=events.cache_creation AND NOT events.cache_ttl_observed))'
+        detail_updates=','.join(f'{k}=CASE WHEN {conflict} THEN 0 WHEN {newer} THEN excluded.{k} ELSE events.{k} END'
+                                for k in ('cache_creation_5m','cache_creation_1h','cache_ttl_observed'))
+        detail_updates+=f',cache_creation_unknown=CASE WHEN {conflict} THEN events.cache_creation WHEN {newer} THEN excluded.cache_creation_unknown ELSE events.cache_creation_unknown END'
+        detail_updates+=f',cache_ttl_conflict=CASE WHEN {conflict} THEN 1 WHEN excluded.cache_creation>events.cache_creation THEN 0 ELSE events.cache_ttl_conflict END'
+        detail_updates+=',reasoning_observed=CASE WHEN excluded.output>events.output THEN excluded.reasoning_observed WHEN excluded.output=events.output THEN MAX(events.reasoning_observed,excluded.reasoning_observed) ELSE events.reasoning_observed END'
+        detail_updates+=',advisor_calls=MAX(events.advisor_calls,excluded.advisor_calls),requests=excluded.requests'
         # A copy read without an account (local replay, telemetry) keeps a resolved one.
-        c.execute('INSERT INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,project,agent_kind,account)'
-                  ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+        columns=('id','ts','provider','route','model',*METRICS,'session','project','agent_kind','account','parent_id','requests')
+        c.execute('INSERT INTO events ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+') ON CONFLICT(id) DO UPDATE SET '
                   + ','.join(f'{k}=MAX(events.{k},excluded.{k})' for k in TOKENS)
+                  + ','+detail_updates
                   + ',provider=excluded.provider,model=excluded.model,route=excluded.route'
                   + ',session=COALESCE(excluded.session,events.session)'
                   + ',project=COALESCE(excluded.project,events.project)'
                   + ',agent_kind=COALESCE(excluded.agent_kind,events.agent_kind)'
-                  + ',account=COALESCE(excluded.account,events.account)',
-                  (key, ts, provider, route, model or 'unknown', *numbers, session, project, agent_kind, account))
+                  + ',account=COALESCE(excluded.account,events.account),parent_id=COALESCE(excluded.parent_id,events.parent_id)',
+                  (key, ts, provider, route, model or 'unknown', *numbers,*details,session,project,agent_kind,account,parent_id,requests))
 
     def codex_point(self,c,session,ts,provider,route,model,usage,last):
         keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
@@ -307,10 +340,13 @@ class Store:
         previous=[max(0,int(last.get(k) or 0)) for k in keys]
         # Timestamp and original cumulative counters survive Windows/WSL copies and replay.
         key=identity('codex-point',session,ts,totals)
-        inserted=c.execute('INSERT INTO codex_points VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
-                           'ON CONFLICT(id) DO UPDATE SET model=excluded.model,provider=excluded.provider '
-                           "WHERE codex_points.model='unknown' AND excluded.model!='unknown'",
-                           (key,identity(session),ts,provider,route,model or 'unknown',*totals,*previous)).rowcount
+        observed=int(usage.get('reasoning_output_tokens') is not None and last.get('reasoning_output_tokens') is not None)
+        inserted=c.execute('INSERT INTO codex_points VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
+                           "ON CONFLICT(id) DO UPDATE SET model=CASE WHEN codex_points.model='unknown' THEN excluded.model ELSE codex_points.model END,"
+                           "provider=CASE WHEN codex_points.model='unknown' THEN excluded.provider ELSE codex_points.provider END,"
+                           'reasoning_observed=MAX(codex_points.reasoning_observed,excluded.reasoning_observed) '
+                           "WHERE (codex_points.model='unknown' AND excluded.model!='unknown') OR excluded.reasoning_observed>codex_points.reasoning_observed",
+                           (key,identity(session),ts,provider,route,model or 'unknown',*totals,*previous,observed)).rowcount
         return identity(session) if inserted else None
 
     def discard_codex_point(self,c,session,ts,usage):
@@ -328,17 +364,21 @@ class Store:
         projects=dict(c.execute('SELECT id,project FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,)))
         c.execute('DELETE FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,))
         previous=None;previous_ts=None;seen={};resets=0;partial=False
-        zero_baseline=False;zero_baselines=0;ambiguous=0
+        zero_baseline=False;zero_baselines=0;ambiguous=0;groups={};last_group=None
         for row in c.execute('SELECT * FROM codex_points WHERE session=? ORDER BY ts,input,output,id',(session,)).fetchall():
             current=[row[k] for k in ('input','cached','output','creation','reasoning')]
             last=[row[k] for k in ('last_input','last_cached','last_output','last_creation','last_reasoning')]
             # Repeated notifications are duplicates only within this counter epoch.
             # A reset may legitimately reach counters seen earlier in the session.
-            if current==previous:continue
+            if current==previous:
+                groups[row['id']]=last_group
+                continue
             reset=previous is not None and (current[0]<previous[0] or current[2]<previous[2])
             # Two different counters at the same timestamp have no temporal order.
             # A later repeat of that lower observation is not proof of a new epoch.
-            if reset and seen.get(tuple(current))==previous_ts:continue
+            if reset and seen.get(tuple(current))==previous_ts:
+                groups[row['id']]=None
+                continue
             if previous is None:partial=current!=last
             if reset:resets+=1
             if previous_ts==row['ts']:ambiguous+=1
@@ -355,12 +395,16 @@ class Store:
                     delta=last;ambiguous+=1
                 zero_baseline=False
             previous=current;previous_ts=row['ts'];seen[tuple(current)]=row['ts']
+            last_group=row['id'] if any(delta) else None
+            groups[row['id']]=last_group
             if not any(delta):continue
             inp,cached,out,creation,reasoning=delta
             self.event(c,row['id'],row['ts'],row['provider'],row['route'],row['model'],
                        dict(uncached_input=max(0,inp-cached-creation),cached_input=cached,output=out,
-                            cache_creation=creation,reasoning=reasoning),
+                            cache_creation=creation,reasoning=reasoning,reasoning_observed=row['reasoning_observed']),
                        **({**(attrs or {}),'project':projects[row['id']]} if row['id'] in projects else (attrs or {})))
+        from .codex_usage import project
+        project(self,c,session,groups,projects)
         c.execute('INSERT OR REPLACE INTO session_quality VALUES (?,?,?,?,?)',(session,resets,int(partial),ambiguous,zero_baselines))
         self.bump_data_version(c)
 
@@ -533,7 +577,7 @@ class Store:
                          '계정·구독 조건 변경 전 관측입니다.' if row.get('previous_account') else
                          '로컬 관측의 계정을 확인하지 못했습니다. 계정 조회 후 작업 전망을 제공합니다.' if row['scope'].get('identity_unverified') else
                          '원본 초기화 시각을 해석하지 못했습니다. 시간 전망을 보류합니다.' if row['scope'].get('reset_unparsed') else None)
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)+',COUNT(*) AS requests'
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)+',COALESCE(SUM(requests),0) AS requests'
         with self.connect() as c:
             for row in rows:
                 span=window_seconds(row['bucket'])
@@ -583,7 +627,7 @@ class Store:
             key=(row['route'],row['bucket'],int(resets//60),round(used,3))
             if key not in memo:
                 where,args=route_events(row['route'])
-                r=c.execute('SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COUNT(*) FROM events '
+                r=c.execute('SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COALESCE(SUM(requests),0) FROM events '
                             'WHERE '+where+' AND ts>=? AND ts<?',(*args,resets-span,resets)).fetchone()
                 memo[key]=dict(resets=resets,used_points=used,tokens=r[0],requests=r[1],tokens_per_point=r[0]/used if r[0] else None)
             if memo[key]['tokens_per_point']:result.append(memo[key])
@@ -675,8 +719,10 @@ class Store:
         since=(datetime.fromtimestamp(now,timezone.utc)-timedelta(days=days-1)).strftime('%Y-%m-%d')
         rows=c.execute('SELECT day,tokens FROM account_token_buckets WHERE route=? AND namespace=? AND day>=? ORDER BY day',(route,self.account_namespace(c,route),since)).fetchall()
         if not rows:return None
+        from .codex_usage import account_filter
+        account_sql,account_args=account_filter(self.account_namespace(c,route)) if route=='codex' else ('1=1',())
         local=dict(c.execute("SELECT date(ts,'unixepoch') AS day,SUM(uncached_input+cached_input+output+cache_creation) FROM usage_hourly"
-                             ' WHERE route=? AND ts>=? GROUP BY day',(route,stamp(since+'T00:00:00Z'))))
+                             ' WHERE route=? AND ts>=? AND '+account_sql+' GROUP BY day',(route,stamp(since+'T00:00:00Z'),*account_args)))
         out=[]
         for day,tokens in rows:
             mine=local.get(day,0)
@@ -714,8 +760,8 @@ class Store:
         # evict records from this rolling range even when the collector is idle.
         cutoff=int(as_of if as_of is not None else now.timestamp()) if period=='1h' else None
         midnight = now.replace(hour=0,minute=0,second=0,microsecond=0)
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
-        count='COUNT(*) AS requests'
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
+        count='COALESCE(SUM(requests),0) AS requests'
         with self.connect() as c:
             c.execute('BEGIN')
             lifetime=dict(c.execute('SELECT '+sums+','+self.rcount+' FROM '+self.table+' WHERE 1=1'+scope_sql,scope_args).fetchone())
@@ -760,7 +806,7 @@ class Store:
         from .pricing import estimate,rate_for
         now=now if isinstance(now,datetime) else datetime.fromtimestamp(now,KST)
         start=now.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         out={}
         for r in c.execute("SELECT COALESCE(project,'미분류') AS project,model,date(ts,'unixepoch','+9 hours') AS day,"+sums+
                            ' FROM '+self.table+' WHERE ts>=? GROUP BY 1,2,3',(start.timestamp(),)):
@@ -792,7 +838,7 @@ class Store:
         now=now if isinstance(now,datetime) else datetime.fromtimestamp(now or time.time(),KST)
         midnight=now.replace(hour=0,minute=0,second=0,microsecond=0)
         start=midnight-timedelta(days=days-1);month_start=midnight.replace(day=1)
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         where=" WHERE COALESCE(project,'미분류')=? AND ts>=?"
         models={};daily={};month=dict(tokens=0,cost=0.0,priced=0)
         with self.connect() as c:
@@ -809,7 +855,7 @@ class Store:
                 if part is not None:m['cost']=(m['cost'] or 0)+part
                 d=daily.setdefault(row['day'],dict(day=row['day'],tokens=0,requests=0));d['tokens']+=tokens;d['requests']+=row['requests']
             sessions=[dict(session=r[0],route=r[1],tokens=r[2],requests=r[3],first_ts=r[4],last_ts=r[5]) for r in c.execute(
-                'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),COUNT(*),MIN(ts),MAX(ts) FROM events'
+                'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),SUM(requests),MIN(ts),MAX(ts) FROM events'
                 +where+' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',(project,start.timestamp()))]
         from .reconciliation import supplements
         with self.connect() as c:extra,conflicts=supplements(c)
@@ -869,17 +915,17 @@ class Store:
         if ids is not None:
             if not ids:return {}
             where+=' AND session IN ('+','.join('?' for _ in ids)+')';args.extend(ids)
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         sessions={}
         for r in c.execute("SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,"+cls.ACCOUNT_SQL+''' AS account,
                 MAX(route) AS route,MAX(project) AS project,MAX(agent_kind) AS kind,MIN(ts) AS first_ts,MAX(ts) AS last_ts,
-                COUNT(*) AS requests,'''+sums+' FROM events WHERE '+where+' GROUP BY session,model,day,4',args):
+                COALESCE(SUM(requests),0) AS requests,'''+sums+' FROM events WHERE '+where+' GROUP BY session,model,day,4',args):
             e=sessions.setdefault(r['session'],dict(session=r['session'],route=r['route'],project=r['project'],
-                kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=None,accounts=[],**dict.fromkeys(TOKENS,0)))
+                kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=None,accounts=[],**dict.fromkeys(METRICS,0)))
             if r['route']=='claude-code' and r['account'] not in e['accounts']:e['accounts'].append(r['account'])
             e['first_ts']=min(e['first_ts'],r['first_ts']);e['last_ts']=max(e['last_ts'],r['last_ts'])
             e['requests']+=r['requests']
-            for k in TOKENS:e[k]+=r[k]
+            for k in METRICS:e[k]+=r[k]
             rate=rate_for(r['model'],pricing,r['day']) if pricing else None
             if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
         for e in sessions.values():
@@ -891,30 +937,30 @@ class Store:
         """One session's models, hourly activity and cache share; no message content exists here."""
         from .insights import token_total
         from .pricing import estimate,rate_for
-        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         with self.connect() as c:
             models=[];cost=0.0;rated=False
             for r in c.execute('''SELECT route,model,date(ts,'unixepoch','+9 hours') AS day,MIN(ts) AS first_ts,MAX(ts) AS last_ts,
-                COUNT(*) AS requests,'''+sums+' FROM events WHERE session=? GROUP BY route,model,day',(session,)):
+                COALESCE(SUM(requests),0) AS requests,'''+sums+' FROM events WHERE session=? GROUP BY route,model,day',(session,)):
                 row=dict(r);rate=rate_for(row['model'],pricing,row['day']) if pricing else None
                 part=estimate(row,rate) if rate else None
                 key=next((m for m in models if m['route']==row['route'] and m['model']==row['model']),None)
                 if key is None:
                     key=dict(route=row['route'],model=row['model'],first_ts=row['first_ts'],last_ts=row['last_ts'],
-                             requests=0,cost=None,**dict.fromkeys(TOKENS,0));models.append(key)
+                             requests=0,cost=None,**dict.fromkeys(METRICS,0));models.append(key)
                 key['first_ts']=min(key['first_ts'],row['first_ts']);key['last_ts']=max(key['last_ts'],row['last_ts'])
                 key['requests']+=row['requests']
-                for k in TOKENS:key[k]+=row[k]
+                for k in METRICS:key[k]+=row[k]
                 if part is not None:key['cost']=(key['cost'] or 0)+part;cost+=part;rated=True
             if not models:
                 evidence=c.execute('SELECT * FROM usage_evidence WHERE session=? ORDER BY end DESC LIMIT 1',(session,)).fetchone()
                 if not evidence:return dict(session=session,models=[],hours=[])
-                models=[dict(route=evidence['route'],model=evidence['model'] or 'unknown',first_ts=evidence['start'],last_ts=evidence['end'],requests=0,cost=None,**dict.fromkeys(TOKENS,0))]
+                models=[dict(route=evidence['route'],model=evidence['model'] or 'unknown',first_ts=evidence['start'],last_ts=evidence['end'],requests=0,cost=None,**dict.fromkeys(METRICS,0))]
             meta=c.execute('SELECT MAX(project),MAX(agent_kind) FROM events WHERE session=?',(session,)).fetchone()
             hours=[dict(hour=r[0]*3600,requests=r[1],tokens=r[2]) for r in c.execute(
-                'SELECT CAST(ts/3600 AS INTEGER),COUNT(*),SUM(uncached_input+cached_input+output+cache_creation) '
+                'SELECT CAST(ts/3600 AS INTEGER),SUM(requests),SUM(uncached_input+cached_input+output+cache_creation) '
                 'FROM events WHERE session=? GROUP BY 1 ORDER BY 1',(session,))]
-        totals={k:sum(m[k] for m in models) for k in TOKENS}
+        totals={k:sum(m[k] for m in models) for k in METRICS}
         inputs=totals['uncached_input']+totals['cached_input']+totals['cache_creation']
         for m in models:m['cost']=round(m['cost'],4) if m['cost'] is not None else None
         data=dict(session=session,project=meta[0],kind=meta[1],first_ts=min(m['first_ts'] for m in models),
@@ -929,7 +975,7 @@ class Store:
             add(data['totals'],e)
             m=next((m for m in data['models'] if m['route']==e['route'] and m['model']==e['model']),None)
             if m is None:
-                m=dict(route=e['route'],model=e['model'] or 'unknown',requests=0,cost=None,first_ts=e['start'],last_ts=e['end'],**dict.fromkeys(TOKENS,0));data['models'].append(m)
+                m=dict(route=e['route'],model=e['model'] or 'unknown',requests=0,cost=None,first_ts=e['start'],last_ts=e['end'],**dict.fromkeys(METRICS,0));data['models'].append(m)
             add(m,e)
             lo=int(e['start']//3600)*3600;hi=int((e['end']-0.000001)//3600)*3600
             if lo==hi:
@@ -959,11 +1005,11 @@ class Store:
         stop=a2+(effective-a)
         prior=dict(mode=mode,label=self.COMPARE_LABELS[mode],start=a2.isoformat(),end_exclusive=stop.isoformat(),
                    current_end=effective.isoformat(),running=effective<b,complete=True,
-                   current_tokens=token_total(total),requests=0,cost=None,**dict.fromkeys(TOKENS,0))
+                   current_tokens=token_total(total),requests=0,cost=None,**dict.fromkeys(METRICS,0))
         spent=None
         for r in c.execute('SELECT model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+count+' FROM events WHERE ts>=? AND ts<?'
                            +scope_sql+' GROUP BY model,day',(a2.timestamp(),stop.timestamp(),*scope_args)):
-            for k in TOKENS:prior[k]+=r[k]
+            for k in METRICS:prior[k]+=r[k]
             prior['requests']+=r['requests']
             rate=rate_for(r['model'],pricing,r['day']) if pricing else None
             if rate:spent=(spent or 0)+estimate(dict(r),rate)
@@ -1023,8 +1069,8 @@ class Store:
         buckets = {}
         from .insights import token_total
         for r in c.execute('SELECT '+BUCKET_SQL[granularity]+' AS bucket,'+label_expr+' AS label,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY bucket,label,model,day',(a.timestamp(),b.timestamp(),*scope_args)):
-            e = buckets.setdefault((r['bucket'],r['label']),dict(requests=0,cost=0.0,unpriced=0,**dict.fromkeys(TOKENS,0)))
-            for k in TOKENS: e[k]+=r[k]
+            e = buckets.setdefault((r['bucket'],r['label']),dict(requests=0,cost=0.0,unpriced=0,**dict.fromkeys(METRICS,0)))
+            for k in METRICS: e[k]+=r[k]
             e['requests']+=r['requests']
             if pricing:
                 rate=rate_for(r['model'],pricing,r['day'])
@@ -1043,8 +1089,8 @@ class Store:
             shifted_sql=re.sub(r'\bts\b',f'(ts+{delta})',BUCKET_SQL[granularity])
             cmp_buckets={}
             for r in c.execute('SELECT '+shifted_sql+' AS bucket,'+label_expr+' AS label,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY bucket,label,model,day',(a2.timestamp(),b2.timestamp(),*scope_args)):
-                e=cmp_buckets.setdefault((r['bucket'],r['label']),dict(requests=0,cost=0.0,**dict.fromkeys(TOKENS,0)))
-                for k in TOKENS: e[k]+=r[k]
+                e=cmp_buckets.setdefault((r['bucket'],r['label']),dict(requests=0,cost=0.0,**dict.fromkeys(METRICS,0)))
+                for k in METRICS: e[k]+=r[k]
                 e['requests']+=r['requests']
                 if pricing:
                     rate=rate_for(r['model'],pricing,r['day'])
@@ -1075,7 +1121,7 @@ class Store:
             sessions=self.session_rows(c,a.timestamp(),b.timestamp(),pricing,scope)
             sessions_total=len(sessions)
             session_list=sorted(sessions.values(),key=lambda s:-(s['uncached_input']+s['cached_input']+s['output']+s['cache_creation']))[:100]
-            sessionless=c.execute('SELECT COUNT(*) FROM events WHERE ts>=? AND ts<? AND session IS NULL'+scope_sql,
+            sessionless=c.execute('SELECT COALESCE(SUM(requests),0) FROM events WHERE ts>=? AND ts<? AND session IS NULL'+scope_sql,
                                   (a.timestamp(),b.timestamp(),*scope_args)).fetchone()[0]
             projects={}
             project_sessions=dict(c.execute("SELECT COALESCE(NULLIF(project,''),'미분류'),COUNT(DISTINCT session) FROM events WHERE ts>=? AND ts<?"
@@ -1084,9 +1130,9 @@ class Store:
                 FROM events WHERE ts>=? AND ts<?'''+scope_sql+' GROUP BY project,model,day''',(a.timestamp(),b.timestamp(),*scope_args)):
                 label=r['project'] or '미분류'
                 e=projects.setdefault(label,dict(project=label,sessions=project_sessions[label],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,
-                    **dict.fromkeys(TOKENS,0)))
+                    **dict.fromkeys(METRICS,0)))
                 e['last_ts']=max(e['last_ts'],r['last_ts']);e['requests']+=r['requests']
-                for k in TOKENS: e[k]+=r[k]
+                for k in METRICS: e[k]+=r[k]
                 if pricing:
                     rate=rate_for(r['model'],pricing,r['day'])
                     if rate:e['cost']+=estimate(dict(r),rate);e['rated']=True
@@ -1105,8 +1151,9 @@ class Store:
         if sections!='core':
             insights=usage_insights(c,a,b,now,period,first,total,rows,buckets,scope_sql,scope_args)
             insights['month']=month
-        cost={'period':None,'lifetime':None,'coverage':None,'lifetime_coverage':None,'cache_savings':None}
+        cost={'period':None,'lifetime':None,'coverage':None,'lifetime_coverage':None,'cache_savings':None,'cache_estimated_tokens':0}
         if pricing:
+            from .pricing import cache_estimated_tokens
             priced=0;savings=0.0
             # Rows are (provider, route, model): a model used through two routes
             # must not show the other route's spend on each row.
@@ -1117,6 +1164,7 @@ class Store:
                 rate=rate_for(r['model'],pricing,r['day'])
                 if rate:
                     priced+=token_total(dict(r))
+                    cost['cache_estimated_tokens']+=cache_estimated_tokens(dict(r),rate)
                     key=(r['provider'],r['route'],r['model'])
                     cost_by_row[key]=cost_by_row.get(key,0)+estimate(dict(r),rate)
                     # What the cache reads would have cost as uncached input at the same list rate.
@@ -1172,7 +1220,7 @@ class Store:
                                  monthly_equiv=est*30.44/days if est is not None else None))
         labels = sorted({r['label'] for r in buckets})
         lookup = {(r['bucket'],r['label']):r for r in buckets}
-        running = {label:dict(requests=0,cost=0.0,unpriced=0,**dict.fromkeys(TOKENS,0)) for label in labels}
+        running = {label:dict(requests=0,cost=0.0,unpriced=0,**dict.fromkeys(METRICS,0)) for label in labels}
         series = []
         for begin,finish in intervals:
             t=int(begin.timestamp())
@@ -1190,7 +1238,7 @@ class Store:
                     calendar=calendar,subscriptions=subs,claude_split=claude_split,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,
                     scope=scope,scope_options=scope_options,
                     coverage='로컬·클라우드 요청 기록과 서버 누계를 중복 없이 대조합니다. KST 기준으로 배분 가능한 토큰은 차트에 포함하고, 일자를 확정할 수 없는 계정·세션 누계는 미배분으로 표시합니다. 계정 차이를 dot 사용량으로 단정하지 않습니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
-                    token_note='출력(Output)은 추론(reasoning)을 포함합니다. 캐시 생성(Cache creation)은 별도 입력으로 총 토큰에 한 번만 포함합니다. 추론은 출력의 부분집합이거나 원본 미제공(0)입니다.')
+                    token_note='출력은 추론을 포함하며, 추론 미제공과 실제 0을 수신 건수로 구분합니다. 캐시 생성의 5분·1시간·미확인 값은 생성 합계의 세부 항목입니다. Advisor 토큰은 포함하고 내부 호출 수는 API 요청 수와 따로 표시합니다. 보존 시간이나 해당 단가가 없으면 캐시 생성 기본 단가로 추정합니다.')
 
     def storage_row(self,checked=None):
         """Database, WAL and backup sizes, so growth is visible before it is a problem."""
@@ -1224,14 +1272,19 @@ class Store:
             sources.append(dict(name='일일 백업',checked=None,status='unavailable',detail='아직 실행되지 않음'))
         verify=self.state(c,'verify',{})
         if verify:
+            from .verify import partial
             bad=not verify.get('ok')
-            misses=sum((verify.get(s) or {}).get('missing_events',0) for s in ('antigravity','devin'))
-            mismatch=verify.get('codex',{}).get('mismatches',0)+sum((verify.get(s) or {}).get('mismatched_events',0) for s in ('antigravity','devin'))
-            errors=sum((verify.get(s) or {}).get('source_errors',0) for s in ('antigravity','devin'))
+            sections=('antigravity','devin','codex_original','claude','opencode')
+            misses=sum((verify.get(s) or {}).get('missing_events',0) for s in sections)
+            mismatch=verify.get('codex',{}).get('mismatches',0)+sum((verify.get(s) or {}).get('mismatched_events',0) for s in sections)
+            errors=sum((verify.get(s) or {}).get(k,0) for s in sections
+                       for k in ('source_errors','source_conflicts','alias_errors','output_split_errors'))
+            incomplete=partial(verify)
             sources.append(dict(name='원본 대조',checked=verify.get('ts'),
-                status='error' if bad else 'ok' if time.time()-verify.get('ts',0)<=86400+stale else 'stale',
+                status='error' if bad else 'stale' if time.time()-verify.get('ts',0)>86400+stale else 'partial' if incomplete else 'ok',
                 detail=verify.get('error') or ((f'누락 {misses}건 · 불일치 {mismatch}건 · 오류 {errors}건'
-                       +(' · 시간별 집계가 원본과 달라 다시 계산함' if (verify.get('rollup') or {}).get('matches') is False else '')) if bad else '원본과 일치')))
+                       +(' · 시간별 집계가 원본과 달라 다시 계산함' if (verify.get('rollup') or {}).get('matches') is False else '')) if bad else
+                       '확인 가능한 원본과 일치 · 미수집·해석 불가·과거 원본 부족 또는 세부값 상충이 있어 일부만 확인됨' if incomplete else '원본과 일치')))
         else:
             sources.append(dict(name='원본 대조',checked=None,status='unavailable',detail='아직 실행되지 않음'))
         sources.append(self.storage_row(self.state(c,'last_local')))

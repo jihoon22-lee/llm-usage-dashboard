@@ -19,7 +19,7 @@ from llm_usage.collect import collect_file, collect_opencode, collect_status
 from llm_usage.config import settings
 from llm_usage.limits import codex_limits, status_limits, go_limits
 from llm_usage.pricing import rate_for
-from llm_usage.store import Store, stamp
+from llm_usage.store import Store, stamp, DETAILS
 from llm_usage.statusline import sanitize
 from llm_usage.webapp import create_app
 
@@ -55,7 +55,7 @@ class UsageTests(unittest.TestCase):
         copy=self.root/'windows-copy.jsonl';shutil.copyfile(path,copy)
         collect_file(self.store,copy,'codex');collect_file(self.store,path,'codex')
         totals=self.store.usage(period='all')['totals']
-        self.assertEqual(totals,dict(uncached_input=80,cached_input=170,output=50,cache_creation=0,reasoning=15,requests=2))
+        self.assertEqual(totals,{**dict.fromkeys(DETAILS,0),**dict(uncached_input=80,cached_input=170,output=50,cache_creation=0,reasoning=15,requests=2,reasoning_observed=2)})
         with path.open('a') as f:f.write('{"type":')
         collect_file(self.store,path,'codex')
         self.assertEqual(self.store.usage(period='all')['totals'],totals)
@@ -142,7 +142,7 @@ class UsageTests(unittest.TestCase):
         self.write(path,[row(1),row(100),row(4)])
         collect_file(self.store,path,'claude-code')
         copy=self.root/'mobile-copy.jsonl';shutil.copyfile(path,copy);collect_file(self.store,copy,'claude-code')
-        self.assertEqual(self.store.usage(period='all')['totals'],dict(uncached_input=10,cached_input=40,output=100,cache_creation=20,reasoning=0,requests=1))
+        self.assertEqual(self.store.usage(period='all')['totals'],{**dict.fromkeys(DETAILS,0),**dict(uncached_input=10,cached_input=40,output=100,cache_creation=20,reasoning=0,requests=1,cache_creation_unknown=20)})
         self.assertNotIn(b'PRIVATE BODY',(self.root/'usage.db').read_bytes())
 
     def test_kst_boundary_cumulative_zero_buckets_and_routes(self):
@@ -356,7 +356,7 @@ class UsageTests(unittest.TestCase):
             c.execute('INSERT INTO message VALUES (?,?,?,?)',('request',1788850000000,100,json.dumps(data)))
         collect_opencode(self.store,path);collect_opencode(self.store,path)
         copy=self.root/'copy.db';shutil.copyfile(path,copy);collect_opencode(self.store,copy)
-        self.assertEqual(self.store.usage(period='all')['totals'],dict(uncached_input=10,cached_input=30,output=25,reasoning=5,cache_creation=4,requests=1))
+        self.assertEqual(self.store.usage(period='all')['totals'],{**dict.fromkeys(DETAILS,0),**dict(uncached_input=10,cached_input=30,output=25,reasoning=5,cache_creation=4,requests=1,reasoning_observed=1)})
 
 
     def test_scope_filters_all_sections(self):

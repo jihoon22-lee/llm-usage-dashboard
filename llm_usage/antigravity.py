@@ -16,7 +16,7 @@ from .sqlite_ro import open_readonly
 from .store import TOKENS, identity
 
 # 2: requests carry their conversation as an opaque session identity.
-PARSER_VERSION=2
+PARSER_VERSION=3
 # APIProvider descriptors identify the maker even when a model uses an unnamed placeholder.
 API_MAKERS={24:'Google',26:'Anthropic',31:'OpenAI'}
 
@@ -108,6 +108,7 @@ def step_request(raw,models,model_aliases,enum_models):
             (4,'cache_creation'),(9,'reasoning'),(10,'response_output'))}
     if any(not 0<=value<=2**63-1 for value in nums.values()):raise InvalidUsage('invalid token counter')
     if nums['reasoning']>nums['output']:raise InvalidUsage('reasoning exceeds output')
+    nums['reasoning_observed']=int(9 in usage or 10 in usage)
     # Scalar protobuf zero is valid. A supplied response split must agree with output.
     if 10 in usage and nums['output']!=nums['reasoning']+nums['response_output']:
         raise InvalidUsage('inconsistent output split')
@@ -161,10 +162,10 @@ def save_request(store,c,aliases,record):
     # Unlike component-wise MAX, this retains a real snapshot and its output split.
     # Explicit columns keep the nullable session/project/agent_kind fields NULL.
     # Explicit columns keep the project NULL (the conversation DB records no workspace).
-    c.execute('INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,agent_kind) '
-              'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    c.execute('INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,agent_kind,reasoning_observed) '
+              'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
               (key,best['ts'],best['provider'],'antigravity',best['model'],*(best[k] for k in TOKENS),
-               best.get('session'),'main' if best.get('session') else None))
+               best.get('session'),'main' if best.get('session') else None,best.get('reasoning_observed',0)))
 
 
 def signature(path):

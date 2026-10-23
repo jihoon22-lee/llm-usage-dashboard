@@ -13,7 +13,10 @@ from pathlib import Path
 from .config import local_path, with_local
 from .limits import codex_limits, poll_limits, status_limits
 from .sqlite_ro import open_readonly
+from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
+
+PARSER_VERSION=3
 
 
 def model_provider(model):
@@ -56,16 +59,28 @@ def parse_line(store,c,route,d,state):
     if route=='codex':
         if typ=='session_meta' and not state.get('session'):
             # Fork rollouts embed a second, parent session_meta. The first ID owns this file.
-            state['session']=p.get('id',p.get('session_id'))
+            state['session']=p.get('id') or p.get('session_id')
             state['provider']=p.get('model_provider') or 'openai'
             state['project']=project_label(p.get('cwd'))
             state['agent_kind']=_codex_kind(p)
+            creator=p.get('creator_account_id')
+            if isinstance(creator,str) and re.fullmatch(r'[A-Za-z0-9-]{1,100}',creator):
+                state['account']='codex-account:'+identity(creator)
             if p.get('forked_from_id'):
                 state['fork_started']=stamp(p.get('timestamp') or d.get('timestamp'))
         elif typ=='turn_context':
             if not state.get('fork_started') or (stamp(d.get('timestamp')) or state['fork_started'])>=state['fork_started']:
                 state['has_turn_context']=True
                 if p.get('model'):state['model']=p['model']
+        elif typ=='token_usage_record':
+            ts=stamp(d.get('timestamp'))
+            if not state.get('session') or not ts:return
+            if state.get('fork_started') and (ts<state['fork_started'] or not state.get('has_turn_context')):return
+            route_name='codex' if state.get('provider','openai')=='openai' else 'codex:'+state['provider']
+            provider=model_provider(state.get('model',''))
+            if provider=='Unknown' and state.get('provider')=='openai':provider='OpenAI'
+            from .codex_usage import record
+            record(store,c,p,ts,state,provider,route_name)
         elif typ=='event_msg' and p.get('type')=='token_count':
             ts=stamp(d.get('timestamp'))
             if p.get('rate_limits') and ts:codex_limits(store,c,p['rate_limits'],ts,'codex-local')
@@ -81,18 +96,12 @@ def parse_line(store,c,route,d,state):
             changed=store.codex_point(c,state['session'],ts,provider,route_name,
                                      state.get('model'),usage,p['info'].get('last_token_usage') or usage)
             if changed:state['_dirty']=changed
+            from .codex_usage import bind_pending
+            keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
+            bind_pending(c,state,identity('codex-point',state['session'],ts,[max(0,int(usage.get(k) or 0)) for k in keys]))
     elif typ=='assistant':
-        m=d.get('message',{});u=m.get('usage');ts=stamp(d.get('timestamp'))
-        if not u or not m.get('id') or not ts:return
-        key=identity(route,m['id'])
-        store.event(c,key,ts,model_provider(m.get('model','')),route,m.get('model'),dict(
-            uncached_input=u.get('input_tokens',0),cached_input=u.get('cache_read_input_tokens',0),
-            output=u.get('output_tokens',0),cache_creation=u.get('cache_creation_input_tokens',0),reasoning=u.get('reasoning_output_tokens',0)),
-            session=d.get('sessionId'),project=project_label(d.get('cwd')),
-            agent_kind='sub' if d.get('isSidechain') or d.get('parent_tool_use_id') else 'main')
-        from .reconciliation import aliases,link
-        aliases(c,route,key,m.get('id'),d.get('requestId'),d.get('request_id'),d.get('uuid'))
-        if route=='claude-code' and d.get('sessionId'):link(c,'claude:'+d['sessionId'],key,'local')
+        from .claude_usage import ingest_message
+        ingest_message(store,c,route,d)
 
 
 # Bytes just before the read offset identify the consumed prefix (as a digest only).
@@ -127,9 +136,10 @@ def collect_file(store,path,route):
     stat=path.stat();key='file:'+str(path)
     with store.connect() as c:
         checkpoint=store.state(c,key,{})
-        repair_fork=(route=='codex' and checkpoint.get('parser',{}).get('fork_started') and checkpoint.get('parser_version',0)<1)
+        repair_fork=checkpoint.get('parser_version',0)<PARSER_VERSION
         unchanged=checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino
-        misaligned=_misaligned_errors(c,path,key)
+        packed=compressed(path)
+        misaligned=False if packed else _misaligned_errors(c,path,key)
         if not repair_fork and unchanged and not misaligned:
             return store.error_count(c,key)
         offset=checkpoint.get('offset',0);state=checkpoint.get('parser',{})
@@ -138,12 +148,12 @@ def collect_file(store,path,route):
         if isinstance(project,str) and ('/' in project or '\\' in project or ':' in project):
             state['project']=project_label(project)
         rewritten=(checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')!=stat.st_mtime_ns) or misaligned
-        if (repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
+        if (packed or repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
                 or _prefix_changed(path,checkpoint)):
             # Event IDs deduplicate the lines read again.
             offset=0;state={}
             c.execute('DELETE FROM import_errors WHERE source=?',(key,))
-        with path.open('rb') as f:
+        with open_record(path) as f:
             f.seek(offset)
             while True:
                 start=f.tell();line=f.readline()
@@ -158,7 +168,7 @@ def collect_file(store,path,route):
                                     dict(session=state.get('session'),project=state.get('project'),
                                          agent_kind=state.get('agent_kind')))
             end=f.tell();f.seek(max(0,end-TAIL_BYTES));tail=hashlib.sha256(f.read(end-max(0,end-TAIL_BYTES))).hexdigest()
-            store.save_state(c,key,dict(parser_version=1,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
+            store.save_state(c,key,dict(parser_version=PARSER_VERSION,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
             return store.error_count(c,key)
 
 def changed_files(store,root,paths):
@@ -175,7 +185,7 @@ def changed_files(store,root,paths):
         except OSError:continue
         try:checkpoint=json.loads(saved[key]) if key in saved else {}
         except ValueError:checkpoint={}
-        unchanged=(checkpoint.get('parser_version',0)>=1 and checkpoint.get('size')==stat.st_size
+        unchanged=(checkpoint.get('parser_version',0)>=PARSER_VERSION and checkpoint.get('size')==stat.st_size
                    and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino)
         if unchanged and key not in failing:continue
         yield path
@@ -187,6 +197,7 @@ def collect_opencode(store,path):
         with store.connect() as c:
             key='opencode:'+str(path)
             checkpoint=store.state(c,key,0)
+            if not store.state(c,key+':details-v1'):checkpoint=0
             newest=checkpoint
             cols={r[1] for r in src.execute('PRAGMA table_info(message)')}
             has_session='session_id' in cols and src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
@@ -202,7 +213,8 @@ def collect_opencode(store,path):
                         # OpenCode output excludes reasoning, input excludes cache read/write.
                         store.event(c,identity('opencode',mid),created/1000,model_provider(model),d.get('providerID','opencode'),model,
                                     dict(uncached_input=t.get('input',0),cached_input=cache.get('read',0),cache_creation=cache.get('write',0),
-                                         output=t.get('output',0)+t.get('reasoning',0),reasoning=t.get('reasoning',0)),
+                                         output=t.get('output',0)+t.get('reasoning',0),reasoning=t.get('reasoning',0),
+                                         reasoning_observed=int(t.get('reasoning') is not None)),
                                     session=sid,project=project_label(directory),
                                     agent_kind='sub' if parent_id else 'main')
                     c.execute('DELETE FROM import_errors WHERE source=? AND record=?',(key,mid))
@@ -219,12 +231,29 @@ def collect_opencode(store,path):
             for row in src.execute(sel+(' WHERE m.time_updated>=? ORDER BY m.time_updated' if has_session else ' WHERE time_updated>=? ORDER BY time_updated'),(checkpoint,)):
                 newest=max(newest,row[2]);ingest(row)
             store.save_state(c,key,newest)
+            store.save_state(c,key+':details-v1',True)
             return store.error_count(c,key)
     finally:src.close()
 
 
+def local_sources(store,settings):
+    from .claude_accounts import observed_homes,transcript_sources
+    with store.connect() as c:known=observed_homes(store,c)
+    return transcript_sources(settings,known)
+
+
 def collect_local(store,settings,*,include_derived=True):
-    for source in settings['sources']:
+    progress=time.monotonic()
+    def heartbeat():
+        nonlocal progress
+        if time.monotonic()-progress<5:return
+        sd_notify('WATCHDOG=1')
+        with store.connect() as c:
+            current=store.state(c,'collector',{})
+            if current.get('status')=='collecting':
+                store.save_state(c,'collector',{**current,'checked':time.time()})
+        progress=time.monotonic()
+    for source in local_sources(store,settings):
         if source['kind'] in ('antigravity','devin'):continue
         root=Path(source['path']);route=source['route'];name=source['name']
         try:
@@ -233,9 +262,15 @@ def collect_local(store,settings,*,include_derived=True):
                 continue
             if source['kind']=='opencode':errors=collect_opencode(store,root);count=1
             else:
-                paths=sorted(root.rglob('*.jsonl'))
+                paths=record_files(root)
                 count=len(paths)
-                errors=sum(collect_file(store,path,route) for path in changed_files(store,root,paths))
+                for path in changed_files(store,root,paths):
+                    try:collect_file(store,path,route)
+                    except (OSError,EOFError,ValueError,RecordReadError) as exc:
+                        with store.connect() as c:store.import_error(c,'file:'+str(path),'file',type(exc).__name__)
+                    # A full parser upgrade can span several minutes. This marks
+                    # committed progress, while status remains explicitly collecting.
+                    heartbeat()
                 # Errors of the files present now, as the per-file counts used to sum.
                 current={'file:'+str(path) for path in paths}
                 with store.connect() as c:
@@ -252,8 +287,11 @@ def collect_local(store,settings,*,include_derived=True):
                     store.save_state(c,'permanent_errors:'+name,perm)
                     errors=c.execute('SELECT COUNT(*) FROM import_errors WHERE source LIKE ?',
                                      ('file:'+str(root)+'/%',)).fetchone()[0]
+                unsupported=unsupported_files(root) if source['kind']=='jsonl' else 0
                 detail=f'{count}개 기록 파일 확인 · 해석 실패 {errors}건'+(f' · 누적 영구 실패 {perm}건' if perm else '')
-                store.source(c,name,'partial' if errors else 'ok',detail)
+                if unsupported:detail+=f' · 미지원 압축 기록 {unsupported}개'
+                store.source(c,name,'partial' if errors or unsupported else 'ok',detail)
+            heartbeat()
         except Exception as exc:
             with store.connect() as c:store.source(c,name,'error',f'로컬 수집 실패 ({type(exc).__name__})')
     if include_derived:
@@ -261,7 +299,12 @@ def collect_local(store,settings,*,include_derived=True):
         collect_databases(store,settings,model_provider)
         from .devin import collect_databases as collect_devin
         collect_devin(store,settings,model_provider)
-    with store.connect() as c:store.save_state(c,'last_local',time.time())
+    with store.connect() as c:
+        from .codex_usage import summary
+        summary(store,c)
+        from .claude_usage import summary as claude_summary
+        claude_summary(store,c)
+        store.save_state(c,'last_local',time.time())
 
 
 def collect_antigravity_tokens(store,settings):
@@ -393,15 +436,34 @@ def prepare_normalization(store,settings):
                 missing+=c.execute('''SELECT COUNT(*) FROM codex_points p
                   WHERE NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=p.id)
                   AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=p.id)''').fetchone()[0]
+                missing+=c.execute('''SELECT COUNT(*) FROM codex_responses p WHERE NOT EXISTS
+                  (SELECT 1 FROM staged.codex_responses n WHERE n.id=p.id AND n.session=p.session AND n.usage=p.usage
+                   AND (p.account IS NULL OR n.account IS NULL OR p.account=n.account))''').fetchone()[0]
                 if bad or missing:
                     store.source(c,'normalization','error','원본을 모두 복구할 수 없어 보정을 보류했습니다. 기존 통계를 유지합니다.')
                     return False
                 c.execute('DELETE FROM codex_points')
                 c.execute('INSERT INTO codex_points SELECT * FROM staged.codex_points')
+                c.execute('''UPDATE staged.codex_responses SET account=
+                  (SELECT p.account FROM main.codex_responses p WHERE p.id=staged.codex_responses.id) WHERE account IS NULL''')
+                c.execute('DELETE FROM codex_response_links')
+                c.execute('DELETE FROM codex_responses')
+                c.execute('INSERT INTO codex_responses SELECT * FROM staged.codex_responses')
+                c.execute('INSERT INTO codex_response_links SELECT * FROM staged.codex_response_links')
                 c.execute('INSERT OR IGNORE INTO inherited_points SELECT * FROM staged.inherited_points')
                 c.execute('DELETE FROM session_quality')
+                # Replaying files is not new account evidence. Keep proven parent
+                # ownership, including for newly recovered advisor children.
+                c.execute('''UPDATE staged.events SET account=COALESCE(
+                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.id),
+                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.parent_id)) WHERE account IS NULL''')
                 c.execute("DELETE FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
                 c.execute("INSERT INTO events SELECT * FROM staged.events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
+                # Native projection and cloud/telemetry deduplication require the
+                # same evidence that produced the copied events and checkpoints.
+                c.execute('INSERT OR IGNORE INTO usage_aliases SELECT * FROM staged.usage_aliases')
+                c.execute('INSERT OR IGNORE INTO usage_links SELECT * FROM staged.usage_links')
+                c.execute('INSERT OR IGNORE INTO usage_origins SELECT * FROM staged.usage_origins')
                 c.execute("DELETE FROM state WHERE key LIKE 'file:%' OR key LIKE 'permanent_errors:%'")
                 c.execute("DELETE FROM import_errors WHERE source LIKE 'file:%'")
                 c.execute("INSERT INTO state SELECT * FROM staged.state WHERE key LIKE 'file:%'")
@@ -434,7 +496,7 @@ def backfill_jsonl(store,path,route):
     """Attribute pre-migration events from one JSONL record file."""
     if route.startswith('codex'):
         meta=None
-        with path.open('rb') as f:
+        with open_record(path) as f:
             for line in f:
                 if b'session_meta' not in line:continue
                 meta=_codex_meta(line)
@@ -448,7 +510,7 @@ def backfill_jsonl(store,path,route):
             store.bump_data_version(c)
     elif route=='claude-code':
         updates={}
-        with path.open('rb') as f:
+        with open_record(path) as f:
             for line in f:
                 if b'"assistant"' not in line:continue
                 try:d=json.loads(line)
@@ -513,14 +575,14 @@ def backfill_attribution(store,settings):
         if store.state(c,'backfill_v2'):return
         store.source(c,'session-backfill','partial','세션·프로젝트 귀속 백필 진행 중')
     failures=[]
-    for source in settings.get('sources',[]):
+    for source in local_sources(store,settings):
         kind=source.get('kind');route=source.get('route') or '';root=Path(source['path'])
         if kind in ('antigravity','devin') or not root.exists():continue
         try:
             if kind=='opencode':backfill_opencode(store,root)
             elif route=='claude-code' or route.startswith('codex'):
-                for path in root.rglob('*.jsonl'):backfill_jsonl(store,path,route)
-        except (OSError,sqlite3.Error):
+                for path in record_files(root):backfill_jsonl(store,path,route)
+        except (OSError,sqlite3.Error,EOFError,RecordReadError):
             failures.append(source['name'])
     try:backfill_devin(store,settings)
     except (OSError,sqlite3.Error):failures.append('devin')
@@ -596,8 +658,9 @@ def run(settings,once=False):
         last_local=last_limits=last_accounts=0
         with store.connect() as c:
             backup=store.state(c,'backup',{}) or {};verify=store.state(c,'verify',{}) or {}
+        from .verify import VERIFY_FORMAT
         last_backup,backup_ok=backup.get('ts',0),backup.get('ok',True)
-        last_verify,verify_ok=verify.get('ts',0),verify.get('ok',True)
+        last_verify,verify_ok=verify.get('ts',0) if verify.get('format')==VERIFY_FORMAT else 0,verify.get('ok',True)
         local_seen=False
         from .notify import collector_started,evaluate as notify_evaluate,record_failure as notify_failure
         try:collector_started(store,with_local(settings).get('notify'))
@@ -621,7 +684,7 @@ def run(settings,once=False):
             now=time.time()
             manual=request>completed
             if once or manual or now-last_local>=300:
-                with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now))
+                with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now,checked=now))
                 if prepare_normalization(store,settings):
                     backfill_attribution(store,settings)
                     collect_local(store,settings)
@@ -677,8 +740,8 @@ def run(settings,once=False):
                     # The hourly rollup must equal the events it summarises; rebuild it if not.
                     rollup_ok=store.rollup_matches()
                     if not rollup_ok:store.rebuild_rollup()
-                    outcome=dict(ts=time.time(),ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
-                except Exception as e:outcome=dict(ts=time.time(),ok=False,error=str(e))
+                    outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
+                except Exception as e:outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=False,error=str(e))
                 with store.connect() as c:store.save_state(c,'verify',outcome)
                 last_verify=time.time();verify_ok=bool(outcome.get('ok'))
             with store.connect() as c:

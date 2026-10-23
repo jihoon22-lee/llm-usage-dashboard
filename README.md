@@ -5,7 +5,7 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.7.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.7.1)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.8.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.8.0)** · [변경 기록](CHANGELOG.md)
 
 수집 기준: [클라우드 누계 대조·한국시간 미배분량·선택적 telemetry](docs/collection-reconciliation.md).
 
@@ -41,10 +41,16 @@ Claude 계정이 여러 개면 각 설정 홈의 로그인으로 한도·자원�
 
 기본 Claude 홈에 로그인이 없어도 식별된 다른 홈의 단독 transcript는 그 계정으로 집계합니다. 같은 계정으로 나중에 기본 홈에 로그인해도 최초 계정 경로를 유지해 사용량·구독료·자원이 갈라지지 않습니다. 이전 버전의 잘못된 기본 계정 배정은 기본 계정이 아직 미확정이고 원본 폴더의 소유가 명확할 때 한 번 보정합니다. 이미 기본 계정이 확정됐거나 같은 세션이 여러 독립 폴더에 있으면 과거 계정을 입증할 수 없어 자동 이동하지 않습니다. 클라우드에서 확정한 귀속은 유지합니다.
 
+선택된 사용자 홈·명시한 Claude 홈·허용된 훅 관측에서 발견한 `projects` 폴더는 자동 수집하고, 기존 경로와 같은 심볼릭 링크는 중복 등록하지 않습니다. 요청 ID에 연결된 Claude telemetry의 계정/조직 UUID는 해시한 귀속 근거로 사용할 수 있으며 이메일·익명 설치 ID는 계정 근거로 쓰지 않습니다. 선택적 exporter가 연결되지 않은 SDK/headless 실행은 계속 미확인으로 남을 수 있습니다.
+
 [구조와 수집 경로](docs/architecture.md)에서 과거 실수신과 합성 검증을 구분합니다.
 Windows는 선택한 프로필의 **기록 수집 대상**입니다. Windows/macOS 네이티브 서버 설치는 지원하지 않습니다.
 
-0.7.1의 추가 확인된 제한: Codex의 `token_usage_record`를 읽지 않아 요청별 원본으로 복구할 수 있는 일부 누계 기준선 차이가 남습니다. Claude `advisor_message` 사용량과 중첩 thinking 필드, 5분/1시간 캐시 생성 구분도 아직 반영하지 않습니다. Codex `.jsonl.zst`는 직접 읽지 않으며 Codex telemetry의 요청 ID 연결도 미구현입니다. 기존 최상위 토큰 집계가 통과해도 이 항목의 수집 완료를 뜻하지 않습니다. [실제 원본 대조·재현·후속 작업](workthrough/2026-10-23-collection-coverage.md)을 확인하세요.
+Codex의 `token_usage_record`는 요청 ID별로 보존하고 연결된 누계 이벤트를 대신해 한 번만 집계합니다. 누계만 남은 과거 기록은 보존하며, 연결이 모호하거나 원본이 상충하면 수집 상태에 표시합니다. `.jsonl.zst` 압축 기록과 압축 전후 사본도 처리합니다. Codex telemetry는 원본 응답 ID가 확인될 때 연결하며 실제 exporter가 연결되지 않은 상태는 실수신 완료로 표시하지 않습니다.
+
+Claude `advisor_message`는 부모 요청에 연결된 별도 모델 소비로 포함하고 내부 호출 수를 API 요청 수와 구분합니다. 중첩 thinking 필드와 캐시 생성의 5분·1시간 분해를 보존하며 출력·전체 생성 토큰에 다시 더하지 않습니다. 캐시 분해가 원본 합계와 맞지 않거나 서로 상충하면 전체 토큰은 보존하고 분해만 미확인으로 표시합니다. TTL이나 해당 단가가 없는 생성량은 기존 기본 단가로 추정합니다. 삭제된 원본의 reasoning·TTL은 소급 복구할 수 없습니다. [원본 대조·재현·보완 기록](workthrough/2026-10-23-collection-coverage.md)을 확인하세요.
+
+일일 원본 대조는 Codex 요청별 일반·압축 기록, Claude 부모·advisor, OpenCode와 기존 누계·Antigravity·Devin을 수집기와 별도로 읽어 검사합니다. 수집 완료 지점 뒤의 새 기록은 대기, 해석 실패·세부값 상충·현재 원본보다 큰 과거 보존값은 부분 확인으로 구분합니다. 실제 누락과 숫자 불일치는 오류로 표시하며, 삭제된 원본까지 검증됐다고 간주하지 않습니다.
 
 최근 1시간은 계정 전체나 현재 실행 중인 작업이 아닌 **수집된 로컬 사용 기록**을 보여 줍니다. 프로젝트·세션 정보가 없는 기록도 전체 합계에 포함하며 미분류·미귀속을 표시합니다. 요약과 상세는 같은 시간 범위를 사용합니다. 한도 감소량은 계정·출처·초기화·수집 공백을 구분한 연속 15분 이상의 관측이 있을 때만 표시합니다. 확인된 감소량 0과 관측 부족은 다르며, 부족한 이력으로 예측 카드를 만들지 않습니다.
 
@@ -62,7 +68,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.7.1 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.8.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -71,7 +77,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.7.1의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.8.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.

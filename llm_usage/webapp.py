@@ -293,11 +293,12 @@ def create_app(config=None):
         model=body.get('model')
         if not isinstance(model,str) or not MODEL_RE.match(model):abort(400,description='모델 이름을 확인하세요.')
         rates={}
-        for key in ('input','cached','output','cache_write'):
+        cleared={key for key in ('cache_write_5m','cache_write_1h') if key in body and body[key] is None}
+        for key in ('input','cached','output','cache_write','cache_write_5m','cache_write_1h'):
             if body.get(key) is None:continue
             if not number(body[key],0,10000):abort(400,description='단가는 0~10000 범위의 숫자여야 합니다.')
             rates[key]=body[key]
-        if not rates and not body.get('delete') and not body.get('hide') and not body.get('unhide'):
+        if not rates and not cleared and not body.get('delete') and not body.get('hide') and not body.get('unhide'):
             abort(400,description='단가를 입력하세요.')
         from .pricing import BUILTIN,_read_json,entry_key
         # 'delete' removes the user value and falls back to the builtin rate
@@ -330,7 +331,7 @@ def create_app(config=None):
                 if body.get('hide'):current[model]=None
                 elif body.get('unhide'):unhide(current,lower_keys)
                 elif body.get('delete'):delete(current,lower_keys)
-                else:current[model]=edited_rates(effective_entry(),rates,today())
+                else:current[model]=edited_rates(effective_entry(),rates,today(),remove=cleared)
                 atomic_json(path,current)
             else:
                 lower_keys=set(_read_json(config.get('pricing_file') or ''))
@@ -338,7 +339,7 @@ def create_app(config=None):
                 if body.get('hide'):target[model]=None
                 elif body.get('unhide'):unhide(target,lower_keys)
                 elif body.get('delete'):delete(target,lower_keys)
-                else:target[model]=edited_rates(effective_entry(),rates,today())
+                else:target[model]=edited_rates(effective_entry(),rates,today(),remove=cleared)
         return jsonify(model=model,deleted=bool(body.get('delete')),hidden=bool(body.get('hide')))
 
     @app.post('/api/config/thresholds')

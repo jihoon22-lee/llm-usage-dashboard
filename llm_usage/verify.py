@@ -1,10 +1,8 @@
-"""Read-only reconciliation of events against retained original observations.
+"""Read-only reconciliation against original records and retained observations.
 
-The collector keeps raw cumulative points (codex_points), per-response protobuf
-metadata (antigravity), and Devin's own sessions.db checkpoints, so this module
-re-derives expected values without calling any collector/parser code and
-compares them to the events table. Used by tests/verify_record_totals.py and by
-the collector's daily self-check.
+Codex request records, Claude transcripts, OpenCode, Antigravity and Devin are
+read independently of their ingestion parsers. Retained Codex cumulative points
+also verify legacy history and its overlap with native requests.
 """
 import hashlib
 import json
@@ -18,37 +16,68 @@ from .devin import checkpoint_of as _checkpoint_of, model_name as _model_name
 from .sqlite_ro import open_readonly
 from .store import identity as _identity
 
+VERIFY_FORMAT=2
+
 
 def reconcile(path, cfg):
     path = Path(path)
-    return dict(codex=_codex(path), antigravity=_antigravity(path, cfg), devin=_devin(path, cfg))
+    from .verify_sources import reconcile_sources
+    return dict(codex=_codex(path), antigravity=_antigravity(path, cfg), devin=_devin(path, cfg),
+                **reconcile_sources(path,cfg))
 
 
 def failed(result):
     codex, agy, dev = result['codex'], result['antigravity'], result['devin']
     return bool(codex['mismatches'] or dev['missing_events'] or dev['mismatched_events'] or dev['source_errors']
+        or any((result.get(section) or {}).get(k,0) for section in ('codex_original','claude','opencode')
+               for k in ('missing_events','mismatched_events','source_errors','source_conflicts'))
         or any(agy[k] for k in ('source_errors', 'source_conflicts', 'output_split_errors',
                                 'missing_events', 'mismatched_events', 'alias_errors')))
 
 
+def partial(result):
+    """A successful comparison may still have unreadable or uncollected evidence."""
+    return bool(any((result.get(s) or {}).get(k,0) for s in ('codex_original','claude','opencode')
+                    for k in ('unreadable_records','pending_files','pending_records','unavailable_sources',
+                              'unsupported_files','retained_larger','detail_inconsistent_records','detail_conflicts'))
+                or any((result.get('codex') or {}).get(k,0) for k in ('native_pending','native_conflicts',
+                       'ambiguous_timestamp_sessions','inconsistent_component_sessions')))
+
+
 def _codex(path):
+    path=Path(path)
     counts = dict(matched_complete_monotonic_sessions=0, matched_counter_reset_sessions=0,
                   matched_partial_baseline_sessions=0, ambiguous_timestamp_sessions=0,
-                  inconsistent_component_sessions=0, zero_request_baseline_sessions=0)
+                  inconsistent_component_sessions=0, zero_request_baseline_sessions=0,
+                  native_requests=0, native_pending=0, native_conflicts=0, matched_native_sessions=0)
     failures = []
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro', uri=True)) as c:
         c.row_factory = sqlite3.Row; c.execute('BEGIN')
-        sessions = [r[0] for r in c.execute('SELECT DISTINCT session FROM codex_points')]
+        native=bool(c.execute("SELECT 1 FROM sqlite_master WHERE name='codex_responses'").fetchone())
+        sessions = {r[0] for r in c.execute('SELECT DISTINCT session FROM codex_points')}
+        if native:sessions.update(r[0] for r in c.execute('SELECT DISTINCT session FROM codex_responses'))
         for session in sessions:
             rows = c.execute('SELECT * FROM codex_points WHERE session=? ORDER BY ts,input,output,id', (session,)).fetchall()
+            responses=c.execute('SELECT * FROM codex_responses WHERE session=?',(session,)).fetchall() if native else []
             columns = ('input', 'cached', 'output', 'creation', 'reasoning')
             observations = [(row['ts'], tuple(row[k] for k in columns), tuple(row['last_'+k] for k in columns)) for row in rows]
+            native_bad=False
+            for row in responses:
+                counts['native_requests']+=1;counts['native_pending']+=not row['projected'];counts['native_conflicts']+=bool(row['conflict'])
+                actual=c.execute('SELECT uncached_input+cached_input+cache_creation,cached_input,output,cache_creation,reasoning FROM events WHERE id=?',(row['id'],)).fetchone()
+                if row['projected'] and any(json.loads(row['usage'])):
+                    native_bad=native_bad or actual is None or tuple(actual)!=tuple(json.loads(row['usage']))
+                elif actual is not None:native_bad=True
             if any(a[0] == b[0] and a[1] != b[1] for a, b in zip(observations, observations[1:])):
-                counts['ambiguous_timestamp_sessions'] += 1; continue
-            previous = None; expected = [0]*5; reset = False; partial = observations[0][1] != observations[0][2]; invalid = False
-            baseline = False; has_baseline = False
-            for _, current, last in observations:
-                if current == previous: continue
+                counts['ambiguous_timestamp_sessions'] += 1
+                if native_bad:failures.append({'session':session[:8],'native_mismatch':True})
+                continue
+            previous = None; reset = False; partial = bool(observations and observations[0][1] != observations[0][2]); invalid = False
+            baseline = False; has_baseline = False; expected_by_id={};groups={};last_id=None
+            for row,(_, current, last) in zip(rows,observations):
+                if current == previous:
+                    groups[row['id']]=last_id
+                    continue
                 restarted = previous is not None and (current[0] < previous[0] or current[2] < previous[2])
                 reset = reset or restarted
                 delta = last if previous is None or restarted else tuple(max(0, a-b) for a, b in zip(current, previous))
@@ -58,16 +87,37 @@ def _codex(path):
                     if baseline and delta != last: delta = last
                     baseline = False
                 if delta[0] < delta[1]+delta[3] or delta[2] < delta[4]: invalid = True
-                expected = [a+b for a, b in zip(expected, delta)]; previous = current
+                if any(delta):expected_by_id[row['id']]=delta
+                last_id=row['id'] if any(delta) else None;groups[row['id']]=last_id;previous = current
             if invalid:
                 counts['inconsistent_component_sessions'] += 1; continue
             if has_baseline: counts['zero_request_baseline_sessions'] += 1
+            times={r['id']:r['ts'] for r in rows}
+            links={r['id']:set() for r in responses}
+            if responses:
+                for rid,pid in c.execute('SELECT l.response_id,l.point_id FROM codex_response_links l '
+                                         'JOIN codex_responses r ON r.id=l.response_id WHERE r.session=?',(session,)):
+                    if pid in groups:links[rid].add(pid)
+            for response in responses:
+                linked=links[response['id']]
+                overlap=not linked and rows and rows[0]['ts']-2<=response['ts']<=rows[-1]['ts']+2
+                should_project=not overlap
+                if bool(response['projected'])!=should_project:native_bad=True
+                if not should_project:continue
+                for pid in linked:
+                    parent=groups[pid]
+                    if parent and (parent==pid or response['ts']<=times[parent]):expected_by_id.pop(parent,None)
+                expected_by_id[response['id']]=tuple(json.loads(response['usage']))
+            expected=tuple(sum(v[i] for v in expected_by_id.values()) for i in range(5))
             actual = tuple(c.execute('''SELECT COALESCE(SUM(uncached_input+cached_input+cache_creation),0),
               COALESCE(SUM(cached_input),0),COALESCE(SUM(output),0),COALESCE(SUM(cache_creation),0),COALESCE(SUM(reasoning),0)
-              FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)''', (session,)).fetchone())
-            if actual != tuple(expected):
-                failures.append({'session': session[:8], 'actual': actual, 'expected': tuple(expected)})
+              FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)'''+
+              (' OR id IN (SELECT id FROM codex_responses WHERE session=?)' if native else ''),
+              (session,session) if native else (session,)).fetchone())
+            if actual != expected or native_bad:
+                failures.append({'session': session[:8], 'actual': actual, 'expected': expected,'native_mismatch':native_bad})
             else:
+                if responses:counts['matched_native_sessions']+=1
                 counts['matched_counter_reset_sessions' if reset else 'matched_partial_baseline_sessions' if partial
                        else 'matched_complete_monotonic_sessions'] += 1
     return {**counts, 'mismatches': len(failures), 'mismatch_samples': failures[:10]}

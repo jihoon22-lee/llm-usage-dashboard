@@ -11,7 +11,8 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange})`,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange,
+  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -25,6 +26,19 @@ test('escaping and number formats',()=>{
   assert.equal(f.percent(12.345),'12.3%');
   assert.equal(f.pctChange(12.6),'+13%');
   assert.equal(f.pctChange(null),'—');
+});
+
+test('usage details retain unknown values and never add subsets to the total',()=>{
+ const row={uncached_input:100,output:40,reasoning:25,reasoning_observed:1,cache_creation:30,
+  cache_creation_5m:10,cache_creation_1h:20,cache_ttl_observed:1,requests:1,advisor_calls:2};
+ assert.equal(f.total(row),170);
+ assert.equal(f.callText(row),'1회 요청 · Advisor 2회');
+ assert.equal(f.reasoningKnown({reasoning:0,reasoning_observed:1}),true);
+ assert.equal(f.reasoningKnown({reasoning:0,reasoning_observed:0}),false);
+ assert.match(f.usageDetailsText(row),/5분 10 · 1시간 20/);
+ assert.equal(f.detailCsvFields({cache_creation_unknown:30})[2],'');
+ assert.equal(f.detailCsvFields({cache_ttl_observed:1,cache_creation_5m:0})[2],0);
+ assert.equal(f.estimateWith([row],{input:1,output:2,cache_write:1.25,cache_write_1h:2}),232.5/1e6);
 });
 
 test('provider totals preserve tokens with an unavailable breakdown',()=>{
