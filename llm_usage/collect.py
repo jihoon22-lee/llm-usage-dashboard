@@ -243,6 +243,16 @@ def local_sources(store,settings):
 
 
 def collect_local(store,settings,*,include_derived=True):
+    progress=time.monotonic()
+    def heartbeat():
+        nonlocal progress
+        if time.monotonic()-progress<5:return
+        sd_notify('WATCHDOG=1')
+        with store.connect() as c:
+            current=store.state(c,'collector',{})
+            if current.get('status')=='collecting':
+                store.save_state(c,'collector',{**current,'checked':time.time()})
+        progress=time.monotonic()
     for source in local_sources(store,settings):
         if source['kind'] in ('antigravity','devin'):continue
         root=Path(source['path']);route=source['route'];name=source['name']
@@ -258,6 +268,9 @@ def collect_local(store,settings,*,include_derived=True):
                     try:collect_file(store,path,route)
                     except (OSError,EOFError,ValueError,RecordReadError) as exc:
                         with store.connect() as c:store.import_error(c,'file:'+str(path),'file',type(exc).__name__)
+                    # A full parser upgrade can span several minutes. This marks
+                    # committed progress, while status remains explicitly collecting.
+                    heartbeat()
                 # Errors of the files present now, as the per-file counts used to sum.
                 current={'file:'+str(path) for path in paths}
                 with store.connect() as c:
@@ -278,6 +291,7 @@ def collect_local(store,settings,*,include_derived=True):
                 detail=f'{count}개 기록 파일 확인 · 해석 실패 {errors}건'+(f' · 누적 영구 실패 {perm}건' if perm else '')
                 if unsupported:detail+=f' · 미지원 압축 기록 {unsupported}개'
                 store.source(c,name,'partial' if errors or unsupported else 'ok',detail)
+            heartbeat()
         except Exception as exc:
             with store.connect() as c:store.source(c,name,'error',f'로컬 수집 실패 ({type(exc).__name__})')
     if include_derived:
@@ -625,8 +639,9 @@ def run(settings,once=False):
         last_local=last_limits=last_accounts=0
         with store.connect() as c:
             backup=store.state(c,'backup',{}) or {};verify=store.state(c,'verify',{}) or {}
+        from .verify import VERIFY_FORMAT
         last_backup,backup_ok=backup.get('ts',0),backup.get('ok',True)
-        last_verify,verify_ok=verify.get('ts',0),verify.get('ok',True)
+        last_verify,verify_ok=verify.get('ts',0) if verify.get('format')==VERIFY_FORMAT else 0,verify.get('ok',True)
         local_seen=False
         from .notify import collector_started,evaluate as notify_evaluate,record_failure as notify_failure
         try:collector_started(store,with_local(settings).get('notify'))
@@ -650,7 +665,7 @@ def run(settings,once=False):
             now=time.time()
             manual=request>completed
             if once or manual or now-last_local>=300:
-                with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now))
+                with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now,checked=now))
                 if prepare_normalization(store,settings):
                     backfill_attribution(store,settings)
                     collect_local(store,settings)
@@ -706,8 +721,8 @@ def run(settings,once=False):
                     # The hourly rollup must equal the events it summarises; rebuild it if not.
                     rollup_ok=store.rollup_matches()
                     if not rollup_ok:store.rebuild_rollup()
-                    outcome=dict(ts=time.time(),ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
-                except Exception as e:outcome=dict(ts=time.time(),ok=False,error=str(e))
+                    outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
+                except Exception as e:outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=False,error=str(e))
                 with store.connect() as c:store.save_state(c,'verify',outcome)
                 last_verify=time.time();verify_ok=bool(outcome.get('ok'))
             with store.connect() as c:

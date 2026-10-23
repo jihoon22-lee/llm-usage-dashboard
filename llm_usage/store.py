@@ -1272,14 +1272,19 @@ class Store:
             sources.append(dict(name='일일 백업',checked=None,status='unavailable',detail='아직 실행되지 않음'))
         verify=self.state(c,'verify',{})
         if verify:
+            from .verify import partial
             bad=not verify.get('ok')
-            misses=sum((verify.get(s) or {}).get('missing_events',0) for s in ('antigravity','devin'))
-            mismatch=verify.get('codex',{}).get('mismatches',0)+sum((verify.get(s) or {}).get('mismatched_events',0) for s in ('antigravity','devin'))
-            errors=sum((verify.get(s) or {}).get('source_errors',0) for s in ('antigravity','devin'))
+            sections=('antigravity','devin','codex_original','claude','opencode')
+            misses=sum((verify.get(s) or {}).get('missing_events',0) for s in sections)
+            mismatch=verify.get('codex',{}).get('mismatches',0)+sum((verify.get(s) or {}).get('mismatched_events',0) for s in sections)
+            errors=sum((verify.get(s) or {}).get(k,0) for s in sections
+                       for k in ('source_errors','source_conflicts','alias_errors','output_split_errors'))
+            incomplete=partial(verify)
             sources.append(dict(name='원본 대조',checked=verify.get('ts'),
-                status='error' if bad else 'ok' if time.time()-verify.get('ts',0)<=86400+stale else 'stale',
+                status='error' if bad else 'stale' if time.time()-verify.get('ts',0)>86400+stale else 'partial' if incomplete else 'ok',
                 detail=verify.get('error') or ((f'누락 {misses}건 · 불일치 {mismatch}건 · 오류 {errors}건'
-                       +(' · 시간별 집계가 원본과 달라 다시 계산함' if (verify.get('rollup') or {}).get('matches') is False else '')) if bad else '원본과 일치')))
+                       +(' · 시간별 집계가 원본과 달라 다시 계산함' if (verify.get('rollup') or {}).get('matches') is False else '')) if bad else
+                       '확인 가능한 원본과 일치 · 미수집·해석 불가·과거 원본 부족 또는 세부값 상충이 있어 일부만 확인됨' if incomplete else '원본과 일치')))
         else:
             sources.append(dict(name='원본 대조',checked=None,status='unavailable',detail='아직 실행되지 않음'))
         sources.append(self.storage_row(self.state(c,'last_local')))

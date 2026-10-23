@@ -1,10 +1,8 @@
-"""Read-only reconciliation of events against retained original observations.
+"""Read-only reconciliation against original records and retained observations.
 
-The collector keeps raw cumulative points (codex_points), per-response protobuf
-metadata (antigravity), and Devin's own sessions.db checkpoints, so this module
-re-derives expected values without calling any collector/parser code and
-compares them to the events table. Used by tests/verify_record_totals.py and by
-the collector's daily self-check.
+Codex request records, Claude transcripts, OpenCode, Antigravity and Devin are
+read independently of their ingestion parsers. Retained Codex cumulative points
+also verify legacy history and its overlap with native requests.
 """
 import hashlib
 import json
@@ -18,17 +16,32 @@ from .devin import checkpoint_of as _checkpoint_of, model_name as _model_name
 from .sqlite_ro import open_readonly
 from .store import identity as _identity
 
+VERIFY_FORMAT=2
+
 
 def reconcile(path, cfg):
     path = Path(path)
-    return dict(codex=_codex(path), antigravity=_antigravity(path, cfg), devin=_devin(path, cfg))
+    from .verify_sources import reconcile_sources
+    return dict(codex=_codex(path), antigravity=_antigravity(path, cfg), devin=_devin(path, cfg),
+                **reconcile_sources(path,cfg))
 
 
 def failed(result):
     codex, agy, dev = result['codex'], result['antigravity'], result['devin']
     return bool(codex['mismatches'] or dev['missing_events'] or dev['mismatched_events'] or dev['source_errors']
+        or any((result.get(section) or {}).get(k,0) for section in ('codex_original','claude','opencode')
+               for k in ('missing_events','mismatched_events','source_errors','source_conflicts'))
         or any(agy[k] for k in ('source_errors', 'source_conflicts', 'output_split_errors',
                                 'missing_events', 'mismatched_events', 'alias_errors')))
+
+
+def partial(result):
+    """A successful comparison may still have unreadable or uncollected evidence."""
+    return bool(any((result.get(s) or {}).get(k,0) for s in ('codex_original','claude','opencode')
+                    for k in ('unreadable_records','pending_files','pending_records','unavailable_sources',
+                              'unsupported_files','retained_larger','detail_inconsistent_records','detail_conflicts'))
+                or any((result.get('codex') or {}).get(k,0) for k in ('native_pending','native_conflicts',
+                       'ambiguous_timestamp_sessions','inconsistent_component_sessions')))
 
 
 def _codex(path):
