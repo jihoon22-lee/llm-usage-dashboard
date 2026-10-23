@@ -95,10 +95,10 @@ def create_app(config=None):
 
     def unpriced(data):
         """Models used in the period with no rate and not deliberately left unpriced."""
-        from .pricing import NO_PUBLIC_PRICE,pricing_origins
-        origins=pricing_origins(config)
+        from .pricing import NO_PUBLIC_PRICE,hidden
+        pricing=load_pricing(config)
         return sorted({r['model'] for r in data.get('rows') or [] if r.get('est_cost') is None and r.get('requests')
-                       and r['model'] not in NO_PUBLIC_PRICE and origins.get(r['model'])!='hidden'})
+                       and r['model'] not in NO_PUBLIC_PRICE and not hidden(r['model'],pricing)})
 
     def residual_label():
         from .reconciliation import RESIDUAL_LABEL
@@ -233,7 +233,7 @@ def create_app(config=None):
             routes.update(r[0] for r in c.execute('SELECT DISTINCT route FROM events'))
             claude=describe(c,config.get('claude_account_names'),ended_routes(config))
             # Several Claude accounts: each is its own subscription row.
-            if len(claude)>1:routes.update(a['route'] for a in claude)
+            routes.update(a['route'] for a in claude)
         upcoming={m:e for m in {*models,*pricing} if (e:=upcoming_for(m,pricing,today))}
         from .notify import masked
         since=time.time()-30*86400
@@ -244,7 +244,7 @@ def create_app(config=None):
                        claude_account_names=config.get('claude_account_names') or {},notify=masked(config.get('notify')),
                        residual_label=config.get('residual_label'),
                        project_budgets=config.get('project_budgets') or {},model_usage_30d=usage30,
-                       thresholds=store.thresholds,pricing=pricing,refresh_seconds=config.get('refresh_seconds',300),
+                       thresholds=store.thresholds,pricing={m:r for m,r in pricing.items() if r is not None},refresh_seconds=config.get('refresh_seconds',300),
                        value_alert_usd=config.get('value_alert_usd'),
                        upcoming=upcoming,today=today,pricing_origins=pricing_origins(config),
                        pricing_builtin=sorted(BUILTIN),
@@ -297,7 +297,7 @@ def create_app(config=None):
             if body.get(key) is None:continue
             if not number(body[key],0,10000):abort(400,description='단가는 0~10000 범위의 숫자여야 합니다.')
             rates[key]=body[key]
-        if not rates and not body.get('delete') and not body.get('hide'):
+        if not rates and not body.get('delete') and not body.get('hide') and not body.get('unhide'):
             abort(400,description='단가를 입력하세요.')
         from .pricing import BUILTIN,_read_json,entry_key
         # 'delete' removes the user value and falls back to the builtin rate
@@ -307,6 +307,11 @@ def create_app(config=None):
         def delete(target,lower_keys):
             if model in lower_keys:target[model]='builtin' if model in BUILTIN else None
             else:target.pop(model,None)
+        def unhide(target,lower_keys):
+            # Restoring a hidden non-builtin must expose its lower/parent rate;
+            # deleting a user rate may intentionally suppress that lower layer.
+            if model in BUILTIN:delete(target,lower_keys)
+            else:target.pop(model,None)
         def effective_entry():
             # Inherited names ('x (high)', dated snapshots) resolve to a parent
             # entry; merging onto it keeps a dated history's earlier rates.
@@ -315,13 +320,15 @@ def create_app(config=None):
         path=pricing_write_path()
         with pricing_lock:
             if path:
-                lower_keys=set(config.get('pricing') or {})|set(_read_json(config.get('pricing_file')))
+                lower=Path(config['pricing_file'])
+                lower_keys=set(config.get('pricing') or {})|set(_read_json(lower) if lower.resolve()!=path.resolve() else {})
                 current={}
                 read=pricing_read_path()
                 if read.exists():
                     try:current=json.loads(read.read_text())
                     except ValueError:abort(500,description='pricing.json을 읽지 못했습니다.')
                 if body.get('hide'):current[model]=None
+                elif body.get('unhide'):unhide(current,lower_keys)
                 elif body.get('delete'):delete(current,lower_keys)
                 else:current[model]=edited_rates(effective_entry(),rates,today())
                 atomic_json(path,current)
@@ -329,6 +336,7 @@ def create_app(config=None):
                 lower_keys=set(_read_json(config.get('pricing_file') or ''))
                 target=config.setdefault('pricing',{})
                 if body.get('hide'):target[model]=None
+                elif body.get('unhide'):unhide(target,lower_keys)
                 elif body.get('delete'):delete(target,lower_keys)
                 else:target[model]=edited_rates(effective_entry(),rates,today())
         return jsonify(model=model,deleted=bool(body.get('delete')),hidden=bool(body.get('hide')))

@@ -325,7 +325,11 @@ def status_route(store,c,path,route,data):
     if isinstance(key,str) and re.fullmatch('[0-9a-f]{64}',key):
         from .claude_accounts import route_for
         primary=store.state(c,'claude_primary_account')
-        return route_for(key,primary) if primary else 'claude-code' if path.name=='claude-code.json' else None
+        if primary or key in (store.state(c,'claude_accounts:unbound-keys',[]) or []):
+            return route_for(key,primary)
+        known=c.execute('SELECT route FROM claude_accounts WHERE account_key=?', (key,)).fetchone()
+        if known:return known[0]
+        return 'claude-code' if path.name=='claude-code.json' else None
     # Older wrappers did not identify the account; only the default home's file is used.
     return 'claude-code' if path.name=='claude-code.json' else None
 

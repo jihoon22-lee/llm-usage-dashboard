@@ -139,7 +139,8 @@ class PricingTests(unittest.TestCase):
            'pricing':{'x-model':dict(input=1,output=2),'gone':None,'gpt-5':'builtin'}}
         table=load_pricing(s)
         self.assertEqual(table['x-model']['input'],1)
-        self.assertNotIn('gone',table)
+        self.assertIn('gone',table)  # internal tombstones block parent inheritance
+        self.assertIsNone(table['gone'])
         self.assertEqual(table['gpt-5'],BUILTIN['gpt-5'])
         origins=pricing_origins(s)
         self.assertEqual(origins['x-model'],'user')

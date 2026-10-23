@@ -1,6 +1,16 @@
 """Editing and recovery flows against disposable Flask data, never live accounts."""
 from browser_support import fixture_page, fixture_response, ORIGIN, watch_csp
 from playwright.sync_api import sync_playwright, expect
+import browser_support as fixtures
+from pathlib import Path
+import time
+from llm_usage.store import Store
+
+fixtures.fixture_client()
+fixture_store=Store(Path(fixtures._temp.name)/'usage.db')
+with fixture_store.connect() as c:
+    fixture_store.event(c,'hidden-variant',time.time()-60,'OpenAI','codex','gpt-test (high)',
+                        dict(uncached_input=1_000_000),session='hidden-variant')
 
 with sync_playwright() as p:
     browser=p.chromium.launch()
@@ -74,6 +84,19 @@ with sync_playwright() as p:
     assert page.locator('[data-budget="unsaved-budget"]').count()==0
     # Hidden prices must stay disabled when unhiding fails.
     page.on('dialog',lambda dialog:dialog.accept())
+    # A user edit of an inherited model can be hidden without falling back to its parent.
+    variant=page.locator('input[data-model="gpt-test (high)"][data-key="input"]')
+    parent_price=a.input_value()
+    variant.fill('8');page.locator('[data-price-save="gpt-test (high)"]').click()
+    expect(page.locator('[data-price-hide="gpt-test (high)"]')).to_be_enabled()
+    page.locator('[data-price-hide="gpt-test (high)"]').click()
+    expect(variant).to_be_disabled()
+    hidden=page.evaluate("()=>api('/api/usage?period=all&scope='+encodeURIComponent('model:gpt-test (high)'))")
+    assert hidden['cost']['period'] is None and not hidden['unpriced_models'],hidden
+    page.locator('[data-price-del="gpt-test (high)"]').click()
+    expect(variant).to_be_enabled();expect(variant).to_have_value(parent_price)
+    restored=page.evaluate("()=>api('/api/usage?period=all&scope='+encodeURIComponent('model:gpt-test (high)'))")
+    assert restored['cost']['period']==float(parent_price),restored['cost']
     page.locator('[data-price-hide="gpt-test"]').click();expect(a).to_be_disabled()
     expect(page.locator('[data-price-del="gpt-test"]')).to_be_enabled()
     page.route('**/api/config/pricing',lambda r:r.fulfill(status=400,json={'error':'synthetic restore failure'}))

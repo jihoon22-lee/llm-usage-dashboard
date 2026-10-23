@@ -328,6 +328,15 @@ test('several Claude accounts stay one service with account labels',()=>{
  assert.equal(f.multiClaude(),false);
 });
 
+test('a sole non-default Claude home retains its account label',()=>{
+ const route='claude-code:abababababab';
+ f.setClaudeAccounts([{route,label:'Max'}]);
+ assert.equal(f.multiClaude(),true);
+ assert.equal(f.serviceFull(route),'Anthropic / Claude Code · Max');
+ assert.equal(f.accountLabel(route),'Max');
+ f.setClaudeAccounts([]);
+});
+
 test('the Codex account residual shows under its configured name',()=>{
   assert.equal(f.residualText(f.RESIDUAL),'로컬 미기록');
   assert.equal(f.residualText('unknown'),'unknown');

@@ -84,6 +84,42 @@ class ReportTests(unittest.TestCase):
         self.assertIn('Codex codex · 10080분 2회',reports.summary(report))
         self.assertIn('전주 대비',reports.summary(report))
 
+    def test_exhaustions_use_the_same_account_boundary_as_observed_time(self):
+        from llm_usage.resources import observe_account
+        start=NOW-3600;bucket='codex · 300분'
+        with patch('llm_usage.store.time.time',return_value=NOW),self.store.connect() as c:
+            observe_account(c,'codex','old',start)
+            for offset,remaining in ((0,80),(300,0),(1700,70)):
+                self.store.limit(c,'codex',bucket,remaining,NOW+18000,start+offset,'codex')
+            observe_account(c,'codex','new',start+1800)
+            # The first observation of this account is 0: the old account's 70
+            # cannot prove a transition. Only this account's later 100 -> 0 does.
+            for offset,remaining in ((1800,0),(2100,100),(2400,0),(2700,90)):
+                self.store.limit(c,'codex',bucket,remaining,NOW+18000,start+offset,'codex')
+            row=next(r for r in reports.quota_rows(c,start,NOW) if r['bucket']==bucket)
+            self.assertEqual(row['exhausted'],1)
+            self.assertEqual(row['observed_hours'],.25)
+            # Also constrain the look-behind when the reporting period starts later.
+            self.assertEqual(reports.exhaustions(c,start+1800,start+2100),[])
+
+    def test_report_format_rebuild_corrects_account_counts_without_announcing_again(self):
+        from llm_usage.resources import observe_account
+        now=stamp('2026-10-05T01:00:00Z')
+        with patch.object(reports,'REPORT_FORMAT',3):
+            reports.ensure_report(self.store,now,PRICING)
+        before=reports.recent(self.store)[0]
+        self.assertEqual(before['exhausted'][0]['count'],2)
+        since=stamp('2026-09-30T02:00:00Z')
+        with patch('llm_usage.store.time.time',return_value=now),self.store.connect() as c:
+            observe_account(c,'codex','new',since)
+            for offset,remaining in ((0,100),(300,90)):
+                self.store.limit(c,'codex','codex · 10080분',remaining,now+86400,since+offset,'codex')
+        self.assertIsNone(reports.ensure_report(self.store,now+60,PRICING))
+        after=reports.recent(self.store)[0]
+        self.assertEqual(after['totals'],before['totals'])
+        self.assertEqual(after['exhausted'],[])
+        self.assertEqual(after['quota_use'][0]['exhausted'],0)
+
     def test_codex_account_residual_share_is_its_own_line(self):
         from llm_usage.reconciliation import RESIDUAL
         with self.store.connect() as c:

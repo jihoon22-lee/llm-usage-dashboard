@@ -466,8 +466,8 @@ class Store:
             resources=inventory(c,now,sources)
             history=quota_history(c,now,selected_sources={(r['route'],r['bucket']):r['source'] for r in rows},
                                   since_by_route={route:a['since'] for route,a in accounts.items()})
-        # Account labels appear only once a second Claude account is known.
-        labels={a['route']:a['label'] for a in claude} if len(claude)>1 else {}
+        # A sole non-default home still needs its account label beside the original route.
+        labels={a['route']:a['label'] for a in claude} if any(a['route']!='claude-code' for a in claude) else {}
         for route in routes:
             if not any(r['route']==route for r in rows):
                 rows.append(dict(route=route,bucket='미제공',remaining=None,resets=None,checked=None,source=route))
@@ -735,7 +735,7 @@ class Store:
                 if len(body['series'])<=5000:self._usage_put(key,body)
             body={**body,'prior':self._prior(c,body,period,compare,now,pricing,scope_sql,scope_args,sums,count) if sections!='insights' else None}
             from .reconciliation import apply as reconcile_usage
-            body=reconcile_usage(c,body,group,cumulative,scope,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
+            body=reconcile_usage(c,body,group,cumulative,scope,pricing=pricing,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .claude_accounts import describe
             claude=describe(c,names)
@@ -853,6 +853,39 @@ class Store:
         return dict(project=project,days=days,start=start.strftime('%Y-%m-%d'),unallocated_intervals=unallocated,
                     models=sorted(models.values(),key=lambda m:-m['tokens']),
                     daily=[daily[k] for k in sorted(daily)],sessions=sessions,month=projection)
+
+    @classmethod
+    def session_rows(cls,c,start,end,pricing=None,scope=None,ids=None):
+        """Request-only session rows in the selected range, optionally for a bounded ID batch.
+
+        Reconciliation uses the same aggregation to recover local detail for a
+        supplemented session that did not make the request-only top 100.
+        """
+        from .pricing import estimate,rate_for
+        where='ts>=? AND ts<? AND session IS NOT NULL';args=[start,end]
+        if scope:
+            kind,_,value=scope.partition(':')
+            where+=' AND '+cls.SCOPE_KINDS[kind]+'=?';args.append(value)
+        if ids is not None:
+            if not ids:return {}
+            where+=' AND session IN ('+','.join('?' for _ in ids)+')';args.extend(ids)
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in TOKENS)
+        sessions={}
+        for r in c.execute("SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,"+cls.ACCOUNT_SQL+''' AS account,
+                MAX(route) AS route,MAX(project) AS project,MAX(agent_kind) AS kind,MIN(ts) AS first_ts,MAX(ts) AS last_ts,
+                COUNT(*) AS requests,'''+sums+' FROM events WHERE '+where+' GROUP BY session,model,day,4',args):
+            e=sessions.setdefault(r['session'],dict(session=r['session'],route=r['route'],project=r['project'],
+                kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=None,accounts=[],**dict.fromkeys(TOKENS,0)))
+            if r['route']=='claude-code' and r['account'] not in e['accounts']:e['accounts'].append(r['account'])
+            e['first_ts']=min(e['first_ts'],r['first_ts']);e['last_ts']=max(e['last_ts'],r['last_ts'])
+            e['requests']+=r['requests']
+            for k in TOKENS:e[k]+=r[k]
+            rate=rate_for(r['model'],pricing,r['day']) if pricing else None
+            if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
+        for e in sessions.values():
+            e['accounts'].sort()
+            if e['cost'] is not None:e['cost']=round(e['cost'],2)
+        return sessions
 
     def session_detail(self,session,pricing=None):
         """One session's models, hourly activity and cache share; no message content exists here."""
@@ -1039,25 +1072,9 @@ class Store:
         # not complete, so no change is computed from it.
         session_list=[];sessionless=0;project_list=[];sessions_total=0
         if sections!='core':
-            sessions={}
-            for r in c.execute('''SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,'''+self.ACCOUNT_SQL+''' AS account,MAX(route) AS route,MAX(project) AS project,
-                MAX(agent_kind) AS kind,MIN(ts) AS first_ts,MAX(ts) AS last_ts,'''+count+','+sums+'''
-                FROM events WHERE ts>=? AND ts<? AND session IS NOT NULL'''+scope_sql+' GROUP BY session,model,day,4''',
-                (a.timestamp(),b.timestamp(),*scope_args)):
-                e=sessions.setdefault(r['session'],dict(session=r['session'],route=r['route'],project=r['project'],
-                    kind=r['kind'],first_ts=r['first_ts'],last_ts=r['last_ts'],requests=0,cost=0.0,rated=False,accounts=[],
-                    **dict.fromkeys(TOKENS,0)))
-                # A Claude session can move between accounts; every account it used is listed.
-                if r['route']=='claude-code' and r['account'] not in e['accounts']:e['accounts']=sorted([*e['accounts'],r['account']])
-                e['first_ts']=min(e['first_ts'],r['first_ts']);e['last_ts']=max(e['last_ts'],r['last_ts'])
-                e['requests']+=r['requests']
-                for k in TOKENS: e[k]+=r[k]
-                if pricing:
-                    rate=rate_for(r['model'],pricing,r['day'])
-                    if rate:e['cost']+=estimate(dict(r),rate);e['rated']=True
+            sessions=self.session_rows(c,a.timestamp(),b.timestamp(),pricing,scope)
             sessions_total=len(sessions)
             session_list=sorted(sessions.values(),key=lambda s:-(s['uncached_input']+s['cached_input']+s['output']+s['cache_creation']))[:100]
-            for s in session_list:s['cost']=round(s['cost'],2) if s.pop('rated') else None
             sessionless=c.execute('SELECT COUNT(*) FROM events WHERE ts>=? AND ts<? AND session IS NULL'+scope_sql,
                                   (a.timestamp(),b.timestamp(),*scope_args)).fetchone()[0]
             projects={}
@@ -1112,10 +1129,12 @@ class Store:
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
         subs=[]
         claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
+        # A sole identified non-default home still has its own subscription route.
+        separate_claude=any(route!='claude-code' for route in claude_routes)
         # Several Claude accounts: the Claude Code total split by account, 계정 미확인
         # included, so the parts add up to the service (reconciliation adds supplements).
         claude_split=None
-        if len(claude_routes)>1 and period!='1h':
+        if separate_claude and period!='1h':
             split={}
             for r in c.execute('SELECT '+self.ACCOUNT_SQL+' AS account,model,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
                                ' FROM '+R+" WHERE route='claude-code' AND ts>=? AND ts<?"+scope_sql+' GROUP BY 1,2,3',
@@ -1125,7 +1144,7 @@ class Store:
                 rate=rate_for(r['model'],pricing,r['day']) if pricing else None
                 if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
             claude_split=sorted(split.values(),key=lambda e:(-e['tokens'],e['account']))
-        if (subscriptions or len(claude_routes)>1) and period!='1h':
+        if (subscriptions or separate_claude) and period!='1h':
             by_route={};tokens_by_route={}
             for row in rows:
                 tokens_by_route[row['route']]=tokens_by_route.get(row['route'],0)+token_total(row)
@@ -1142,7 +1161,7 @@ class Store:
             days=max(1,(min(b,now)-a).total_seconds()/86400)
             prices=dict(subscriptions or {})
             # Several Claude accounts: list each one, priced or not, so a missing price is visible.
-            if len(claude_routes)>1:
+            if separate_claude:
                 for route in claude_routes:
                     if route not in ended:prices.setdefault(route,None)
             for route,monthly in prices.items():

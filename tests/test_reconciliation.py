@@ -236,6 +236,70 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(total(u['sessions'][0]),100)
         self.assertEqual(total(u['projects'][0]),100)
 
+    def test_session_ranking_merges_existing_and_cloud_only_sessions_before_the_cap(self):
+        begin=self.now-7200
+        pricing={'claude-test':dict(input=100,output=100)}
+        for count in (99,100,101):
+            with self.subTest(count=count):
+                store=Store(Path(self.tmp.name)/f'sessions-{count}.db')
+                last=f's-{count-1:03d}'
+                with store.connect() as c:
+                    for i in range(count):
+                        sid=f's-{i:03d}'
+                        store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=(count-i)*1000),
+                                    session=sid,project='p',agent_kind='sub',account='claude-code')
+                        link(c,'claude:'+sid,sid,'local')
+                    snapshot(store,c,source='claude-cloud',scope_id='claude:'+last,route='claude-code',provider='Anthropic',
+                             model='claude-test',session=last,project='p',start=begin,end=begin+3600,tokens=200_000,
+                             parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=200_000))
+                for sections in ('all','insights'):
+                    data=store.usage(now=self.now,period='today',sections=sections,pricing=pricing)
+                    self.assertEqual(data['sessions_total'],count)
+                    self.assertEqual(len(data['sessions']),min(count,100))
+                    row=data['sessions'][0]
+                    self.assertEqual((row['session'],total(row),row['requests'],row['cost'],row['kind'],row['accounts']),
+                                     (last,200_000,1,.1,'sub',['claude-code']))
+                    self.assertEqual(total(store.session_detail(last)['totals']),total(row))
+                with store.connect() as c:
+                    for model,amount in [('claude-test',300_000),('other-model',1000)]:
+                        snapshot(store,c,source='claude-cloud',scope_id='claude:only-cloud',route='claude-code',provider='Anthropic',
+                                 model=model,session='only-cloud',project='p',start=begin,end=begin+3600,tokens=amount)
+                data=store.usage(now=self.now,period='today',pricing=pricing)
+                self.assertEqual(data['sessions_total'],count+1)
+                self.assertEqual(len(data['sessions']),100)
+                self.assertEqual((data['sessions'][0]['session'],total(data['sessions'][0]),data['sessions'][0]['requests']),
+                                 ('only-cloud',301_000,0))
+                self.assertEqual(data['sessions'][0]['accounts'],['claude-code'])
+                # More local detail shrinks the supplement, never the session's total.
+                with store.connect() as c:
+                    store.event(c,'late',begin+20,'Anthropic','claude-code','claude-test',dict(output=50_000),session=last,project='p')
+                    link(c,'claude:'+last,'late','local')
+                data=store.usage(now=self.now,period='today',pricing=pricing)
+                row=next(s for s in data['sessions'] if s['session']==last)
+                self.assertEqual((total(row),row['requests'],row['cost'],data['sessions_total']),(200_000,2,5.1,count+1))
+                self.assertTrue(store.rollup_matches())
+
+    def test_restored_session_detail_respects_period_and_scope(self):
+        begin=self.now-7200;account='claude-code:abababababab'
+        with self.store.connect() as c:
+            for i in range(101):
+                sid=f's-{i:03d}'
+                self.store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=101-i),
+                                 session=sid,project='p',agent_kind='main',account=account)
+                link(c,'claude:'+sid,sid,'local')
+            self.store.event(c,'outside-day',begin-86400,'Anthropic','claude-code','claude-test',dict(output=900_000),session='s-100',project='p',account=account)
+            self.store.event(c,'other-route',begin+10,'OpenAI','codex','gpt-test',dict(output=900_000),session='s-100',project='other')
+            self.store.save_state(c,'claude_cloud_account:test-key',account)
+            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s-100',route='claude-code',provider='Anthropic',
+                     model='claude-test',session='s-100',project='p',start=begin,end=begin+3600,tokens=10_000,account_key='test-key')
+        for scope in ('account:'+account,'route:claude-code','model:claude-test','project:p'):
+            with self.subTest(scope=scope):
+                data=self.usage(period='today',scope=scope)
+                row=data['sessions'][0]
+                self.assertEqual(data['sessions_total'],101)
+                self.assertEqual((row['session'],total(row),row['requests'],row['project'],row['first_ts'],row['accounts']),
+                                 ('s-100',10_000,1,'p',begin+10,[account]))
+
     def test_receiver_auth_size_and_content_type(self):
         import http.client
         import threading
