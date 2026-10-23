@@ -13,7 +13,10 @@ from pathlib import Path
 from .config import local_path, with_local
 from .limits import codex_limits, poll_limits, status_limits
 from .sqlite_ro import open_readonly
+from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
+
+PARSER_VERSION=2
 
 
 def model_provider(model):
@@ -56,16 +59,28 @@ def parse_line(store,c,route,d,state):
     if route=='codex':
         if typ=='session_meta' and not state.get('session'):
             # Fork rollouts embed a second, parent session_meta. The first ID owns this file.
-            state['session']=p.get('id',p.get('session_id'))
+            state['session']=p.get('id') or p.get('session_id')
             state['provider']=p.get('model_provider') or 'openai'
             state['project']=project_label(p.get('cwd'))
             state['agent_kind']=_codex_kind(p)
+            creator=p.get('creator_account_id')
+            if isinstance(creator,str) and re.fullmatch(r'[A-Za-z0-9-]{1,100}',creator):
+                state['account']='codex-account:'+identity(creator)
             if p.get('forked_from_id'):
                 state['fork_started']=stamp(p.get('timestamp') or d.get('timestamp'))
         elif typ=='turn_context':
             if not state.get('fork_started') or (stamp(d.get('timestamp')) or state['fork_started'])>=state['fork_started']:
                 state['has_turn_context']=True
                 if p.get('model'):state['model']=p['model']
+        elif typ=='token_usage_record':
+            ts=stamp(d.get('timestamp'))
+            if not state.get('session') or not ts:return
+            if state.get('fork_started') and (ts<state['fork_started'] or not state.get('has_turn_context')):return
+            route_name='codex' if state.get('provider','openai')=='openai' else 'codex:'+state['provider']
+            provider=model_provider(state.get('model',''))
+            if provider=='Unknown' and state.get('provider')=='openai':provider='OpenAI'
+            from .codex_usage import record
+            record(store,c,p,ts,state,provider,route_name)
         elif typ=='event_msg' and p.get('type')=='token_count':
             ts=stamp(d.get('timestamp'))
             if p.get('rate_limits') and ts:codex_limits(store,c,p['rate_limits'],ts,'codex-local')
@@ -81,6 +96,9 @@ def parse_line(store,c,route,d,state):
             changed=store.codex_point(c,state['session'],ts,provider,route_name,
                                      state.get('model'),usage,p['info'].get('last_token_usage') or usage)
             if changed:state['_dirty']=changed
+            from .codex_usage import bind_pending
+            keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
+            bind_pending(c,state,identity('codex-point',state['session'],ts,[max(0,int(usage.get(k) or 0)) for k in keys]))
     elif typ=='assistant':
         m=d.get('message',{});u=m.get('usage');ts=stamp(d.get('timestamp'))
         if not u or not m.get('id') or not ts:return
@@ -127,9 +145,10 @@ def collect_file(store,path,route):
     stat=path.stat();key='file:'+str(path)
     with store.connect() as c:
         checkpoint=store.state(c,key,{})
-        repair_fork=(route=='codex' and checkpoint.get('parser',{}).get('fork_started') and checkpoint.get('parser_version',0)<1)
+        repair_fork=checkpoint.get('parser_version',0)<PARSER_VERSION
         unchanged=checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino
-        misaligned=_misaligned_errors(c,path,key)
+        packed=compressed(path)
+        misaligned=False if packed else _misaligned_errors(c,path,key)
         if not repair_fork and unchanged and not misaligned:
             return store.error_count(c,key)
         offset=checkpoint.get('offset',0);state=checkpoint.get('parser',{})
@@ -138,12 +157,12 @@ def collect_file(store,path,route):
         if isinstance(project,str) and ('/' in project or '\\' in project or ':' in project):
             state['project']=project_label(project)
         rewritten=(checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')!=stat.st_mtime_ns) or misaligned
-        if (repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
+        if (packed or repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
                 or _prefix_changed(path,checkpoint)):
             # Event IDs deduplicate the lines read again.
             offset=0;state={}
             c.execute('DELETE FROM import_errors WHERE source=?',(key,))
-        with path.open('rb') as f:
+        with open_record(path) as f:
             f.seek(offset)
             while True:
                 start=f.tell();line=f.readline()
@@ -158,7 +177,7 @@ def collect_file(store,path,route):
                                     dict(session=state.get('session'),project=state.get('project'),
                                          agent_kind=state.get('agent_kind')))
             end=f.tell();f.seek(max(0,end-TAIL_BYTES));tail=hashlib.sha256(f.read(end-max(0,end-TAIL_BYTES))).hexdigest()
-            store.save_state(c,key,dict(parser_version=1,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
+            store.save_state(c,key,dict(parser_version=PARSER_VERSION,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
             return store.error_count(c,key)
 
 def changed_files(store,root,paths):
@@ -175,7 +194,7 @@ def changed_files(store,root,paths):
         except OSError:continue
         try:checkpoint=json.loads(saved[key]) if key in saved else {}
         except ValueError:checkpoint={}
-        unchanged=(checkpoint.get('parser_version',0)>=1 and checkpoint.get('size')==stat.st_size
+        unchanged=(checkpoint.get('parser_version',0)>=PARSER_VERSION and checkpoint.get('size')==stat.st_size
                    and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino)
         if unchanged and key not in failing:continue
         yield path
@@ -233,9 +252,12 @@ def collect_local(store,settings,*,include_derived=True):
                 continue
             if source['kind']=='opencode':errors=collect_opencode(store,root);count=1
             else:
-                paths=sorted(root.rglob('*.jsonl'))
+                paths=record_files(root)
                 count=len(paths)
-                errors=sum(collect_file(store,path,route) for path in changed_files(store,root,paths))
+                for path in changed_files(store,root,paths):
+                    try:collect_file(store,path,route)
+                    except (OSError,EOFError,ValueError,RecordReadError) as exc:
+                        with store.connect() as c:store.import_error(c,'file:'+str(path),'file',type(exc).__name__)
                 # Errors of the files present now, as the per-file counts used to sum.
                 current={'file:'+str(path) for path in paths}
                 with store.connect() as c:
@@ -252,8 +274,10 @@ def collect_local(store,settings,*,include_derived=True):
                     store.save_state(c,'permanent_errors:'+name,perm)
                     errors=c.execute('SELECT COUNT(*) FROM import_errors WHERE source LIKE ?',
                                      ('file:'+str(root)+'/%',)).fetchone()[0]
+                unsupported=unsupported_files(root) if source['kind']=='jsonl' else 0
                 detail=f'{count}개 기록 파일 확인 · 해석 실패 {errors}건'+(f' · 누적 영구 실패 {perm}건' if perm else '')
-                store.source(c,name,'partial' if errors else 'ok',detail)
+                if unsupported:detail+=f' · 미지원 압축 기록 {unsupported}개'
+                store.source(c,name,'partial' if errors or unsupported else 'ok',detail)
         except Exception as exc:
             with store.connect() as c:store.source(c,name,'error',f'로컬 수집 실패 ({type(exc).__name__})')
     if include_derived:
@@ -261,7 +285,10 @@ def collect_local(store,settings,*,include_derived=True):
         collect_databases(store,settings,model_provider)
         from .devin import collect_databases as collect_devin
         collect_devin(store,settings,model_provider)
-    with store.connect() as c:store.save_state(c,'last_local',time.time())
+    with store.connect() as c:
+        from .codex_usage import summary
+        summary(store,c)
+        store.save_state(c,'last_local',time.time())
 
 
 def collect_antigravity_tokens(store,settings):
@@ -434,7 +461,7 @@ def backfill_jsonl(store,path,route):
     """Attribute pre-migration events from one JSONL record file."""
     if route.startswith('codex'):
         meta=None
-        with path.open('rb') as f:
+        with open_record(path) as f:
             for line in f:
                 if b'session_meta' not in line:continue
                 meta=_codex_meta(line)
@@ -448,7 +475,7 @@ def backfill_jsonl(store,path,route):
             store.bump_data_version(c)
     elif route=='claude-code':
         updates={}
-        with path.open('rb') as f:
+        with open_record(path) as f:
             for line in f:
                 if b'"assistant"' not in line:continue
                 try:d=json.loads(line)
@@ -519,8 +546,8 @@ def backfill_attribution(store,settings):
         try:
             if kind=='opencode':backfill_opencode(store,root)
             elif route=='claude-code' or route.startswith('codex'):
-                for path in root.rglob('*.jsonl'):backfill_jsonl(store,path,route)
-        except (OSError,sqlite3.Error):
+                for path in record_files(root):backfill_jsonl(store,path,route)
+        except (OSError,sqlite3.Error,EOFError,RecordReadError):
             failures.append(source['name'])
     try:backfill_devin(store,settings)
     except (OSError,sqlite3.Error):failures.append('devin')

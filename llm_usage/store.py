@@ -215,6 +215,8 @@ class Store:
             initialize_attribution(c)
             from .reconciliation import initialize as initialize_usage
             initialize_usage(c)
+            from .codex_usage import initialize as initialize_responses
+            initialize_responses(c)
         self._ensure_rollup()
         os.chmod(path, 0o600)
 
@@ -328,17 +330,21 @@ class Store:
         projects=dict(c.execute('SELECT id,project FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,)))
         c.execute('DELETE FROM events WHERE id IN (SELECT id FROM codex_points WHERE session=?)',(session,))
         previous=None;previous_ts=None;seen={};resets=0;partial=False
-        zero_baseline=False;zero_baselines=0;ambiguous=0
+        zero_baseline=False;zero_baselines=0;ambiguous=0;groups={};last_group=None
         for row in c.execute('SELECT * FROM codex_points WHERE session=? ORDER BY ts,input,output,id',(session,)).fetchall():
             current=[row[k] for k in ('input','cached','output','creation','reasoning')]
             last=[row[k] for k in ('last_input','last_cached','last_output','last_creation','last_reasoning')]
             # Repeated notifications are duplicates only within this counter epoch.
             # A reset may legitimately reach counters seen earlier in the session.
-            if current==previous:continue
+            if current==previous:
+                groups[row['id']]=last_group
+                continue
             reset=previous is not None and (current[0]<previous[0] or current[2]<previous[2])
             # Two different counters at the same timestamp have no temporal order.
             # A later repeat of that lower observation is not proof of a new epoch.
-            if reset and seen.get(tuple(current))==previous_ts:continue
+            if reset and seen.get(tuple(current))==previous_ts:
+                groups[row['id']]=None
+                continue
             if previous is None:partial=current!=last
             if reset:resets+=1
             if previous_ts==row['ts']:ambiguous+=1
@@ -355,12 +361,16 @@ class Store:
                     delta=last;ambiguous+=1
                 zero_baseline=False
             previous=current;previous_ts=row['ts'];seen[tuple(current)]=row['ts']
+            last_group=row['id'] if any(delta) else None
+            groups[row['id']]=last_group
             if not any(delta):continue
             inp,cached,out,creation,reasoning=delta
             self.event(c,row['id'],row['ts'],row['provider'],row['route'],row['model'],
                        dict(uncached_input=max(0,inp-cached-creation),cached_input=cached,output=out,
                             cache_creation=creation,reasoning=reasoning),
                        **({**(attrs or {}),'project':projects[row['id']]} if row['id'] in projects else (attrs or {})))
+        from .codex_usage import project
+        project(self,c,session,groups,projects)
         c.execute('INSERT OR REPLACE INTO session_quality VALUES (?,?,?,?,?)',(session,resets,int(partial),ambiguous,zero_baselines))
         self.bump_data_version(c)
 
