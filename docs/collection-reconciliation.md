@@ -75,7 +75,9 @@ export OTEL_LOG_RAW_API_BODIES=0
 수신기는 Claude `api_request`와 Codex `sse_event`의 `response.completed` 숫자만 해석합니다.
 토큰 필드·요청 식별자가 없는 이벤트는 정확한 사용량으로 만들지 않습니다. 요청 ID를 transcript의
 메시지 ID에 연결할 수 없으면 숫자 관측으로 보관하고 합계에 중복 추가하지 않습니다. 뒤에 파일·클라우드
-기록에서 연결 정보가 들어오면 반영합니다. Codex export 형식은 설치된 버전과 실제 응답으로 확인해야 합니다.
+기록에서 연결 정보가 들어오면 반영합니다. 현재 이 연결은 Claude에서만 구현되어 있습니다. Codex 숫자는
+수신해도 로컬 파서가 대응하는 요청 alias를 만들지 않아 연결 대기에 남습니다. Codex export 형식과
+native 요청 ID 연결을 구현하고 실제 응답으로 검증해야 합니다. [0.7.1 수집 범위 검토](../workthrough/2026-10-23-collection-coverage.md)를 참고하세요.
 
 `GET /api/collection`의 `telemetry`와 상태 탭의 telemetry 수신 상태에서 마지막 수신과 연결 대기 건수를
 확인할 수 있습니다. 로컬 기록에서 뒤늦게 요청이 연결되면 대기 건수·상태를 갱신하되 마지막 실제
