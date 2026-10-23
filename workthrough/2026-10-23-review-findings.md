@@ -57,6 +57,8 @@
 - `uv tree --locked --invert --package certifi`로 개발용 pip-audit → requests의 전이 의존성임을 확인했다. uv 0.12.23으로 해당 패키지만 2026.10.19로 갱신하고 독립 환경을 다시 동기화했다. 런타임 의존성은 바뀌지 않는다.
 - 전체 잠금 의존성을 export한 뒤 `pip_audit --strict` 재검사에서 알려진 취약점 0건을 확인했다.
 
-## 남은 작업
+## 릴리스 진행
 
-- 버전 갱신, Push·PR·CI·병합·Release·산출물 검증 및 정리.
+- 수정 PR [#72](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/72)는 자동 리뷰 지적을 수정·검증하고 해결 처리한 뒤 merge commit `106f8a0`으로 main에 병합했다. [최종 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/39940738120)의 Python 3.11/3.14 × locked/minimum, JavaScript, 브라우저 20개, 패키지, 공개 파일, 보안·CodeQL과 필수 `ci-required`가 모두 성공했다.
+- 0.7.1의 pyproject·lock·변경 기록·설치·업데이트 안내를 준비했다. 런타임 의존성 버전은 유지하고 certifi 보안 수정은 개발 환경에만 해당한다.
+- 버전 PR·main CI·Release·게시 산출물 검증 및 정리가 남아 있다.
