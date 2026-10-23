@@ -19,7 +19,7 @@ from .store import identity, project_label, stamp
 API='https://api.anthropic.com'
 SESSIONS_BETA='ccr-byoc-2025-07-29'
 MAX_PAGES=100
-PARSER_VERSION=3
+PARSER_VERSION=4
 
 
 class IncompletePages(ValueError):
@@ -207,6 +207,9 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
         key='claude-cloud:'+item['id']
         with store.connect() as c:
             seen=store.state(c,key)
+        # A cursor only proves that the same parser read the preceding pages.
+        # On an upgrade, replay both streams so new fields are recovered there too.
+        if not isinstance(seen,dict) or seen.get('parser')!=PARSER_VERSION:seen={}
         state=seen if isinstance(seen,dict) else {}
         supplement_retry=state.get('supplement_retry_at',state.get('checked',0)+86400)
         supplement_paused=bool(state.get('supplement_unavailable') and state.get('updated')==item.get('updated_at')
