@@ -236,8 +236,14 @@ def collect_opencode(store,path):
     finally:src.close()
 
 
+def local_sources(store,settings):
+    from .claude_accounts import observed_homes,transcript_sources
+    with store.connect() as c:known=observed_homes(store,c)
+    return transcript_sources(settings,known)
+
+
 def collect_local(store,settings,*,include_derived=True):
-    for source in settings['sources']:
+    for source in local_sources(store,settings):
         if source['kind'] in ('antigravity','devin'):continue
         root=Path(source['path']);route=source['route'];name=source['name']
         try:
@@ -536,7 +542,7 @@ def backfill_attribution(store,settings):
         if store.state(c,'backfill_v2'):return
         store.source(c,'session-backfill','partial','세션·프로젝트 귀속 백필 진행 중')
     failures=[]
-    for source in settings.get('sources',[]):
+    for source in local_sources(store,settings):
         kind=source.get('kind');route=source.get('route') or '';root=Path(source['path'])
         if kind in ('antigravity','devin') or not root.exists():continue
         try:

@@ -119,6 +119,33 @@ def home_candidates(settings, observed=()):
     return list(unique.values())
 
 
+def transcript_sources(settings,observed=()):
+    """Extend selected sources with native Claude homes, once per real projects folder.
+
+    An unrelated/isolated source configuration must not start scanning this
+    process's real HOME merely because it can discover an installed Claude CLI.
+    """
+    from .store import identity
+    sources=list(settings.get('sources') or [])
+    roots={str(Path(s['path']).resolve()) for s in sources if s.get('kind')=='jsonl' and s.get('route')==FAMILY}
+    user=Path.home().resolve()
+    selected={Path(p).resolve() for p in settings.get('homes') or [] if isinstance(p,str) and Path(p).is_absolute()}
+    local=user in selected or any(Path(p).is_relative_to(user) for p in roots)
+    explicit=any(settings.get(k) for k in ('claude_auth','claude_homes','paseo_home'))
+    if not (local or selected or explicit or observed):return sources
+    for home in home_candidates(settings,observed):
+        kind=home['kind'];folder=Path(home['path'])
+        if kind=='default' and not (local or settings.get('claude_auth')):continue
+        if kind=='zerosub' and not (local or settings.get('paseo_home')):continue
+        if kind=='observed' and not folder.resolve().is_relative_to(user):continue
+        if not folder.is_dir():continue
+        root=folder/'projects';real=str(root.resolve())
+        if real in roots:continue
+        roots.add(real)
+        sources.append(dict(name='claude-local:'+identity(real)[:12],kind='jsonl',route=FAMILY,path=str(root)))
+    return sources
+
+
 _identities = {}
 
 

@@ -84,9 +84,11 @@ def aliases(c, route, event_id, *values):
 
 def _raw(c, row, begin, end):
     if row['source']=='codex-account':
-        # Historical local files have no account identity: this comparison is
-        # deliberately labelled account attribution unverified in the response.
-        where='route=? AND ts>=? AND ts<?';args=(row['route'],begin,end)
+        # Unknown old records remain explicitly unverified. A proven different
+        # native creator must never subtract from this account's server total.
+        from .codex_usage import account_filter
+        account_sql,account_args=account_filter(row.get('account_key'))
+        where='route=? AND ts>=? AND ts<? AND '+account_sql;args=(row['route'],begin,end,*account_args)
     else:
         where='id IN (SELECT event_id FROM usage_links WHERE scope_id=?) AND ts>=? AND ts<?'
         args=(row['scope_id'],begin,end)

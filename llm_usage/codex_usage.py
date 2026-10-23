@@ -24,6 +24,9 @@ def initialize(c):
       CREATE TABLE IF NOT EXISTS codex_response_links (
         response_id TEXT NOT NULL, point_id TEXT NOT NULL, PRIMARY KEY(response_id,point_id));
       CREATE INDEX IF NOT EXISTS codex_response_link_point ON codex_response_links(point_id);
+      CREATE TABLE IF NOT EXISTS codex_creator_accounts (
+        creator TEXT NOT NULL,account_key TEXT NOT NULL,checked REAL NOT NULL,
+        PRIMARY KEY(creator,account_key));
     ''')
     for table in ('codex_points','codex_responses'):
         if 'reasoning_observed' not in {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}:
@@ -54,7 +57,7 @@ def record(store,c,payload,ts,state,provider,route):
     old=c.execute('SELECT * FROM codex_responses WHERE id=?',(key,)).fetchone()
     if old:
         # A stable response must not silently change ownership or numeric content.
-        if old['session']!=session or tuple(json.loads(old['usage']))!=nums:
+        if old['session']!=session or tuple(json.loads(old['usage']))!=nums or (old['account'] and state.get('account') and old['account']!=state['account']):
             c.execute('UPDATE codex_responses SET conflict=1 WHERE id=?',(key,))
             raise ValueError('conflicting response observation')
         if old['model']=='unknown' and state.get('model'):
@@ -62,6 +65,8 @@ def record(store,c,payload,ts,state,provider,route):
             state['_dirty']=session
         if observed and not old['reasoning_observed']:
             c.execute('UPDATE codex_responses SET reasoning_observed=1 WHERE id=?',(key,));state['_dirty']=session
+        if state.get('account') and not old['account']:
+            c.execute('UPDATE codex_responses SET account=? WHERE id=?',(state['account'],key));state['_dirty']=session
     else:
         c.execute('INSERT INTO codex_responses VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?)',
                   (key,session,ts,provider,route,state.get('model') or 'unknown',json.dumps(nums),json.dumps(total),
@@ -137,3 +142,26 @@ def summary(store,c):
     if not row[0]:return
     store.source_changed(c,'codex-responses','partial' if row[1] or row[2] else 'ok',
                          f'요청별 원본 {row[0]}개 · 누계 연결 대기 {row[1]}개 · 상충 관측 {row[2]}개')
+
+
+def bind_account(store,c,native_identity,account_key,checked):
+    """A native account read binds a creator ID to the full account/workspace key.
+
+    Several workspace keys for one creator remain ambiguous, so this evidence
+    cannot silently assign that creator's historical requests to one workspace.
+    """
+    creator=native_identity[0] if isinstance(native_identity,(tuple,list)) and native_identity else None
+    if not isinstance(creator,str) or not re.fullmatch(r'[A-Za-z0-9-]{1,100}',creator) or not account_key:return
+    inserted=c.execute('INSERT OR IGNORE INTO codex_creator_accounts VALUES (?,?,?)',(identity(creator),account_key,checked)).rowcount
+    if inserted:store.bump_data_version(c)
+
+
+def account_filter(namespace):
+    """Exclude only creator IDs proven to belong to another unique account.
+
+    Unidentified and ambiguous old history keeps the explicitly unverified
+    comparison used before native account fields became available.
+    """
+    if not isinstance(namespace,str) or not re.fullmatch('[0-9a-f]{64}',namespace):return '1=1',()
+    return ("(account IS NULL OR account NOT IN (SELECT 'codex-account:'||creator FROM codex_creator_accounts "
+            "GROUP BY creator HAVING COUNT(*)=1 AND MIN(account_key)<>?))"),(namespace,)

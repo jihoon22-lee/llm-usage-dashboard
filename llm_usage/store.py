@@ -219,6 +219,7 @@ class Store:
             # Claude events whose account is not resolved yet (see claude_attribution).
             c.execute("CREATE INDEX IF NOT EXISTS events_claude_pending ON events(session) WHERE route='claude-code' AND account IS NULL")
             c.execute('CREATE INDEX IF NOT EXISTS events_session ON events(session)')
+            c.execute('CREATE INDEX IF NOT EXISTS events_parent ON events(parent_id) WHERE parent_id IS NOT NULL')
             # Quota windows and per-route scopes filter one route over a time range.
             c.execute('CREATE INDEX IF NOT EXISTS events_route_ts ON events(route,ts)')
             from .resources import initialize
@@ -718,8 +719,10 @@ class Store:
         since=(datetime.fromtimestamp(now,timezone.utc)-timedelta(days=days-1)).strftime('%Y-%m-%d')
         rows=c.execute('SELECT day,tokens FROM account_token_buckets WHERE route=? AND namespace=? AND day>=? ORDER BY day',(route,self.account_namespace(c,route),since)).fetchall()
         if not rows:return None
+        from .codex_usage import account_filter
+        account_sql,account_args=account_filter(self.account_namespace(c,route)) if route=='codex' else ('1=1',())
         local=dict(c.execute("SELECT date(ts,'unixepoch') AS day,SUM(uncached_input+cached_input+output+cache_creation) FROM usage_hourly"
-                             ' WHERE route=? AND ts>=? GROUP BY day',(route,stamp(since+'T00:00:00Z'))))
+                             ' WHERE route=? AND ts>=? AND '+account_sql+' GROUP BY day',(route,stamp(since+'T00:00:00Z'),*account_args)))
         out=[]
         for day,tokens in rows:
             mine=local.get(day,0)

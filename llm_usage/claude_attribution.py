@@ -24,7 +24,7 @@ import re
 import sqlite3
 import time
 
-from .claude_accounts import FAMILY, UNKNOWN, home_candidates, inspect, observed_homes, route_for, bind_primary
+from .claude_accounts import FAMILY, UNKNOWN, home_candidates, inspect, observed_homes, route_for, bind_primary,transcript_sources
 
 # Evidence may be stamped a moment after the request it explains (clock jitter).
 TOLERANCE = 2
@@ -40,19 +40,22 @@ def initialize(c):
         session TEXT NOT NULL, ts REAL NOT NULL, account_key TEXT NOT NULL, kind TEXT NOT NULL,
         PRIMARY KEY(session, ts, kind, account_key));
       CREATE TABLE IF NOT EXISTS claude_dirty (session TEXT PRIMARY KEY, since REAL NOT NULL);
+      CREATE INDEX IF NOT EXISTS claude_evidence_request ON claude_evidence(kind,account_key);
     ''')
 
 
 def account_for(ts, evidence, policy, primary_route):
     """Pure decision for one request. evidence: sorted [(ts, route)]; policy:
     ('single', route) | ('shared', native route, cutover) | None (folder unknown)."""
-    latest = None
+    latest = None;point_time=None;ambiguous=False
     for point, route in evidence:
         if point > ts + TOLERANCE:
             break
-        latest = route
+        if point_time==point and latest!=route:ambiguous=True
+        elif point_time!=point:ambiguous=False
+        latest = route;point_time=point
     if latest:
-        return latest
+        return UNKNOWN if ambiguous else latest
     if policy and policy[0] == 'single':
         return policy[1]
     if policy and policy[0] == 'shared':
@@ -191,9 +194,9 @@ def collect_evidence(store, settings):
 
 def policies(store, settings, homes, primary):
     """Transcript folder -> ('single', route) or ('shared', native route, cutover)."""
-    roots = [Path(s['path']) for s in settings.get('sources', []) if s.get('route') == FAMILY and s.get('kind') == 'jsonl']
     result = {}
     with store.connect() as c:
+        roots = [Path(s['path']) for s in transcript_sources(settings,observed_homes(store,c)) if s.get('route') == FAMILY and s.get('kind') == 'jsonl']
         for root in roots:
             try:
                 real = os.path.realpath(root)
@@ -320,11 +323,12 @@ def _resolve(store, settings, limit=None):
             work.setdefault(session, None)
         for session, since in list(work.items())[:limit]:
             routes = {}
-            evidence = []
+            evidence = [];requests={}
             if session is not None:
-                for ts, key in c.execute('SELECT ts,account_key FROM claude_evidence WHERE session=? ORDER BY ts', (session,)):
+                for ts, key,kind in c.execute('SELECT ts,account_key,kind FROM claude_evidence WHERE session=? ORDER BY ts', (session,)):
                     routes.setdefault(key, route_for(key, primary) if primary else FAMILY+':'+key[:12])
                     evidence.append((ts, routes[key]))
+                    if kind.startswith('telemetry:'):requests.setdefault(kind[len('telemetry:'):],set()).add(routes[key])
             policy = rules.get(roots.get(session)) if session is not None else None
             policy = policy or fallback
             where = "route='claude-code' AND session IS ?"
@@ -336,8 +340,9 @@ def _resolve(store, settings, limit=None):
             # A cloud copy was assigned by the account that read it.
             where += " AND NOT EXISTS (SELECT 1 FROM usage_origins o WHERE o.event_id=events.id AND o.source LIKE 'claude-cloud:%')"
             updates = []
-            for event_id, ts, current in c.execute(f'SELECT id,ts,account FROM events WHERE {where}', args).fetchall():
-                target = account_for(ts, evidence, policy, FAMILY)
+            for event_id, ts, current,parent in c.execute(f'SELECT id,ts,account,parent_id FROM events WHERE {where}', args).fetchall():
+                direct=requests.get(parent or event_id,set())
+                target = next(iter(direct)) if len(direct)==1 else UNKNOWN if direct else account_for(ts, evidence, policy, FAMILY)
                 if target != current:
                     updates.append((target, event_id))
             c.executemany('UPDATE events SET account=? WHERE id=?', updates)
@@ -357,8 +362,8 @@ def summarize(store, c, accounts):
     if accounts < 2:
         return
     hooks = c.execute("SELECT COUNT(*),MAX(ts) FROM claude_evidence WHERE kind LIKE 'hook:%'").fetchone()
-    unknown = c.execute("SELECT COUNT(*) FROM events WHERE route='claude-code' AND account=?", (UNKNOWN,)).fetchone()[0]
-    recent = c.execute("SELECT COUNT(*) FROM events WHERE route='claude-code' AND account=? AND ts>=?",
+    unknown = c.execute("SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=?", (UNKNOWN,)).fetchone()[0]
+    recent = c.execute("SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=? AND ts>=?",
                        (UNKNOWN, time.time()-86400)).fetchone()[0]
     detail = (f'Claude 계정 {accounts}개 · 훅 기록 {hooks[0]}건' + ('' if hooks[0] else ' (훅 미설치 · 프로세스 기록만 사용)')
               + f' · 계정 미확인 요청 {unknown}건' + (f' (최근 24시간 {recent}건)' if recent else ''))

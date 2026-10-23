@@ -131,6 +131,31 @@ class AccountTests(unittest.TestCase):
         self.assertIsNone(found[-1]['credentials'])
         self.assertFalse(windows.exists())
 
+    def test_discovered_private_transcript_folder_is_collected_and_attributed(self):
+        from llm_usage.claude_accounts import transcript_sources
+        # Shared native folders are already covered by the configured source.
+        self.assertEqual(len(transcript_sources(self.cfg)),1)
+        projects=self.h.managed/'projects';projects.unlink();projects.mkdir()
+        original=self.h.transcript('private-sdk',[NOW-30])
+        private=projects/'project';private.mkdir()
+        original.rename(private/original.name)
+        self.accounts_by_route()
+        collect.collect_local(self.store,self.cfg,include_derived=False)
+        resolve(self.store,self.cfg)
+        self.assertEqual(self.accounts_of('private-sdk'),[R_SECOND])
+        collect.collect_local(self.store,self.cfg,include_derived=False)
+        self.assertEqual(len(self.events()),1)
+        self.assertEqual(len(transcript_sources(self.cfg)),2)
+
+    def test_isolated_sources_do_not_discover_the_process_home(self):
+        from llm_usage.claude_accounts import transcript_sources
+        isolated=dict(sources=[dict(name='fixture',kind='jsonl',route='codex',path=str(self.root/'empty'))])
+        self.assertEqual(transcript_sources(isolated),isolated['sources'])
+        # A deliberately different default home does not opt into global zerosub homes.
+        other=self.root/'isolated-claude';other.mkdir();(other/'projects').mkdir()
+        found=transcript_sources(dict(sources=[],claude_auth=str(other/'.credentials.json')))
+        self.assertEqual([s['path'] for s in found],[str(other/'projects')])
+
     def test_plan_labels_and_duplicate_names(self):
         self.assertEqual(plan_label('max', 'default_claude_max_5x'), 'Max 5x')
         self.assertEqual(plan_label('max', 'default_claude_max_20x'), 'Max 20x')

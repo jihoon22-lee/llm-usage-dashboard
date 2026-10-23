@@ -58,6 +58,8 @@ def codex_limits(store,c,data,checked,source='codex',account_profile=None):
                               credential_revision=revision if account_profile is not None else (account(c,'codex') or {}).get('credential_revision'),
                               retain_matching_identity=account_profile is not None)
         if owner and owner['checked']>checked:return 0
+        from .codex_usage import bind_account
+        bind_account(store,c,ident,owner['account_key'] if owner else None,checked)
         resource_count=codex_resources(c,data,checked)
         store.save_state(c,'quota_policy:codex',dict(checked=checked,
             ordinary_allowed=data.get('ordinaryUsageAllowed') if isinstance(data.get('ordinaryUsageAllowed'),bool) else None,
