@@ -460,6 +460,71 @@ class AccountTests(unittest.TestCase):
             self.assertEqual(tuple(c.execute('SELECT COUNT(*),SUM(uncached_input),SUM(output) FROM events').fetchone()), before)
         self.assertTrue(self.store.rollup_matches())
 
+    def assert_late_default_keeps_route(self, register_first):
+        self.unbound_folder(['before-login'])
+        if register_first:
+            self.accounts_by_route()
+        self.collect()
+        with self.store.connect() as c:
+            owner = observe_account(c, R_SECOND, SECOND, NOW - 100)
+            self.store.limit(c, R_SECOND, 'five_hour', 70, NOW + 3600, NOW - 100, 'claude-oauth:' + K_SECOND[:12])
+            if register_first:
+                # Existing registry rows from before the route reservation was added.
+                c.execute("DELETE FROM state WHERE key='claude_accounts:unbound-keys'")
+            else:
+                self.assertEqual(collect.status_route(self.store, c, Path('claude-code@0123456789ab.json'),
+                                                      FAMILY, dict(account=K_SECOND)), R_SECOND)
+        from llm_usage.resources import write_manual
+        manual = write_manual(self.store, dict(route=R_SECOND, kind='reset', label='saved reset', amount=2,
+                                               unit='count', scope='unknown', checked=NOW - 100))
+        # A later login of the same identity in the default home must not rename it.
+        Homes.write_account(self.h.home / '.claude.json', SECOND)
+        contexts = self.accounts_by_route()
+        self.assertEqual(set(contexts), {R_SECOND})
+        self.assertEqual(contexts[R_SECOND]['home']['kind'], 'default')
+        self.h.transcript('after-login', [NOW - 50])
+        self.cfg['sources'].append(dict(name='default home', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects')))
+        self.collect()
+        self.assertEqual(self.accounts_of('before-login'), [R_SECOND])
+        self.assertEqual(self.accounts_of('after-login'), [R_SECOND])
+        self.store = Store(self.store.path)
+        self.assertEqual(set(self.accounts_by_route()), {R_SECOND})
+        with self.store.connect() as c:
+            self.assertEqual([(r['route'], r['account_key']) for r in registry(c)], [(R_SECOND, K_SECOND)])
+            self.assertIsNone(self.store.state(c, 'claude_primary_account'))
+            self.assertEqual(observe_account(c, R_SECOND, SECOND, NOW)['epoch'], owner['epoch'])
+            for name in ('claude-code.json', 'claude-code@0123456789ab.json'):
+                self.assertEqual(collect.status_route(self.store, c, Path(name), FAMILY, dict(account=K_SECOND)), R_SECOND)
+            self.assertEqual(c.execute('SELECT route FROM resource_items WHERE id=?', (manual['id'],)).fetchone()[0], R_SECOND)
+        for i, name in enumerate(('claude-code.json', 'claude-code@0123456789ab.json')):
+            (self.h.inbox / name).write_text(json.dumps(dict(account=K_SECOND, checked=NOW - 20 + i,
+                data={'rate_limits': {'five_hour': {'used_percentage': 30, 'resets_at': NOW + 3600}}})))
+        collect.collect_status(self.store, self.cfg)
+        with self.store.connect() as c:
+            self.assertEqual({r[0] for r in c.execute("SELECT route FROM limit_history WHERE source LIKE 'claude-code%'")}, {R_SECOND})
+        usage = self.store.usage(period='7d', now=NOW, subscriptions={R_SECOND: 20},
+                                 pricing={'claude-test': dict(input=1, output=2)})
+        self.assertEqual([(r['account'], r['tokens']) for r in usage['claude_split']], [(R_SECOND, 30)])
+        self.assertEqual([(s['route'], s['period_tokens'], s['monthly_usd']) for s in usage['subscriptions']], [(R_SECOND, 30, 20)])
+        self.assertAlmostEqual(usage['subscriptions'][0]['period_cost'], .00004)
+        quota = next(r for r in self.store.limits(NOW)['limits'] if r['route']==R_SECOND and r['bucket']=='five_hour')
+        self.assertEqual(quota['remaining'], 70)
+        self.assertTrue(self.store.rollup_matches())
+
+    def test_a_registered_account_keeps_its_route_when_the_default_home_later_signs_in(self):
+        self.assert_late_default_keeps_route(register_first=True)
+
+    def test_attribution_before_polling_keeps_its_route_when_the_default_home_later_signs_in(self):
+        self.assert_late_default_keeps_route(register_first=False)
+
+    def test_a_different_late_default_account_can_still_claim_the_original_route(self):
+        self.unbound_folder(['before-login'])
+        self.collect()
+        Homes.write_account(self.h.home / '.claude.json', MAIN)
+        contexts = self.accounts_by_route()
+        self.assertEqual({route: ctx['key'] for route, ctx in contexts.items()}, {FAMILY: K_MAIN, R_SECOND: K_SECOND})
+        self.assertEqual(self.accounts_of('before-login'), [R_SECOND])
+
     def test_bound_primary_does_not_guess_an_old_fallbacks_account(self):
         self.unbound_folder(['old'])
         collect.collect_local(self.store, self.cfg, include_derived=False)

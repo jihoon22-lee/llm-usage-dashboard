@@ -166,7 +166,7 @@ def inspect(home):
 
 def bind_primary(store, c, homes):
     """The account that keeps route 'claude-code': the one the database already
-    identified, else the default home's current login."""
+    identified, else an unassigned default login. A known route never changes."""
     primary = store.state(c, 'claude_primary_account')
     if primary:
         return primary
@@ -174,8 +174,20 @@ def bind_primary(store, c, homes):
     owner = account(c, FAMILY)
     primary = owner['account_key'] if owner and owner['account_key'] else next(
         (h['key'] for h in homes if h['kind'] == 'default' and h['key']), None)
+    remembered = store.state(c, 'claude_accounts:unbound-keys', []) or []
+    secondary = set(remembered)
+    secondary.update(r[0] for r in c.execute(
+        'SELECT account_key FROM claude_accounts WHERE route<>? AND account_key IS NOT NULL', (FAMILY,)))
+    if primary in secondary:
+        primary = None  # A later default-home login must keep its existing hashed route.
     if primary:
         store.save_state(c, 'claude_primary_account', primary)
+    else:
+        # Attribution can run before quota polling populates the registry. Reserve
+        # these routes now so even that ordering survives a later login and restart.
+        secondary.update(h['key'] for h in homes if h['key'])
+        if sorted(secondary) != remembered:
+            store.save_state(c, 'claude_accounts:unbound-keys', sorted(secondary))
     return primary
 
 
