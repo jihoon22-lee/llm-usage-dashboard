@@ -124,6 +124,27 @@ class ClaudeCloudTests(unittest.TestCase):
         self.run_collect(api)
         self.assertEqual(len(self.rows()), 4)
 
+    def test_parser_upgrade_restarts_both_partial_streams_before_accepting_new_version(self):
+        from llm_usage.cloud import PARSER_VERSION
+        first=assistant('first','2026-10-12T09:30:00Z',40)
+        first['payload']['message']['usage'].update(output_tokens_details=dict(thinking_tokens=10),
+            cache_creation=dict(ephemeral_5m_input_tokens=5,ephemeral_1h_input_tokens=5),
+            iterations=[dict(type='advisor_message',model='claude-advisor',input_tokens=10,output_tokens=2)])
+        with self.store.connect() as c:
+            self.store.event(c,identity('claude-code','first'),NOW-5400,'Anthropic','claude-code','claude-opus-5-5',
+                             dict(uncached_input=2,cached_input=100,cache_creation=10,output=40),session='inner-1')
+            self.store.save_state(c,'claude-cloud:partial',dict(parser=PARSER_VERSION-1,cursor='next',teleport_cursor='next',
+                updated='2026-10-12T10:00:00Z',scan_updated='2026-10-12T10:00:00Z',checked=NOW-60))
+        api=FakeApi([[session('partial')]],{'partial':[[first],[assistant('last','2026-10-12T09:40:00Z',4)]]})
+        self.run_collect(api)
+        rows=self.rows();parent=next(row for row in rows if row['id']==identity('claude-code','first'))
+        self.assertEqual((parent['reasoning'],parent['cache_creation_1h']),(10,5))
+        self.assertEqual(sum(row['advisor_calls'] for row in rows),1)
+        for endpoint in ('teleport-events','events'):
+            reads=[url for url,_ in api.calls if '/'+endpoint+'?' in url]
+            self.assertNotIn('cursor=',reads[0])
+        self.run_collect(api);self.assertEqual(self.rows(),rows)
+
     def test_expired_login_is_reported_without_a_request(self):
         self.auth.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE', 'expiresAt': (NOW - 1) * 1000}}))
         api = FakeApi([[session('session_cloud')]], {})
