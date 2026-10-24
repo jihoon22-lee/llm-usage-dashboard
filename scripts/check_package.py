@@ -19,7 +19,7 @@ project = tomllib.loads((root / 'pyproject.toml').read_text())['project']
 version = project['version']
 wheel, = dist.glob('*.whl')
 sdist, = dist.glob('*.tar.gz')
-asset_names = {'analysis.js','app.js','charts.js','core.js','format.js','icon-192.png','icon-512.png',
+asset_names = {'activity.js','analysis.js','app.js','charts.js','core.js','format.js','icon-192.png','icon-512.png',
                'icon.svg','index.html','insights.js','manifest.json','observations.js','resources.js','quota.js','settings.js','style.css','sw.js','theme.js'}
 assert {p.name for p in (root / 'llm_usage/web').iterdir() if p.is_file()} == asset_names
 assets = {'llm_usage/web/' + name:sha256(root / 'llm_usage/web' / name) for name in sorted(asset_names)}

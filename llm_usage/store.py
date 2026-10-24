@@ -232,6 +232,8 @@ class Store:
             initialize_usage(c)
             from .codex_usage import initialize as initialize_responses
             initialize_responses(c)
+            from .codex_activity import initialize as initialize_activity
+            initialize_activity(c)
         self._ensure_rollup()
         os.chmod(path, 0o600)
 
@@ -1296,6 +1298,8 @@ class Store:
             if source['name'] in ops_rows or source['name'] in ONE_TIME_SOURCES:continue
             # Resource reads run every 15 minutes, for every Claude account ('claude-credits:<id>').
             source_stale=max(1800,self.thresholds['stale_seconds']) if source['name'].split(':')[0] in ('claude-credits','claude-resets') else self.thresholds['stale_seconds']
+            if source['name']=='codex-consumption-daily':source_stale=max(source_stale,7200)
+            elif source['name'] in ('codex-activity','codex-consumption-threads'):source_stale=max(source_stale,1800)
             if source['status']=='ok' and now.timestamp()-source['checked']>source_stale:
                 source['status']='stale'
         # A status line reports only while a terminal UI runs it (not the desktop apps

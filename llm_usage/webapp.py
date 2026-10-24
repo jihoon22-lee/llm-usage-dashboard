@@ -148,6 +148,28 @@ def create_app(config=None):
     def limits():
         return jsonify(store.limits(ended=ended_routes(config),names=config.get('claude_account_names')))
 
+    @app.get('/api/codex/activity')
+    def codex_activity():
+        from .codex_activity import activity
+        try:
+            return jsonify(activity(store,period=request.args.get('period','7d'),start=request.args.get('start'),
+                end=request.args.get('end'),kind=request.args.get('kind',''),state=request.args.get('state',''),
+                search=request.args.get('search',''),page=request.args.get('page',1)))
+        except (ValueError,TypeError,OverflowError):abort(400,description='작업 기간 또는 필터를 확인하세요.')
+
+    @app.get('/api/codex/activity/<key>')
+    def codex_activity_detail(key):
+        from .codex_activity import task_detail
+        try:return jsonify(task_detail(store,key))
+        except ValueError:abort(400,description='작업 ID를 확인하세요.')
+        except KeyError:abort(404,description='현재 계정에서 수집한 작업이 아닙니다.')
+
+    @app.get('/api/codex/consumption')
+    def codex_consumption():
+        from .codex_activity import consumption
+        try:return jsonify(consumption(store,days=request.args.get('days',7)))
+        except (ValueError,TypeError,OverflowError):abort(400,description='소비 분석 기간은 7일 또는 30일입니다.')
+
     def manual_resource(rid=None,delete=False):
         from .resources import write_manual,Conflict
         try:return jsonify(write_manual(store,request.get_json(silent=True),rid,delete))

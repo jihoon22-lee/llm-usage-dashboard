@@ -12,7 +12,7 @@ const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,tota
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
   familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange,
-  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields})`,
+  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -26,6 +26,20 @@ test('escaping and number formats',()=>{
   assert.equal(f.percent(12.345),'12.3%');
   assert.equal(f.pctChange(12.6),'+13%');
   assert.equal(f.pctChange(null),'—');
+});
+
+test('consumption preserves missing values and tiny positive percentages',()=>{
+ for(const value of [null,undefined,'',true,-1,'NaN',Infinity])assert.equal(f.consumptionNumber(value),null);
+ assert.equal(f.consumptionPercent('0E-10'),'0%');assert.equal(f.consumptionPercent(null),'미제공');
+ assert.equal(f.consumptionPercent('.0001'),'<0.001%');assert.equal(f.consumptionPercent('150.25'),'150.25%');
+});
+
+test('daily consumption groups one dimension without summing alternative breakdowns',()=>{
+ const day={attribution:[{thread_source:'codex_web_code_review',value:'2'},{thread_source:'codex_web_code_review',value:'3'},{thread_source:'unknown',value:null}],
+  models:[{model:'model-a',speed:'standard',value:'4'},{model:'model-a',speed:'fast',value:'2'}]};
+ assert.equal(f.consumptionGroups(day,'source')[0].value,5);assert.equal(f.consumptionGroups(day,'source')[0].label,'코드 리뷰');
+ assert.equal(f.consumptionGroups(day,'model')[0].value,6);assert.equal(f.consumptionGroups(day,'source').length,1);
+ assert.equal(f.consumptionGroups({},'source').length,0);
 });
 
 test('usage details retain unknown values and never add subsets to the total',()=>{

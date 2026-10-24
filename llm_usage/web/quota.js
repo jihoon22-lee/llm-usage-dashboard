@@ -1,6 +1,6 @@
 'use strict';
 // Heatmap, shared tooltip, quota cards, panel order, alert chips and browser notifications.
-function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView==='settings'?previousView:currentView,...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
+function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView==='settings'?previousView:currentView,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
 function renderHeatmap(cells){
  const grid=Array.from({length:7},()=>Array(24).fill(0));let max=0;
  (cells||[]).forEach(c=>{const v=cellMetric(c);grid[c.dow][c.hour]=v;if(v!=null)max=Math.max(max,v);});
@@ -207,7 +207,7 @@ function renderLimits(data){
  };
  const cardHtml=({route,name,rows})=>{
   const body=route==='claude-code'&&multiClaude()?accountGroups(rows).map(([account,list])=>accountSection(route,account,list)).join('<hr class="quota-divider">'):cardBody(route,rows,route);
-  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><small class="card-caption">잔여 · 초기화까지</small><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${body}</article>`;
+  return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><small class="card-caption">잔여 · 초기화까지</small><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${route==='codex'?'<button type="button" class="mini-btn consumption-shortcut" data-open-consumption>소비 분석 보기 →</button>':''}${body}</article>`;
  };
  $('limits').innerHTML=active.map(cardHtml).join('')
   +(folded.length?`<details class="quota-dormant"><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)+(g.rows.length&&g.rows.every(r=>r.user_ended)?' (구독 종료)':'')).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');
@@ -237,7 +237,7 @@ function moveQuota(route,dir){
  [order[i],order[j]]=[order[j],order[i]];orderStore.set('quota',order);
  if(lastLimits)renderLimits(lastLimits);
 }
-const panelSections=()=>[...document.querySelectorAll('main>[data-view]')].filter(s=>s.querySelector(':scope>[data-panel]'));
+const panelSections=()=>[...document.querySelectorAll('main>[data-view],#usage-tokens')].filter(s=>s.querySelector(':scope>[data-panel]'));
 const panelEls=section=>[...section.querySelectorAll(':scope>[data-panel]')];
 // The saved list spans every section (and ids from earlier layouts); each section only
 // follows the ids it owns, so a panel never leaves its own tab.

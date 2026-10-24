@@ -78,10 +78,10 @@ with sync_playwright() as p:
     expect(page.locator('#tab-plan,#work-now,#work-budget,#plan-summary')).to_have_count(0)
     # A panel order saved by an older layout (ids from several tabs) only reorders within each tab.
     page.evaluate("storage.set('llmOrder',JSON.stringify({panels:['calendar','projects','reports','cache','insights','trend','subvalue']}));applyPanelOrder()")
-    assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('main>[data-view]'))")
+    assert page.evaluate("[...document.querySelectorAll('[data-panel]')].every(e=>e.parentElement===e.closest('#usage-tokens,main>[data-view]'))")
     # A panel the saved order does not know (added later) follows the known ones.
     assert page.evaluate("[...document.querySelectorAll('#view-reports>[data-panel]')].map(e=>e.dataset.panel)")==['calendar','reports','subvalue','monthly']
-    assert page.evaluate("[...document.querySelectorAll('#view-usage>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
+    assert page.evaluate("[...document.querySelectorAll('#usage-tokens>[data-panel]')].map(e=>e.dataset.panel)")[:3]==['projects','cache','trend']
     page.evaluate("storage.set('llmOrder','{}')");page.reload()
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     # Dormant routes (ended or past quota_hide_days) fold into .quota-dormant;
