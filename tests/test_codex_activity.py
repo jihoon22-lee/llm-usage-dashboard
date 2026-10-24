@@ -129,6 +129,19 @@ class ActivityTests(unittest.TestCase):
         with self.store.connect() as c:state=self.store.state(c,'codex_activity:scan:'+self.account+':code_review')
         self.assertEqual(state['cursor'],'next');self.assertEqual(state['error'],'HTTP 500')
 
+    def test_permanent_detail_failure_cannot_starve_unread_tasks(self):
+        newest=task(1);older=task(2);older['created_at']-=100
+        with self.store.connect() as c:
+            first=activity.record_task(c,self.account,newest,NOW)
+            second=activity.record_task(c,self.account,older,NOW)
+        def fetch(path,body=None):
+            if path.endswith('/task_1'):raise HTTPError('https://chatgpt.com/redacted',404,'gone',{},None)
+            return detail(older)
+        collector._details(self.store,self.account,fetch,1,NOW)
+        collector._details(self.store,self.account,fetch,1,NOW+301)
+        self.assertEqual(activity.task_detail(self.store,first,now=NOW+301)['task']['detail_status'],'error')
+        self.assertEqual(activity.task_detail(self.store,second,now=NOW+301)['task']['detail_status'],'ok')
+
     def test_parent_child_threads_are_linked_without_summing_percentages(self):
         item=task();raw=detail(item);raw['current_assistant_turn']['child_turns']=[dict(id='child-turn',model_version='other-model',turn_status='completed',
             thread_events={'events':[{'method':'thread/started','params':{'thread':{'id':CHILD,'parentThreadId':SID}}}]})]
@@ -256,6 +269,26 @@ class ActivityTests(unittest.TestCase):
         collector._failed(self.store,'fixture-auth',1,HTTPError('https://chatgpt.com/redacted',403,'forbidden',{},None),NOW)
         self.assertFalse(collector._allowed(self.store,'fixture-auth',1,NOW+9000))
         self.assertTrue(collector._allowed(self.store,'fixture-auth',2,NOW+1))
+
+    def test_optional_plan_history_respects_retry_after_while_daily_values_continue(self):
+        api=Api();plan_calls=[]
+        def fetch(path,body=None):
+            if path.startswith('usage/plan_limit_history'):
+                plan_calls.append(path)
+                raise HTTPError('https://chatgpt.com/redacted',429,'limited',{'Retry-After':'7200'},None)
+            return api(path,body)
+        with patch.object(collector,'authentication',return_value=(self.account,{},1)):
+            collector.collect(self.store,dict(codex_binary='fixture'),fetch=fetch,now=NOW)
+            collector.collect(self.store,dict(codex_binary='fixture'),fetch=fetch,now=NOW+3601)
+        self.assertEqual(len(plan_calls),1)
+        result=activity.consumption(self.store,now=NOW+3601)
+        self.assertEqual(result['days'][0]['checked'],NOW+3601)
+        self.assertEqual(result['plan']['error'],'HTTP 429')
+        with patch.object(collector,'authentication',return_value=(self.account,{},2)):
+            collector.collect(self.store,dict(codex_binary='fixture'),fetch=fetch,now=NOW+3602)
+            self.assertEqual(len(plan_calls),1)
+            collector.collect(self.store,dict(codex_binary='fixture'),fetch=fetch,now=NOW+7203)
+        self.assertEqual(len(plan_calls),2)
 
     def test_pending_detail_and_missing_native_thread_are_not_the_same_state(self):
         with self.store.connect() as c:key=activity.record_task(c,self.account,task(),NOW)

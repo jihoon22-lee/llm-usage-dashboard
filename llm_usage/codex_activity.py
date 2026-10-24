@@ -313,7 +313,7 @@ def _context(store,c,now):
     account=active.get('key')
     scans={f:store.state(c,'codex_activity:scan:'+str(account)+':'+f,{}) for f in ('all','archived','code_review','security_review')}
     return dict(account_key=account,account_status=active.get('status','unavailable'),sources=source_info(store,c,now),
-                coverage={f:{k:s.get(k) for k in ('complete','checked','oldest','pages','error')} for f,s in scans.items()},now=now)
+                coverage={f:{**{k:s.get(k) for k in ('complete','checked','completed_at','oldest','pages','error')},'continuing':bool(s.get('cursor'))} for f,s in scans.items()},now=now)
 
 
 def _threads(c,account,ids,now):

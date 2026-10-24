@@ -101,6 +101,7 @@ def _scan(store,account,fetch,kind,page_limit,now):
             complete=state.get('complete',False) or not following
             state.update(cursor=following,complete=complete,checked=now,oldest=oldest,
                          pages=state.get('pages',0)+1,error=None)
+            if not following:state['completed_at']=now
             store.save_state(c,key,state)
         count+=len(raw['items'])
         if next_cursor:seen.add(next_cursor)
@@ -113,7 +114,9 @@ def _details(store,account,fetch,limit,now):
     with store.connect() as c:
         rows=c.execute('''SELECT * FROM codex_activity_tasks WHERE account=? AND
           (detail_checked IS NULL OR COALESCE(updated,0)>COALESCE(detail_updated,0) OR detail_status='error')
-          AND next_detail<=? ORDER BY detail_checked IS NOT NULL,created DESC LIMIT ?''',(account,now,limit)).fetchall()
+          AND next_detail<=? ORDER BY CASE WHEN detail_status='error' THEN 2
+          WHEN detail_checked IS NOT NULL THEN 0 ELSE 1 END,
+          CASE WHEN detail_status='error' THEN next_detail ELSE 0 END,created DESC LIMIT ?''',(account,now,limit)).fetchall()
     for row in rows:
         try:
             raw=fetch('tasks/'+urllib.parse.quote(row['task_id'],safe=''))
@@ -168,17 +171,21 @@ def _threads(store,account,fetch,now):
     return bool(ids)
 
 
-def _daily(store,account,fetch,now):
+def _daily(store,account,fetch,now,signature):
     day=datetime.fromtimestamp(now,timezone.utc).date()
     query=urllib.parse.urlencode(dict(start_date=(day-timedelta(days=29)).isoformat(),end_date=day.isoformat(),group_by='day'))
     raw=fetch('usage/daily-token-usage-breakdown?'+query)
     with store.connect() as c:count,gaps,invalid=data.record_daily(c,account,raw,now)
+    plan_gate='codex_activity:poll:'+account+':plan'
+    if not _allowed(store,plan_gate,signature,now):
+        with store.connect() as c:
+            store.source(c,'codex-consumption-daily','partial',f'일별 {count}일 수신 · 플랜 이력 재조회 대기 · 기존 이력과 상태 유지',now)
+        return
     try:
         plan=data.plan_metadata(fetch('usage/plan_limit_history?days=30'),now)
     except BudgetExhausted:raise
     except Exception as exc:
-        _,reason=_failure(exc)
-        if isinstance(exc,urllib.error.HTTPError):exc.close()
+        reason=_failed(store,plan_gate,signature,exc,now)
         with store.connect() as c:
             old=store.state(c,'codex_activity:plan:'+account,{}) or {}
             store.save_state(c,'codex_activity:plan:'+account,{**old,'error':reason,'last_attempt':now})
@@ -186,6 +193,7 @@ def _daily(store,account,fetch,now):
         return
     partial=invalid or gaps or count<30 or plan.get('coverage_complete') is not True or plan.get('approximate') is not False or any(p['accounting_complete'] is not True for p in plan['periods'])
     with store.connect() as c:
+        store.save_state(c,plan_gate,dict(next_attempt=now+3600,credential_mtime=signature,failures=0))
         store.save_state(c,'codex_activity:plan:'+account,plan)
         store.source(c,'codex-consumption-daily','partial' if partial else 'ok',
                      f'한도 소비율(%) {count}일 · 분해 합계 차이 {gaps}일 · 해석 불가 {invalid}행'
@@ -215,7 +223,7 @@ def collect(store,settings,fetch=None,now=None,page_limit=3,detail_limit=12):
     fetch=fetch or Client(headers)
     # Independent cooldowns prevent a rejected optional source blocking the rest.
     for name,interval,action in (
-        ('daily',3600,lambda:_daily(store,account,fetch,now)),
+        ('daily',3600,lambda:_daily(store,account,fetch,now,signature)),
         ('threads',300,lambda:_threads(store,account,fetch,now)),
         ('list',300,lambda:_lists_and_details(store,account,fetch,signature,now,page_limit,detail_limit))):
         key='codex_activity:poll:'+account+':'+name
