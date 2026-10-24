@@ -34,7 +34,7 @@
 <p class="hint">제공사 기준일별 한도 소비율입니다. 토큰 수·현재 잔여량과 단위가 다르며, 여러 날짜의 비율을 합산하지 않습니다.</p>
 <div class="filters codex-filters"><label>소비 분석 기간<select id="consumption-days"><option value="7">최근 7일</option><option value="30">최근 30일</option></select></label><label>소비 분류<select id="consumption-group"><option value="source">기능별</option><option value="model">모델별</option></select></label></div>
 <p id="consumption-status" class="hint" role="status" aria-live="polite">수집 데이터 확인 대기</p><div id="consumption-summary" class="consumption-summary"></div>
-<section class="panel"><div class="section-heading"><h3>일별 한도 소비</h3><span>단위 % · 제공사 기준일</span></div><div id="consumption-legend" class="legend"></div><div id="consumption-chart"></div><p class="hint">날짜를 선택하면 분해 내역을 확인할 수 있습니다. 빈 날짜는 0이 아닌 미수신입니다.</p></section>
+<section class="panel"><div class="section-heading"><h3>일별 한도 소비</h3><span>단위 % · 제공사 기준일</span></div><div id="consumption-legend" class="legend"></div><div id="consumption-chart"></div><p class="hint">마우스·터치·방향키로 날짜별 소비율을 확인하고, 클릭 또는 Enter로 분해 내역을 표시합니다. 빈 날짜는 0이 아닌 미수신입니다.</p></section>
 <section class="panel"><div class="section-heading"><h3>소비 분해 상세</h3><label>기준일<select id="consumption-day" aria-label="소비 상세 기준일"></select></label></div><div id="consumption-detail"></div></section>
 </section>
 <section id="usage-activity" role="tabpanel" aria-labelledby="usage-tab-activity" hidden>
@@ -50,7 +50,7 @@
 <section class="activity" data-view="reports" id="view-reports" role="tabpanel" aria-labelledby="tab-reports" hidden><div class="section-heading"><h2>리포트</h2><span>주간 · 일별 · 구독 가치 · 기간 필터 무관 <button type="button" class="order-toggle" data-order-scope="panels">순서</button></span></div>
 <details class="panel mobile-fold" open data-panel="reports" data-mobile-open><summary class="section-heading"><h3>주간 리포트</h3><span>월~일 · 수집기가 매주 작성 · 기간 필터 무관</span></summary><div id="reports"></div></details>
 <details class="panel mobile-fold" open data-panel="calendar" data-mobile-open><summary class="section-heading"><h3>일별 활동</h3><span id="calendar-caption">최근 16~26주 · 일별 토큰 · 기간 필터 무관</span></summary><div id="calendar"></div><p class="hint">한국 시간 기준 · 색 단계는 표시한 주 안에서 사용한 날의 순위를 다섯 단계로 나눈 것입니다(진할수록 많이 쓴 날).</p></details>
-<details class="panel mobile-fold" open data-panel="subvalue" data-mobile-open><summary class="section-heading"><h3>구독 가치 분석</h3><span>공개 단가 환산 ÷ 월 구독료</span></summary><div id="subvalue"></div><p class="hint">실제 지출이 아닌 리스트 가격 환산입니다. 월 구독료는 설정에서 수정할 수 있습니다.</p></details>
+<details class="panel mobile-fold" open data-panel="subvalue" data-mobile-open><summary class="section-heading"><h3>구독 가치 분석</h3><span>공개 단가 환산 ÷ 월 구독료</span></summary><div id="subvalue"></div><p class="hint">원본 토큰량과 단가가 확인된 요청 기록을 리스트 가격으로 환산하며 실제 지출과 다릅니다. 모델을 알아도 한도 소비율만 받은 사용은 포함하지 않습니다. 월 구독료는 설정에서 수정할 수 있습니다.</p></details>
 <details class="panel mobile-fold" open data-panel="monthly" data-mobile-open><summary class="section-heading"><h3>월간 구독 결산</h3><span>지난달까지 · 수집기가 매월 작성 · 기간 필터 무관</span></summary><div id="monthly"></div><p class="hint">한국 시간 달력 월 기준 리스트 가격 환산입니다. 월 구독료는 그 달을 처음 결산할 때 값으로 고정됩니다.</p></details>
 </section>
 <section data-view="status" id="view-status" role="tabpanel" aria-labelledby="tab-status" hidden><section class="panel" id="sources-panel"><div class="section-heading"><h2>수집 범위와 상태</h2></div><div id="sources"></div><div id="account-gap"></div><details class="source-group coverage-fold"><summary>수집 범위 설명</summary><p id="coverage"></p></details></section>

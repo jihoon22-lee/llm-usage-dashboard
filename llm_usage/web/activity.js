@@ -108,18 +108,75 @@ function renderConsumptionChart(data){
  const maximum=Math.max(1,...rows.map(d=>consumptionGroups(d,dimension).reduce((sum,g)=>sum+g.value,0)));
  const width=Math.max(280,box.clientWidth),height=220,left=45,top=22,bottom=32,plot=height-top-bottom,step=(width-left-8)/dates.length;
  const tickEvery=Math.max(1,Math.ceil(dates.length/Math.max(3,Math.floor(width/65))));
- let svg=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="일별 한도 소비율 · 제공사 기준일 · 단위 퍼센트"><text x="0" y="${top+5}" class="consumption-axis">${esc(consumptionPercent(maximum))}</text><text x="17" y="${height-bottom}" class="consumption-axis">0%</text><line x1="${left}" x2="${width-5}" y1="${height-bottom}" y2="${height-bottom}" stroke="var(--border)"/>`;
+ let svg=`<svg tabindex="0" aria-describedby="consumption-keyboard-hint" viewBox="0 0 ${width} ${height}" role="img" aria-label="일별 한도 소비율 · 제공사 기준일 · 단위 퍼센트"><text x="0" y="${top+5}" class="consumption-axis">${esc(consumptionPercent(maximum))}</text><text x="17" y="${height-bottom}" class="consumption-axis">0%</text><line x1="${left}" x2="${width-5}" y1="${height-bottom}" y2="${height-bottom}" stroke="var(--border)"/>`;
  dates.forEach((date,index)=>{
   const d=byDay.get(date),groups=d?consumptionGroups(d,dimension):[],x=left+index*step+step*.12,w=step*.76;
   let offset=0;
+  svg+=`<g data-consumption-day="${date}"><rect x="${x}" y="${top}" width="${w}" height="${plot}" fill="transparent"/>`;
   if(d&&groups.length){
-   svg+=`<g role="button" tabindex="0" data-consumption-day="${date}" aria-label="${date} 소비 분해 보기"><title>${date}\n${groups.map(g=>esc(g.label+' '+consumptionPercent(g.value))).join('\n')}</title><rect x="${x}" y="${top}" width="${w}" height="${plot}" fill="transparent"/>`;
    for(const group of groups){const h=group.value/maximum*plot;svg+=`<rect x="${x}" y="${height-bottom-offset-h}" width="${w}" height="${h}" fill="var(--chart-${labels.indexOf(group.label)%8})"/>`;offset+=h;}
-   svg+='</g>';
-  }else svg+=`<text x="${x+w/2}" y="${height-bottom-8}" text-anchor="middle" class="consumption-axis">—<title>${date} ${d?'이 분류의 값 미제공':'미수신'}</title></text>`;
+  }else svg+=`<text x="${x+w/2}" y="${height-bottom-8}" text-anchor="middle" class="consumption-axis">—</text>`;
+  svg+='</g>';
   if(index%tickEvery===0||index===dates.length-1)svg+=`<text x="${Math.min(width-20,x+w/2)}" y="${height-9}" text-anchor="middle" class="consumption-axis">${date.slice(5)}</text>`;
  });
- box.innerHTML=svg+'</svg>';
+ box.innerHTML=svg+`<line class="chart-cursor" x1="0" x2="0" y1="${top}" y2="${height-bottom}" visibility="hidden"/></svg><span id="consumption-keyboard-hint" class="sr-only">좌우 방향키로 날짜를 선택하고 Enter로 분해 내역을 표시하며 Escape로 툴팁을 닫습니다.</span><div id="consumption-tooltip" class="chart-tooltip" role="status" aria-live="polite" tabindex="0" hidden></div>`;
+ bindConsumptionTooltip(data,dates,byDay,labels,{width,height,left,top,bottom,step,dimension});
+}
+function bindConsumptionTooltip(data,dates,byDay,labels,geometry){
+ const root=$('consumption-chart'),svg=root.querySelector('svg'),tooltip=$('consumption-tooltip'),cursor=root.querySelector('.chart-cursor');
+ let selected=-1,scrollable=false;
+ function hide(){tooltip.hidden=true;cursor.setAttribute('visibility','hidden');selected=-1;}
+ function show(index){
+  index=Math.max(0,Math.min(dates.length-1,index));
+  const date=dates[index];if(!date)return;
+  selected=index;
+  const day=byDay.get(date),groups=day?consumptionGroups(day,geometry.dimension):[];
+  const total=groups.length?groups.reduce((sum,g)=>sum+g.value,0):null;
+  const notices=[day?.mismatch?'분해 합계 불일치':null,day?.invalid_rows?`해석 불가 ${day.invalid_rows}행`:null,
+   data.plan?.approximate===true?'제공사 근사값':null,data.plan?.coverage_complete!==true?'제공 범위 일부 또는 미확인':null].filter(Boolean);
+  scrollable=groups.length>8;tooltip.classList.toggle('scrollable',scrollable);
+  tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)}</strong><small>제공사 기준일 · ${geometry.dimension==='model'?'모델별':'기능별'} 한도 소비율</small></div>`
+   +groups.map(g=>`<div class="tooltip-row"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="var(--chart-${labels.indexOf(g.label)%8})"/></svg> ${esc(g.label)}</span><strong>${esc(consumptionPercent(g.value))}</strong></div>`).join('')
+   +(!groups.length?`<div class="tooltip-row tooltip-missing"><span>${day?'이 분류의 값 미제공':'미수신'}</span><strong>—</strong></div>`:'')
+   +`<div class="tooltip-total"><span>표시 항목 합계</span><strong>${total==null?'—':esc(consumptionPercent(total))}</strong></div>`
+   +(notices.length?`<div class="tooltip-hint">${notices.map(esc).join(' · ')}</div>`:'');
+  tooltip.hidden=false;
+  const center=geometry.left+(index+.5)*geometry.step;
+  cursor.setAttribute('x1',center);cursor.setAttribute('x2',center);cursor.setAttribute('visibility','visible');
+  const box=svg.getBoundingClientRect(),local=root.getBoundingClientRect();
+  const wanted=box.left-local.left+center/geometry.width*box.width+14;
+  tooltip.style.left=scrollable?'0':Math.max(0,Math.min(wanted,local.width-tooltip.offsetWidth))+'px';
+  tooltip.style.top=scrollable?'0':'12px';
+ }
+ function pick(event){
+  const point=svg.createSVGPoint();point.x=event.clientX;point.y=event.clientY;
+  const matrix=svg.getScreenCTM();if(!matrix)return;
+  const local=point.matrixTransform(matrix.inverse());
+  if(local.x<geometry.left||local.x>geometry.width-8||local.y<geometry.top||local.y>geometry.height-geometry.bottom){
+   if(!scrollable||local.y<=geometry.height-geometry.bottom)hide();return;
+  }
+  const index=Math.min(dates.length-1,Math.floor((local.x-geometry.left)/geometry.step));
+  if(index!==selected||tooltip.hidden)show(index);
+ }
+ function detail(){
+  const date=dates[selected];if(!byDay.has(date))return;
+  $('consumption-day').value=date;renderConsumptionDetail(data);
+ }
+ svg.addEventListener('pointermove',pick);
+ svg.addEventListener('pointerdown',pick);
+ svg.addEventListener('click',detail);
+ svg.addEventListener('pointerleave',event=>{if(event.pointerType!=='touch'&&!(scrollable&&root.contains(event.relatedTarget)))hide();});
+ root.onpointerleave=event=>{if(event.pointerType!=='touch')hide();};
+ svg.addEventListener('focus',()=>{if(selected<0)show(0);});
+ svg.addEventListener('blur',event=>{if(!tooltip.contains(event.relatedTarget))hide();});
+ tooltip.addEventListener('keydown',event=>{if(event.key==='Escape'){svg.focus();hide();event.preventDefault();}});
+ svg.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){hide();event.preventDefault();}
+  else if(['Enter',' '].includes(event.key)){detail();event.preventDefault();}
+  else if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){
+   show(event.key==='Home'?0:event.key==='End'?dates.length-1:Math.max(0,selected)+(event.key==='ArrowLeft'?-1:1));event.preventDefault();
+  }
+ });
 }
 function renderConsumptionDetail(data){
  const day=(data.days||[]).find(d=>d.day===$('consumption-day').value),box=$('consumption-detail');
@@ -132,9 +189,12 @@ function renderConsumptionDetail(data){
   +`<details class="consumption-raw"><summary>원본 분류와 합계 대조</summary><p class="hint">기능 ${esc(consumptionPercent(day.totals?.attribution))} · 모델 ${esc(consumptionPercent(day.totals?.models))} · 제품 화면 ${esc(consumptionPercent(day.totals?.surfaces))}. 서로 다른 분해를 더하지 않습니다.</p>`
   +`<div class="table-wrap"><table><thead><tr><th>출처 / 실행 계기</th><th>모델 / 화면</th><th>소비율</th></tr></thead><tbody>${(day.attribution||[]).map(r=>`<tr><td>${esc(r.thread_source)}<small>${esc(r.turn_trigger)}</small></td><td>${esc(r.model)}<small>${esc(r.surface)}</small></td><td>${esc(consumptionPercent(r.value))}</td></tr>`).join('')}</tbody></table></div></details>`;
 }
-$('consumption-chart').addEventListener('click',event=>{const day=event.target.closest('[data-consumption-day]');if(day){$('consumption-day').value=day.dataset.consumptionDay;renderConsumptionDetail(lastConsumption);}});
-$('consumption-chart').addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)&&event.target.dataset.consumptionDay){event.preventDefault();event.target.dispatchEvent(new MouseEvent('click',{bubbles:true}));}});
-new ResizeObserver(()=>{if(currentView==='usage'&&usageView==='consumption'&&lastConsumption)renderConsumptionChart(lastConsumption);}).observe($('consumption-chart'));
+let consumptionChartWidth=0;
+new ResizeObserver(([entry])=>{
+ const width=entry.contentRect.width;if(Math.abs(width-consumptionChartWidth)<1)return;
+ consumptionChartWidth=width;
+ if(currentView==='usage'&&usageView==='consumption'&&lastConsumption)renderConsumptionChart(lastConsumption);
+}).observe($('consumption-chart'));
 
 function consumptionBadge(status){return `<span class="consumption-badge">${esc(CONSUMPTION_STATUS[status]||'제공 상태 미확인')}</span>`;}
 function taskConsumption(task){

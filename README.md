@@ -5,7 +5,7 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.9.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.9.0)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.9.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.9.1)** · [변경 기록](CHANGELOG.md)
 
 수집 기준: [클라우드 누계 대조·한국시간 미배분량·선택적 telemetry](docs/collection-reconciliation.md).
 
@@ -53,6 +53,8 @@ Codex 클라우드·자동 리뷰는 [실계정 추가 검증](workthrough/2026-
 
 [대시보드 통합 검토](workthrough/2026-10-24-cloud-review-verification.md#dashboard-integration-review)에는 사용량 안의 토큰 분석·한도 소비·클라우드 및 리뷰 목록, 한도에서 소비 분석으로 이동하는 연결, 수집 상태 표시와 구현 순서를 정리했습니다. 0.9.0의 구현·실계정 검증 결과와 남은 범위도 같은 기록에서 확인할 수 있습니다.
 
+한도 소비의 모델명을 확인해도 소비율만으로 원본 토큰이나 금액을 계산할 수는 없습니다. 구독 가치 분석은 원본 토큰량과 단가가 확인된 요청 기록을 환산하며, 소비율만 받은 사용은 추가하지 않습니다.
+
 Claude `advisor_message`는 부모 요청에 연결된 별도 모델 소비로 포함하고 내부 호출 수를 API 요청 수와 구분합니다. 중첩 thinking 필드와 캐시 생성의 5분·1시간 분해를 보존하며 출력·전체 생성 토큰에 다시 더하지 않습니다. 캐시 분해가 원본 합계와 맞지 않거나 서로 상충하면 전체 토큰은 보존하고 분해만 미확인으로 표시합니다. TTL이나 해당 단가가 없는 생성량은 기존 기본 단가로 추정합니다. 삭제된 원본의 reasoning·TTL은 소급 복구할 수 없습니다. [원본 대조·재현·보완 기록](workthrough/2026-10-23-collection-coverage.md)을 확인하세요.
 
 일일 원본 대조는 Codex 요청별 일반·압축 기록, Claude 부모·advisor, OpenCode와 기존 누계·Antigravity·Devin을 수집기와 별도로 읽어 검사합니다. 수집 완료 지점 뒤의 새 기록은 대기, 해석 실패·세부값 상충·현재 원본보다 큰 과거 보존값은 부분 확인으로 구분합니다. 실제 누락과 숫자 불일치는 오류로 표시하며, 삭제된 원본까지 검증됐다고 간주하지 않습니다.
@@ -73,7 +75,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.9.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.9.1 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -82,7 +84,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.9.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.9.1의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.
