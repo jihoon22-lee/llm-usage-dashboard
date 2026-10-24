@@ -91,6 +91,12 @@
 
 실제 계정 조회·웹 표시·완료/실패/취소 표본·페이지 끝·식별자 중복·수치 합계·응답 단위를 검증했다. 합성 fixture를 실계정 수신 결과로 대체하지 않았다. 문서 변경의 diff·공개 파일 검사·상대 링크 검사를 통과했다. 임시 조사 도구와 비공개 메타데이터는 공개 커밋에서 제외하고 제거했으며, 조사에 사용한 브라우저 탭도 닫았다.
 
+### 문서 PR의 병합 제약
+
+[PR #80](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/80)의 문서 커밋 `e70d253`에 대한 [CI 보안 검사](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/40045401456/job/120725845287)가 기존 `filelock 4.0.12`의 취약점 세 건 때문에 실패했다. `pip-audit`이 보고한 식별자는 `CVE-2026-112940`, `CVE-2026-112913`, `CVE-2026-112907`이며 수정 버전은 4.2.1이다.
+
+잠금 파일에서 `pip-audit` → `cachecontrol[filecache]` → `filelock` 개발 의존성 경로를 확인했다. 이번 문서 변경으로 추가된 의존성이 아니며, 운영 환경을 동기화하거나 의존성을 바꾸지 않았다. 별도 의존성 수정과 필수 CI 성공이 필요하므로 main 병합은 보류하고 문서 커밋·PR·작업 브랜치를 보존한다. 보안 검사를 생략하거나 main 보호 규칙을 우회하지 않는다.
+
 ## 참고한 공식 문서
 
 - [App Server의 계정 토큰 조회](https://learn.chatgpt.com/docs/app-server#7-token-usage-chatgpt)
