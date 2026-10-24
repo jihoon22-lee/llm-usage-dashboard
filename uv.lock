@@ -463,7 +463,7 @@ wheels = [
 
 [[package]]
 name = "llm-usage-dashboard"
-version = "0.9.0"
+version = "0.9.1"
 source = { editable = "." }
 dependencies = [
     { name = "backports-zstd", marker = "python_full_version < '3.14'" },

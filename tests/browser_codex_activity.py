@@ -31,9 +31,19 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
             activity.record_detail(c,key,raw,now)
             if i!=2:activity.record_consumption(c,account,usage(sid=sid,status='partial' if i<2 else 'unavailable',weekly=2.5,as_of=now-90000),[sid],now)
         from datetime import datetime,timedelta,timezone
+        dates={}
         for i in range(7):
             raw=daily();raw['data'][0]['date']=(datetime.now(timezone.utc).date()-timedelta(days=i)).isoformat()
+            dates[i]=raw['data'][0]['date']
             if i==1:raw['data'][0]['models'][0]['credits']=3
+            if i==2:
+                raw['data'][0]['models']=[dict(model='gpt-zero' if j==0 else f'gpt-model-{j}',speed='standard',credits=j/10) for j in range(12)]
+            if i==3:raw['data'][0].update(attribution=[],models=[],product_surface_usage_values={})
+            if i in (4,5):
+                value=0 if i==4 else .0002
+                raw['data'][0]['attribution'][0]['value']=value
+                raw['data'][0]['models'][0]['credits']=value
+                raw['data'][0]['product_surface_usage_values']['github_code_review']=value
             activity.record_daily(c,account,raw,now)
         for source in activity.SOURCES:store.source(c,source,'partial','Synthetic partial coverage',now)
         store.save_state(c,'codex_activity:plan:'+account,dict(approximate=True,coverage_complete=False,data_as_of=now-86400))
@@ -46,6 +56,15 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
         response=client.get(url.path+('?' +url.query if url.query else ''),**kwargs)
         route.fulfill(status=response.status_code,body=response.get_data(),headers={k:v for k,v in response.headers.items() if k.lower()!='content-length'})
         response.close()
+    def day_point(page,day):
+        page.wait_for_function('''()=>{const root=document.querySelector('#consumption-chart'),svg=root.querySelector(':scope > svg');
+            return svg && Math.abs(svg.viewBox.baseVal.width-Math.max(280,root.clientWidth))<1;}''')
+        page.locator('#consumption-chart').scroll_into_view_if_needed()
+        return page.locator(f'[data-consumption-day="{day}"] > rect').first.evaluate('''e=>{
+            const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};}''')
+    def hover_day(page,day):
+        point=day_point(page,day);page.mouse.move(point['x'],point['y'])
+        expect(page.locator('#consumption-tooltip')).to_be_visible()
     with sync_playwright() as p:
         browser=p.chromium.launch();page=browser.new_page(viewport={'width':1440,'height':1000},service_workers='block')
         fixture_page(page);page.route('**/api/codex/**',handle)
@@ -55,14 +74,44 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
         assert not calls,'Quota tab fetched historical consumption'
         page.locator('[data-open-consumption]').click()
         expect(page.locator('#usage-consumption')).to_be_visible()
-        expect(page.locator('#consumption-chart svg')).to_be_visible()
+        expect(page.locator('#consumption-chart > svg')).to_be_visible()
         expect(page.locator('#usage-tokens')).to_be_hidden()
         expect(page.locator('#filter-fold')).to_be_hidden()
         expect(page.locator('#consumption-summary')).to_contain_text('근사값')
         assert 'usage_view=consumption' in page.url
+        hover_day(page,dates[0]);tip=page.locator('#consumption-tooltip')
+        expect(tip.locator('.tooltip-heading strong')).to_have_text(dates[0])
+        expect(tip).to_contain_text('제공사 기준일 · 기능별 한도 소비율')
+        expect(tip.locator('.tooltip-row strong')).to_have_text('2%')
+        expect(tip.locator('.tooltip-total strong')).to_have_text('2%')
+        assert tip.locator('.tooltip-row svg').bounding_box()['width']==9
         page.screenshot(path=artifacts/'consumption-desktop.png',full_page=True)
+        hover_day(page,dates[4]);expect(tip.locator('.tooltip-total strong')).to_have_text('0%')
+        hover_day(page,dates[5]);expect(tip.locator('.tooltip-total strong')).to_have_text('<0.001%')
+        hover_day(page,dates[3]);expect(tip).to_contain_text('이 분류의 값 미제공')
+        expect(tip.locator('.tooltip-total strong')).to_have_text('—')
         page.locator('#consumption-group').select_option('model')
         expect(page.locator('#consumption-detail')).to_contain_text('gpt-test')
+        hover_day(page,dates[1]);expect(tip).to_contain_text('분해 합계 불일치')
+        expect(tip.locator('.tooltip-total strong')).to_have_text('3%')
+        hover_day(page,dates[2]);expect(tip.locator('.tooltip-row')).to_have_count(12)
+        expect(tip.locator('.tooltip-total strong')).to_have_text('6.6%')
+        expect(tip).to_have_class('chart-tooltip scrollable')
+        # Entering and scrolling a long tooltip must not redraw it through ResizeObserver.
+        tip.scroll_into_view_if_needed();tip.hover(position={'x':20,'y':20});page.mouse.wheel(0,600)
+        expect(tip.locator('.tooltip-row').filter(has_text='gpt-zero')).to_be_in_viewport()
+        tip.focus();page.keyboard.press('Escape');expect(tip).to_be_hidden()
+        svg=page.locator('#consumption-chart > svg');svg.focus();page.keyboard.press('End')
+        expect(tip.locator('.tooltip-heading strong')).to_have_text(dates[0])
+        page.keyboard.press('ArrowLeft');page.keyboard.press('Enter')
+        expect(page.locator('#consumption-day')).to_have_value(dates[1])
+        page.keyboard.press('Escape');expect(tip).to_be_hidden()
+        page.locator('#consumption-days').select_option('30')
+        expect(page.locator('#consumption-summary')).to_contain_text('/ 30일')
+        svg.focus();page.keyboard.press('Home');expect(tip).to_contain_text('미수신')
+        expect(tip.locator('.tooltip-total strong')).to_have_text('—')
+        page.locator('#consumption-days').select_option('7')
+        expect(page.locator('#consumption-summary')).to_contain_text('/ 7일')
         page.locator('#usage-tab-activity').click()
         expect(page.locator('#activity-summary')).to_contain_text('25개')
         expect(page.locator('#activity-rows [data-task-id]')).to_have_count(20)
@@ -103,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),width
             page.screenshot(path=artifacts/f'activity-{width}.png')
             page.locator('#usage-tab-consumption').click()
-            expect(page.locator('#consumption-chart svg')).to_be_visible()
+            expect(page.locator('#consumption-chart > svg')).to_be_visible()
             expect(page.locator('#insights-status')).to_be_hidden()
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),width
             page.screenshot(path=artifacts/f'consumption-{width}.png')
@@ -121,6 +170,27 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
         page.locator('#usage-tab-consumption').focus();page.keyboard.press('ArrowRight')
         expect(page.locator('#usage-tab-activity')).to_be_focused()
         page.go_back();expect(page.locator('#usage-tab-consumption')).to_have_attribute('aria-selected','true')
+        mobile=browser.new_page(viewport={'width':390,'height':844},service_workers='block',is_mobile=True,has_touch=True)
+        fixture_page(mobile);mobile.route('**/api/codex/**',handle)
+        mobile.on('pageerror',lambda e:errors.append(str(e)));watch_csp(mobile,errors)
+        mobile.goto('https://dashboard.test/?view=usage&usage_view=consumption')
+        expect(mobile.locator('#consumption-chart > svg')).to_be_visible()
+        for width in (390,320):
+            mobile.set_viewport_size({'width':width,'height':844})
+            mobile.locator('#consumption-group').select_option('source')
+            point=day_point(mobile,dates[0]);mobile.touchscreen.tap(point['x'],point['y'])
+            tip=mobile.locator('#consumption-tooltip');expect(tip).to_be_visible()
+            expect(tip.locator('.tooltip-total strong')).to_have_text('2%')
+            bounds=tip.bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=width
+            mobile.screenshot(path=artifacts/f'consumption-tooltip-{width}.png')
+            mobile.locator('#consumption-group').select_option('model')
+            point=day_point(mobile,dates[2]);mobile.touchscreen.tap(point['x'],point['y'])
+            expect(tip.locator('.tooltip-row')).to_have_count(12)
+            expect(mobile.locator('#consumption-day')).to_have_value(dates[2])
+            tip.scroll_into_view_if_needed();tip.evaluate('e=>e.scrollTop=e.scrollHeight')
+            expect(tip.locator('.tooltip-row').filter(has_text='gpt-zero')).to_be_in_viewport()
+            assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth'),width
+        mobile.close()
         assert not errors,errors
         browser.close()
-print('Codex browser passed: isolated API, quota shortcut, three usage modes, independent filters, pagination, partial/failure/unavailable, stale data, private text exclusion, 1440/390/320px, keyboard and history.')
+print('Codex browser passed: isolated API, three usage modes, filters, activity states, safe date tooltips, hover/touch/keyboard, missing/zero/tiny values, long tooltip scrolling, 1440/390/320px and history.')
