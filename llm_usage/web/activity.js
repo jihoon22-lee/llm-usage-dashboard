@@ -99,6 +99,7 @@ function renderConsumption(data){
 }
 function renderConsumptionChart(data){
  const box=$('consumption-chart');if(!box.clientWidth)return;
+ consumptionChartWidth=box.clientWidth;
  const rows=data.days||[],dimension=$('consumption-group').value;
  if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 상태 탭에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
  const labels=[...new Set(rows.flatMap(d=>consumptionGroups(d,dimension).map(g=>g.label)))];

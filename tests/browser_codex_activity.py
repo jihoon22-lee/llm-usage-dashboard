@@ -57,7 +57,9 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
         route.fulfill(status=response.status_code,body=response.get_data(),headers={k:v for k,v in response.headers.items() if k.lower()!='content-length'})
         response.close()
     def day_point(page,day):
-        page.locator('#consumption-chart > svg').scroll_into_view_if_needed()
+        page.wait_for_function('''()=>{const root=document.querySelector('#consumption-chart'),svg=root.querySelector(':scope > svg');
+            return svg && Math.abs(svg.viewBox.baseVal.width-Math.max(280,root.clientWidth))<1;}''')
+        page.locator('#consumption-chart').scroll_into_view_if_needed()
         return page.locator(f'[data-consumption-day="{day}"] > rect').first.evaluate('''e=>{
             const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};}''')
     def hover_day(page,day):
