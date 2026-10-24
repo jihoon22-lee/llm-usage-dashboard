@@ -23,3 +23,7 @@ include = ["llm_usage*"]
 
 [dependency-groups]
 dev = ["pip-audit==2.10.1", "playwright==1.63.0"]
+
+[tool.uv]
+# pip-audit's file cache must not resolve the vulnerable pre-4.2.1 releases.
+constraint-dependencies = ["filelock>=4.2.1"]
