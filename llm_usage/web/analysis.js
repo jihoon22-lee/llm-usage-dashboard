@@ -87,7 +87,8 @@ function setView(name,sync=true){
  document.body.dataset.view=currentView;
  if(currentView==='settings')loadConfig();
  if(currentView==='status')loadNotifyLog();
- if(INSIGHT_VIEWS.includes(currentView))loadInsights();
+ if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))loadInsights();
+ if(currentView==='usage')setUsageView(usageView,false);
  if(currentView==='reports')loadReports();
  // A hidden chart skipped its draw; render synchronously on tab switch so the
  // ResizeObserver sees the same width and does not queue a duplicate redraw.
@@ -117,6 +118,7 @@ function syncUrl(push){
   if(FILTER_DEFAULTS[id]===undefined||v!==FILTER_DEFAULTS[id])q.set(id,v);
  }
  if(currentView!=='quota')q.set('view',currentView);
+ if(currentView==='usage'&&usageView!=='tokens')q.set('usage_view',usageView);
  const s=q.toString();
  history[push?'pushState':'replaceState'](null,'',location.pathname+(s?'?'+s:''));
 }
@@ -131,6 +133,7 @@ function applyDrill(changes,view='usage'){
  saveDefaults();
  // Drill-down is one history entry: skip setView's replaceState so the entry
  // being left behind keeps the pre-drill filters.
+ if(view==='usage')setUsageView('tokens',false,false);
  if(view)setView(view,false);
  syncUrl(true);filterSummary();refresh();
 }
@@ -145,6 +148,7 @@ window.addEventListener('popstate',()=>{
   }else el.value=/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:(id==='start'||id==='end'?today:FILTER_DEFAULTS[id]||'');
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
+ setUsageView(params.get('usage_view')||'tokens',false,false);
  setView(params.get('view')||'quota');saveDefaults();filterSummary();refresh();
 });
 document.addEventListener('click',event=>{
@@ -250,7 +254,7 @@ function renderUsage(data){
  chart(data);composition(data);ranking(data);renderInsights(data);renderWhatif();
  // A refresh may land after a lazy insights fetch; if the new core payload
  // dropped the merged section while a tab that shows it is open, fetch it again.
- if(INSIGHT_VIEWS.includes(currentView)&&!('insights' in data))loadInsights();
+ if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens')&&!('insights' in data))loadInsights();
 }
 // Codex account totals minus local records: work that ran on OpenAI's side (ChatGPT
 // dot, Codex cloud). UTC days and tokens only, so it never enters charts or costs.
@@ -335,7 +339,7 @@ function renderModelTable(data){
  const rows=shown.filter(r=>r.model!==RESIDUAL),residual=shown.filter(r=>r.model===RESIDUAL);
  $('model-search-count').textContent=modelFilter?`${shown.length}/${all.length}개`:'';
  const avg=r=>r.requests?(r.recorded_tokens??modelTotal(r))/r.requests:null;
- const residualRow=r=>`<tr class="residual-row"><td class="row-rank">—</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(residualName)}<small>계정 합계 − 이 PC 기록 · 모델 구분 없음</small></td><td class="col-detail">—</td><td>—</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`;
+ const residualRow=r=>`<tr class="residual-row"><td class="row-rank">—</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(residualName)}<small>계정 합계 보완 · 용도 미확인</small><small>계정 합계 − 이 PC 기록 · 모델 구분 없음</small></td><td class="col-detail">—</td><td>—</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`;
  $('rows').innerHTML=rows.map((r,i)=>`<tr data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><td class="row-rank">${fmt(i+1)}</td><td>${esc(r.provider)}<small>${esc(routeNames[r.route]||r.route)}</small></td><td>${esc(r.model)}${r.model==='unknown'?'<small>원본 모델명 미기록</small>':''}${r.advisor_calls?`<small>Advisor ${fmt(r.advisor_calls)}회</small>`:''}</td><td class="col-detail">${r.supplemental_tokens&&!r.requests?'—':fmt(r.requests)}</td><td>${avg(r)!=null?compact(avg(r)):'—'}</td>${tableCells(r,denom)}<td>${usd(r.est_cost)}</td></tr>`).join('')+residual.map(residualRow).join('')||`<tr><td colspan="13" class="empty">${modelFilter?'검색과 일치하는 모델이 없습니다.':'선택 기간에 수집된 사용 기록이 없습니다.'}</td></tr>`;
  $('total-row').innerHTML=[['선택 기간 합계',data.totals,(data.cost||{}).period],['수집된 전체 누계',data.lifetime,(data.cost||{}).lifetime]].map(([label,row,cost])=>`<tr><td colspan="3">${label}</td><td class="col-detail">${callText(row)}</td><td>${avg(row)!=null?compact(avg(row)):'—'}</td>${tableCells(row,row===data.totals?denom:0)}<td>${usd(cost)}</td></tr>`).join('');
  document.querySelectorAll('[data-sort]').forEach(button=>{

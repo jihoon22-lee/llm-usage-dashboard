@@ -694,7 +694,10 @@ def run(settings,once=False):
                     attribute_accounts(store,current_settings,evidence=False)
                 last_local=time.time()
             if once or manual or now-last_limits>=300:
-                poll_limits(store,current_settings,manual=manual);last_limits=time.time()
+                poll_limits(store,current_settings,manual=manual)
+                from .codex_activity_collect import collect as collect_activity
+                collect_activity(store,current_settings)
+                last_limits=time.time()
                 if current_settings.get('statusline_summary'):write_summaries(store,current_settings)
                 if not once:
                     try:

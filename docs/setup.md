@@ -8,7 +8,7 @@ WSL은 systemd를 활성화한 배포판을 사용합니다. Windows/macOS 네�
 Tailscale에서 HTTPS와 Serve를 준비하고 `tailscale status`로 본인 로그인을 확인합니다. tagged device는 개인 계정으로 초기화할 수 없습니다.
 HTTPS 9444와 로컬 8766을 사용합니다. 설치기는 기존 Funnel·다른 프록시 충돌을 거부합니다.
 
-[README의 v0.8.1 설치 명령](../README.md)을 따릅니다. v0.8.1은 uv.lock을 포함한 릴리스이며 원격 main은 후속 개발 변경을 포함할 수 있습니다. 릴리스 태그 clone은 detached HEAD이므로 `git switch -c main`으로 설치·업데이트용 로컬 main을 생성합니다.
+[README의 v0.9.0 설치 명령](../README.md)을 따릅니다. v0.9.0은 uv.lock을 포함한 릴리스이며 원격 main은 후속 개발 변경을 포함할 수 있습니다. 릴리스 태그 clone은 detached HEAD이므로 `git switch -c main`으로 설치·업데이트용 로컬 main을 생성합니다.
 가상환경은 checkout의 `.venv`에 만듭니다. wheel·소스 ZIP만 있는 환경은 Git 기반 서비스 업데이트를 지원하지 않습니다.
 `init`은 설정을 생성하고 `collect --once`는 로컬 수집·계정 조회를 실행합니다.
 설치기는 root로 시스템 유닛·Serve를 설정하지만 서비스는 지정한 일반 사용자로 실행합니다.
@@ -52,6 +52,8 @@ CLI/직접 웹 실행은 LLM_USAGE_CONFIG로 기본 설정 경로를 바꿀 수 
 Claude 추가 자원 조회는 선택한 인증 홈의 `.claude/.credentials.json`과 같은 홈의 `.claude.json`에 있는 기본 계정·조직 정보를 사용합니다. 기본 도구에서 로그인한 뒤 수집 상태를 확인하세요. 인증 파일을 비표준 경로로 지정했다면 기본 config의 `claude_account_file`에 해당 기본 계정 메타데이터 파일의 절대 경로를 별도로 지정할 수 있습니다. 파일 내용·인증값을 대시보드 설정이나 공개 로그에 붙이지 않습니다.
 
 Claude 초기화권 조회에는 설치된 Claude Code의 CLI 버전과 클라이언트 헤더가 필요합니다. 기본 PATH 또는 `~/.local/bin/claude`에서 버전을 확인하며 로그인 세션을 새로 시작하거나 인증을 갱신하지 않습니다. 조회 경로 제한 응답은 보유 0회로 표시하지 않습니다.
+
+Codex 활동·한도 소비 수집은 기존 CLI의 `CODEX_HOME/auth.json`(환경 변수가 없으면 `~/.codex/auth.json`)을 읽습니다. 기본 설정의 `codex_auth`로 이미 승인된 다른 인증 파일을 지정할 수 있습니다. 로그인·인증 갱신은 원래 Codex에서 수행하며 별도 API 키나 브라우저 상시 실행은 필요하지 않습니다. 이 추가 경로만 중지하려면 기본 설정의 `codex_activity_enabled`를 `false`로 지정합니다.
 
 Codex·Claude 크레딧/초기화권은 원본이 제공하는 범위만 자동 조회합니다. API 전용 크레딧이나 자동 수신되지 않는 자원은 한도 탭의 수동 기록으로 보완합니다. 한도 감소량은 충분한 연속 관측이 있을 때만 표시하며, 자세한 조건은 [화면 안내](usage.md)를 따릅니다.
 

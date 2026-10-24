@@ -193,7 +193,8 @@ const scopeText=scope=>{const i=scope.indexOf(':');if(i<0)return scope;
  const name=kind==='route'?(routeNames[value]||value):kind==='account'?(accountLabel(value)||value):value;
  return (SCOPE_LABELS[kind]||kind)+': '+name;};
 // Per-account source names ('claude-oauth:<hash>') read as 'claude-oauth · Max 5x'.
-const sourceName=name=>{const m=/^(.*):([0-9a-f]{12})$/.exec(name||'');if(!m)return name;const label=accountLabel('claude-code:'+m[2]);return label?`${m[1]} · ${label}`:name;};
+const CODEX_SOURCE_NAMES={'codex-activity':'Codex 작업 목록','codex-consumption-daily':'Codex 일별 한도 소비','codex-consumption-threads':'Codex 작업별 한도 소비'};
+const sourceName=name=>{if(CODEX_SOURCE_NAMES[name])return CODEX_SOURCE_NAMES[name];const m=/^(.*):([0-9a-f]{12})$/.exec(name||'');if(!m)return name;const label=accountLabel('claude-code:'+m[2]);return label?`${m[1]} · ${label}`:name;};
 // The source kind without the account suffix: 'claude-oauth:<hash>' → 'claude-oauth'.
 const sourceBase=name=>String(name||'').replace(/:[0-9a-f]{12}$/,'');
 const SOURCE_GROUPS=[['Claude',/claude/i],['Codex',/codex/i],['Antigravity',/antigravity/i],['Devin',/devin/i],['OpenCode',/opencode/i],
@@ -342,4 +343,25 @@ function expiringResources(items,now,within=86400){
   }else if(r.amount>0&&soonEnough(r.expires))out.push({...base,amount:r.amount,expires:r.expires,partial:!!r.expiry_is_partial,ids:[`${r.id}:${Math.round(r.expires/60)}`]});
  }
  return out.sort((a,b)=>a.expires-b.expires);
+}
+
+// Consumption percentages have their own units; never feed the token helpers.
+function consumptionNumber(value){
+ if(typeof value!=='number'&&typeof value!=='string')return null;
+ if(typeof value==='string'&&(!value.trim()||!/^\+?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$/.test(value)))return null;
+ const n=Number(value);return Number.isFinite(n)&&n>=0?n:null;
+}
+function consumptionPercent(value){
+ const n=consumptionNumber(value);return n==null?'미제공':n>0&&n<.001?'<0.001%':n.toLocaleString('ko-KR',{maximumFractionDigits:3})+'%';
+}
+const CONSUMPTION_NAMES={codex_web_code_review:'코드 리뷰',codex_web_security_review:'보안 검토',codex_web:'클라우드 작업',aeon:'dot',aeon_child:'dot 하위 작업',subagent:'하위 에이전트',dreaming:'백그라운드 작업',memory_consolidation:'메모리 정리',thread_title:'제목 생성',thread_description:'설명 생성',guardian_review:'승인 검토',guardian_classifier:'승인 분류',user:'일반 작업',unknown:'미분류'};
+function consumptionGroups(day,dimension){
+ const groups=new Map(),rows=dimension==='model'?day.models||[]:day.attribution||[];
+ for(const row of rows){
+  const raw=dimension==='model'?row.model:row.thread_source,n=consumptionNumber(row.value);
+  if(n==null)continue;
+  const label=dimension==='model'?(raw||'모델 미확인'):(CONSUMPTION_NAMES[raw]||raw||'미분류');
+  const kept=groups.get(label)||{label,value:0};kept.value+=n;groups.set(label,kept);
+ }
+ return [...groups.values()].sort((a,b)=>b.value-a.value||a.label.localeCompare(b.label));
 }

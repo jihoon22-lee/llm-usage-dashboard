@@ -15,7 +15,7 @@ function offlineText(){
 window.addEventListener('llm-data-source-change',offlineText);
 function insightsState(state,message=''){
  const ready=state==='ready',failed=state==='error';
- $('insights-status').hidden=ready;$('insights-status').setAttribute('role',failed?'alert':'status');
+ $('insights-status').hidden=ready||currentView==='quota'||currentView==='usage'&&usageView!=='tokens';$('insights-status').setAttribute('role',failed?'alert':'status');
  $('insights-message').textContent=failed?'인사이트를 불러오지 못했습니다. '+message:ready?'':'인사이트를 불러오는 중…';
  $('insights-retry').hidden=!failed;
  for(const id of ['csv-projects','csv-sessions'])$(id).disabled=!ready;
@@ -115,7 +115,8 @@ async function refresh(manual=false){
      // Rendering can fall back from an unavailable cost metric to tokens.
      usageKey=query().toString();activeQuery=usageKey;
      showSource('core',sources.core);showSource('limits',sources.limits);
-     if(INSIGHT_VIEWS.includes(currentView))await loadInsights();
+     if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))await loadInsights();
+     if(currentView==='usage'&&usageView!=='tokens')void loadCodexView(true);
      if(currentView==='status')loadNotifyLog();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
@@ -168,6 +169,7 @@ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  if($('period').value==='1h'){sessSort.key='tokens';sessSort.dir='desc';}
+ setUsageView(get('usage_view')||'tokens',false,false);
  setView(params.get('view')??saved?.view);filterSummary();
 }
 $('filter-reset').addEventListener('click',()=>{
@@ -185,7 +187,7 @@ document.addEventListener('keydown',event=>{
  if(event.key===','){event.preventDefault();setView('settings');$('settings-back').focus({preventScroll:true});return;}
  if(event.key==='r'){event.preventDefault();refresh(true);}
  else if(event.key==='/'){
-  const field=currentView==='settings'?$('price-search'):currentView==='usage'?$('model-search'):null;
+  const field=currentView==='settings'?$('price-search'):currentView==='usage'?(usageView==='activity'?$('activity-search'):usageView==='tokens'?$('model-search'):null):null;
   if(field){event.preventDefault();field.focus();}
  }else if(event.key==='?'){event.preventDefault();$('shortcuts').hidden=!$('shortcuts').hidden;}
 });

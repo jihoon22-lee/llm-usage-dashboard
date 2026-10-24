@@ -5,13 +5,14 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.8.1](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.8.1)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.9.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.9.0)** · [변경 기록](CHANGELOG.md)
 
 수집 기준: [클라우드 누계 대조·한국시간 미배분량·선택적 telemetry](docs/collection-reconciliation.md).
 
 ## 기능
 
 - 한도·사용량·리포트·상태 네 탭: 잔여 한도·다음 초기화·보유 초기화권과 크레딧 확인
+- 사용량 안의 토큰 분석·한도 소비·클라우드 및 리뷰 목록: 기능/모델별 일별 소비율과 작업·PR·실행 상태, 일부 작업의 소비 상세
 - 최근 1시간 빠른 보기: 정확한 60분의 로컬 기록을 서비스·모델·프로젝트·세션별로 집계하고 CSV로 내보내기
 - 한도별 실제 감소량: 최근 30분 안의 연속 관측 구간과 감소한 %p 표시, 작업 지속 시간은 예측하지 않음
 - 보유 초기화권·크레딧을 확인된 만료일 순으로 표시하고 24시간 이내 만료 알림 제공
@@ -48,9 +49,9 @@ Windows는 선택한 프로필의 **기록 수집 대상**입니다. Windows/mac
 
 Codex의 `token_usage_record`는 요청 ID별로 보존하고 연결된 누계 이벤트를 대신해 한 번만 집계합니다. 누계만 남은 과거 기록은 보존하며, 연결이 모호하거나 원본이 상충하면 수집 상태에 표시합니다. `.jsonl.zst` 압축 기록과 압축 전후 사본도 처리합니다. Codex telemetry는 원본 응답 ID가 확인될 때 연결하며 실제 exporter가 연결되지 않은 상태는 실수신 완료로 표시하지 않습니다.
 
-Codex 클라우드·자동 리뷰는 [실계정 추가 검증](workthrough/2026-10-24-cloud-review-verification.md)에서 리뷰 목록·PR·모델·실행 상태와 일부 작업의 모델별 한도 소비율을 조회할 수 있음을 확인했습니다. 웹의 `daily-token-usage-breakdown` 응답도 확인한 개인 Pro 계정에서는 단위가 `percent`였으며 원본 토큰 수가 아니었습니다. 이 추가 경로는 현재 자동 수집에 연결하지 않았습니다. 작업별 토큰·입출력·캐시 분해는 여전히 확보하지 못했으며, 계정 차액이나 한도 소비율을 리뷰 토큰으로 바꾸지 않습니다.
+Codex 클라우드·자동 리뷰는 [실계정 추가 검증](workthrough/2026-10-24-cloud-review-verification.md)에서 리뷰 목록·PR·모델·실행 상태와 일부 작업의 모델별 한도 소비율을 조회할 수 있음을 확인했습니다. 웹의 `daily-token-usage-breakdown` 응답도 확인한 개인 Pro 계정에서는 단위가 `percent`였으며 원본 토큰 수가 아니었습니다. 0.9.0부터 기존 Codex CLI 인증으로 이 경로를 주기 수집하고, 사용량 탭에서 토큰과 별도로 표시합니다. 내부 경로이므로 제공사 변경에 영향받으며 전체 ChatGPT·dot 세션 목록을 보장하지 않습니다. 작업별 토큰·입출력·캐시 분해는 여전히 확보하지 못했으며, 계정 차액이나 한도 소비율을 리뷰 토큰으로 바꾸지 않습니다.
 
-[대시보드 통합 검토](workthrough/2026-10-24-cloud-review-verification.md#dashboard-integration-review)에는 사용량 안의 토큰 분석·한도 소비·클라우드 및 리뷰 목록, 한도에서 소비 분석으로 이동하는 연결, 수집 상태 표시와 구현 순서를 정리했습니다. 설계 제안이며 현재 화면에 구현·배포된 기능은 아닙니다.
+[대시보드 통합 검토](workthrough/2026-10-24-cloud-review-verification.md#dashboard-integration-review)에는 사용량 안의 토큰 분석·한도 소비·클라우드 및 리뷰 목록, 한도에서 소비 분석으로 이동하는 연결, 수집 상태 표시와 구현 순서를 정리했습니다. 0.9.0의 구현·실계정 검증 결과와 남은 범위도 같은 기록에서 확인할 수 있습니다.
 
 Claude `advisor_message`는 부모 요청에 연결된 별도 모델 소비로 포함하고 내부 호출 수를 API 요청 수와 구분합니다. 중첩 thinking 필드와 캐시 생성의 5분·1시간 분해를 보존하며 출력·전체 생성 토큰에 다시 더하지 않습니다. 캐시 분해가 원본 합계와 맞지 않거나 서로 상충하면 전체 토큰은 보존하고 분해만 미확인으로 표시합니다. TTL이나 해당 단가가 없는 생성량은 기존 기본 단가로 추정합니다. 삭제된 원본의 reasoning·TTL은 소급 복구할 수 없습니다. [원본 대조·재현·보완 기록](workthrough/2026-10-23-collection-coverage.md)을 확인하세요.
 
@@ -72,7 +73,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.8.1 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.9.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -81,7 +82,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.8.1의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.9.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.
