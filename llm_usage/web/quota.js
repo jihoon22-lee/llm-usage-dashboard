@@ -129,7 +129,7 @@ function renderLimits(data){
  $('quota-overview').innerHTML='<div class="overview-caption"><span>서비스</span><span>'+(editingQuota?'화살표로 순서 조정':'잔여 · 초기화까지')+'</span></div>'+active.map(({route,rows})=>{
   // A route with a current value is current; older buckets beside it are noted, not
   // allowed to mark the whole service as old.
-  const common=rows.filter(r=>!modelQuota(r)),anyFresh=common.some(r=>r.status==='fresh');
+  const common=rows.filter(r=>!modelQuota(r)&&!r.retired),anyFresh=common.some(r=>r.status==='fresh');
   const accounts=route==='claude-code'&&multiClaude()?accountGroups(rows).filter(([,list])=>!accountEnded(list)):null;
   // With several accounts, one account's failure does not hide another account's current values.
   const state=accounts?(anyFresh?'fresh':common.some(r=>r.status==='error')?'error':['stale','unavailable'].find(s=>common.some(r=>r.status===s))||'unavailable')
@@ -145,7 +145,8 @@ function renderLimits(data){
  $('quota-strip').hidden=true;$('quota-strip').replaceChildren();
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
  // a window blocked by its exhausted parent is left out because its reset frees nothing.
- const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by&&r.status!=='ended');
+ // A window of the conditions before an account or plan change resets nothing now.
+ const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by&&r.status!=='ended'&&!r.retired);
  const exhausted=r=>r.remaining!=null&&r.remaining<=0;
  const exhaustedUpcoming=validUpcoming.filter(exhausted);
  const regularUpcoming=validUpcoming.filter(r=>!exhausted(r)).sort((a,b)=>a.resets-b.resets);
@@ -177,6 +178,10 @@ function renderLimits(data){
    return `<p class="quota-note">설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.</p>`
     +`<details class="quota-older" data-history="${esc(endedKey)}"${opened.has(endedKey)?' open':''}><summary>마지막 관측 ${rows.filter(r=>r.remaining!=null).length}개</summary>${rows.map(r=>bucket(r,false,true)).join('')}</details>`;
   }
+  // Windows the account no longer reports after a plan change fold apart, and leave the
+  // card once they are older than the quiet-service cutoff.
+  const retired=rows.filter(r=>r.retired&&nowTs-(r.checked||0)<=cutoff),retiredKey=prefix+':retired';
+  rows=rows.filter(r=>!r.retired);
   const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=prefix+':secondary';
   const checks=[...new Set(rows.map(r=>r.checked??null))],details=[...new Set(rows.map(r=>r.detail).filter(Boolean))];
   const shared=checks.length<=1&&details.length<=1;
@@ -196,6 +201,8 @@ function renderLimits(data){
   // Codex lists its model 5-hour windows; Claude its per-model weekly limits (Fable 주간 100%).
   const secondaryBrief=familyOf(route)==='claude-code'?secondary.map(r=>bucketName(r)+' '+(r.status==='fresh'?percent(r.remaining):'수신 대기'))
    :secondary.filter(r=>r.bucket.includes('300분')).map(r=>'5시간 '+(r.status==='fresh'?percent(r.remaining):'수신 대기'));
+  if(retired.length)content+=`<details class="quota-older" data-history="${esc(retiredKey)}"${opened.has(retiredKey)?' open':''}><summary>계정·요금제 변경 전 관측 ${retired.length}개 <small>${retired.map(r=>esc(quotaLabel(r).replace(serviceShort(r.route,r.account_label)+' ',''))+' '+(r.remaining==null?'—':percent(r.remaining))+' · '+esc(when(r.checked))).join(' · ')}</small></summary>`
+   +`<p class="quota-note">변경 후 계정 응답에 이 한도가 없어 현재 한도·다음 초기화에서 제외했습니다. 마지막 관측값입니다.</p>${retired.map(r=>bucket(r,shared,true)).join('')}</details>`;
   return meta+content+(secondary.length?`<details class="quota-secondary" data-history="${esc(key)}"${opened.has(key)?' open':''}><summary>모델별 추가 한도 <small>${esc(secondaryBrief.join(' · '))}</small></summary>${secondary.map(r=>bucket(r,shared)).join('')}</details>`:'');
  };
  // Several Claude accounts stay one Claude Code card with a section per account.
