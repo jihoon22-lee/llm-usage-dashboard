@@ -112,6 +112,40 @@ class ResourcesPlanningTests(unittest.TestCase):
             self.assertEqual(first['account_key'],second['account_key'])
             self.assertNotEqual(first['epoch'],second['epoch'])
 
+    def test_window_missing_after_a_plan_change_is_retired_not_current(self):
+        # Observed switch: weekly on the old plan, a 30-day window while switching, then
+        # weekly again on the new plan. The 30-day row is kept, but as the old conditions.
+        def reply(checked, plan, minutes, used):
+            data = dict(accountId='A', rateLimitsByLimitId={'codex': dict(planType=plan, primary=dict(
+                usedPercent=used, windowDurationMins=minutes, resetsAt=checked+minutes*60))})
+            with self.store.connect() as c:
+                codex_limits(self.store, c, data, checked)
+                self.store.source(c, 'codex', 'ok', checked=checked)
+        reply(self.now-7200, 'pro', 10080, 100)
+        reply(self.now-3600, 'free', 43200, 0)
+        rows = {r['bucket']: r for r in self.store.limits(self.now-3500)['limits']}
+        # While switching, the old plan's exhausted weekly window is no current quota either.
+        self.assertFalse(rows['codex · 43200분']['retired'])
+        self.assertEqual(rows['codex · 43200분']['status'], 'fresh')
+        self.assertTrue(rows['codex · 10080분']['retired'])
+        reply(self.now-60, 'prolite', 10080, 3)
+        rows = {r['bucket']: r for r in self.store.limits(self.now)['limits']}
+        old = rows['codex · 43200분']
+        self.assertTrue(old['retired'] and old['previous_account'] and old['omitted_latest'])
+        self.assertEqual((old['status'], old['remaining']), ('unavailable', 100))
+        self.assertIn('요금제 변경 전 관측', old['note'])
+        current = rows['codex · 10080분']
+        self.assertEqual((current['status'], current['retired'], current['remaining']), ('fresh', False, 97))
+        self.assertIsNone(current['note'])
+
+    def test_window_missing_in_the_same_plan_is_not_retired(self):
+        self.codex(self.now-120)
+        with self.store.connect() as c:
+            codex_limits(self.store,c,{'accountId':'A','rateLimits':{'primary':dict(usedPercent=20,windowDurationMins=300,resetsAt=self.now+14400)}},self.now)
+        weekly = next(r for r in self.store.limits(self.now)['limits'] if r['bucket'] == 'codex · 10080분')
+        self.assertFalse(weekly['retired'])
+        self.assertIn('최근 계정 응답에서 이 한도를 확인하지 못했습니다', weekly['note'])
+
     def test_old_observation_cannot_change_account_or_current_value(self):
         self.codex(self.now, 10, owner='B')
         self.codex(self.now-60, 90, owner='A')

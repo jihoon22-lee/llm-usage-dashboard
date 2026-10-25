@@ -530,6 +530,10 @@ class Store:
             omitted=bool(snapshot.get('source')==row['source'] and snapshot.get('checked',0)>=(checked or 0) and row['bucket'] not in snapshot.get('buckets',[]))
             row['omitted_latest']=omitted
             row['not_applicable']=omitted and row['bucket'] in snapshot.get('absent',[])
+            # The account or plan changed and the new one's response no longer has this
+            # window (a plan's 30-day window during a switch, an old model window): it is
+            # an observation of the earlier conditions, not a current quota.
+            row['retired']=bool(omitted and previous_account and snapshot.get('checked',0)>=owner['since'])
             row['family']=family(row['route']);row['account_label']=labels.get(row['route'])
             account=sources.get(account_source(row['route']),{}) if is_claude(row['route']) else {}
             if account.get('checked',0)>=(row['checked'] or 0) and account.get('status') in ('error','unavailable'):
@@ -575,8 +579,9 @@ class Store:
             row['note']=('설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.' if row.get('user_ended') else
                          f"앱이 지금 {'주간' if agy[2]=='5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
                          if other and row['status']!='fresh' and other['status']=='fresh' and other['source']=='antigravity-app' else
-                         '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.' if row.get('omitted_latest') else
+                         '계정·요금제 변경 전 관측입니다. 변경 후 계정 응답에 이 한도가 없어 현재 한도에서 제외했습니다.' if row.get('retired') else
                          '계정·구독 조건 변경 전 관측입니다.' if row.get('previous_account') else
+                         '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.' if row.get('omitted_latest') else
                          '로컬 관측의 계정을 확인하지 못했습니다. 계정 조회 후 작업 전망을 제공합니다.' if row['scope'].get('identity_unverified') else
                          '원본 초기화 시각을 해석하지 못했습니다. 시간 전망을 보류합니다.' if row['scope'].get('reset_unparsed') else None)
         sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)+',COALESCE(SUM(requests),0) AS requests'

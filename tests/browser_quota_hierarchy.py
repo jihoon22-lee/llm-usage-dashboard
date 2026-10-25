@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright, expect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from llm_usage.limits import codex_limits  # noqa: E402
 from llm_usage.store import Store  # noqa: E402
 
 parser = argparse.ArgumentParser()
@@ -37,6 +38,20 @@ def fixture(weekly_checked_ago):
             store.limit(c, 'antigravity', '3p-weekly', 0.0, now+6*86400, now-weekly_checked_ago, 'antigravity-app')
             store.limit(c, 'claude-code', 'five_hour', 70.0, now+3*3600, now-60, 'claude-oauth')
             store.limit(c, 'claude-code', 'seven_day', 40.0, now+5*86400, now-60, 'claude-oauth')
+        return store.limits(now)
+
+
+def plan_change():
+    """Codex weekly on one plan, a 30-day window while switching, weekly on the new plan."""
+    now = time.time()
+    with tempfile.TemporaryDirectory() as folder:
+        store = Store(Path(folder)/'usage.db')
+        with store.connect() as c:
+            for ago, plan, minutes, used in ((7200, 'pro', 10080, 100), (3600, 'free', 43200, 0), (60, 'prolite', 10080, 3)):
+                checked = now-ago
+                codex_limits(store, c, dict(accountId='A', rateLimitsByLimitId={'codex': dict(planType=plan, primary=dict(
+                    usedPercent=used, windowDurationMins=minutes, resetsAt=checked+minutes*60))}), checked)
+                store.source(c, 'codex', 'ok', checked=checked)
         return store.limits(now)
 
 
@@ -115,6 +130,25 @@ with sync_playwright() as p:
     expect(timeline).to_contain_text('Antigravity 5시간 3rd party')
     expect(timeline).to_contain_text('Antigravity 주간 3rd party 이전 관측 소진')
 
+    # A window from before a plan change folds apart and leaves the reset list and status.
+    switched = plan_change()
+    assert [r['bucket'] for r in switched['limits'] if r['route'] == 'codex' and r['retired']] == ['codex · 43200분'], switched['limits']
+    page.unroute(origin+'/**'); preview(page, switched)
+    page.reload(); expect(page.locator('#refresh')).to_be_enabled()
+    codex = page.locator('#quota-codex')
+    retired = codex.locator('details.quota-older', has_text='계정·요금제 변경 전 관측 1개')
+    expect(retired).to_have_count(1)
+    # The new plan's weekly window replaced the old one: no other older-observation fold.
+    expect(codex.locator('details.quota-older')).to_have_count(1)
+    expect(codex.locator(':scope > .bucket')).to_have_count(1)
+    expect(codex.locator(':scope > .bucket')).to_contain_text('97%')
+    expect(page.locator('[data-quota="codex"] .overview-status')).to_have_text('최근 확인')
+    expect(timeline).not_to_contain_text('43200')
+    expect(timeline).to_contain_text('Codex')
+    retired.locator(':scope > summary').click()
+    expect(retired).to_contain_text('변경 후 계정 응답에 이 한도가 없어')
+    page.screenshot(path=str(output/'quota-plan-change-desktop.png'), full_page=True)
+
     mobile = browser.new_page(service_workers='block',viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
     fixture_page(mobile)
     mobile.on('pageerror', lambda error: errors.append(str(error)));watch_csp(mobile,errors)
@@ -129,6 +163,12 @@ with sync_playwright() as p:
     mobile.locator('[data-quota="claude-code"]').click()
     expect(mobile.locator('#quota-claude-code')).to_be_visible()
     check_plan_text(mobile)
+    mobile.unroute(origin+'/**'); preview(mobile, switched)
+    mobile.reload(); expect(mobile.locator('#refresh')).to_be_enabled()
+    mobile.locator('[data-quota="codex"]').click()
+    expect(mobile.locator('#quota-codex details.quota-older', has_text='계정·요금제 변경 전 관측 1개')).to_be_visible()
+    assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    mobile.screenshot(path=str(output/'quota-plan-change-mobile.png'), full_page=True)
     assert not errors, errors
     browser.close()
 print('quota hierarchy browser checks passed')
