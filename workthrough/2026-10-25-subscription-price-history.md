@@ -32,3 +32,12 @@
 
 - [PR #86](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/86)·[PR #87](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/87)이 전체 필수 CI(브라우저 포함)를 통과해 merge commit `470794a`·`47a19f3`으로 병합됐다. #87은 #86 병합 후 main을 통합하고 재검증했다.
 - 버전을 0.10.0으로 올리고 uv 0.12.23으로 lock의 프로젝트 버전만 갱신했다. 변경 기록·설치·운영 안내에 기존 구독료 변경을 한 번 기록하는 절차와 0.9.1 복귀 시 동작을 적었다.
+
+## 릴리스와 실제 운영 검증
+
+- [PR #88](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/88)이 전체 필수 CI를 통과해 merge commit `184e4a2`로 병합됐고, 같은 커밋의 [main CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/40204029478)도 통과했다.
+- `v0.10.0` 태그를 push해 [릴리스 CI](https://github.com/jihoon22-lee/llm-usage-dashboard/actions/runs/40204253242)로 [불변 릴리스](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.10.0)를 게시했다. 내려받은 자산 4개가 SHA256SUMS와 일치했고 manifest의 저장소·커밋·태그·실행 ID가 맞았으며 wheel에 웹 자산 19개와 새 모듈이 들어 있었다. 릴리스 설명 갱신 후에도 자산 이름·크기·digest와 불변 상태는 같았다.
+- 운영 런타임 패키지 8개가 lock과 일치해 기존 코드 전환 배포기를 사용했다. 배포기가 Python 563개·Node·문법 검사를 다시 통과한 뒤 2026-10-25 23:55 KST에 실행 코드를 `184e4a2`로 전환했다. 운영 `.venv`는 동기화하지 않았다. 두 서비스 `active/running`, `NRestarts=0`, health 정상이었고 설정·개인 설정·단가 파일 해시는 전환 전과 같았다. 이번 변경에는 DB 구조 변경이 없다.
+- 기존 Codex 구독료 변경을 실제 설정 화면에서 두 번 저장해 기록했다: $220 `전체 기간` → $110 `지정한 시각부터 2026-10-25 22:46`(새 요금제가 처음 관측된 22:46:51 기준, 분 단위). 다른 구독료·구독 종료·이름 설정은 그대로였다.
+- 실제 Tailscale 인증 화면(Chromium 1440px·390px·320px, 최근 7일): Codex 구독 가치가 `월 구독료 $110 · 기간 평균 $219`, 95.3배였다(이전 표시 방식이면 약 190배). 구간은 `$220/월 · 환산 $4,732 · 94.2배` / `$110/월 · 환산 $68.98 · 1일 미만`. 한도 탭은 `43200분` 행이 '계정·요금제 변경 전 관측 1개'로 접히고 다음 초기화에는 `Codex 공통 · 주간`만 남았으며 개요 상태가 '최근 확인'이었다. 9/18의 `codex_bengalfox` 행 2개도 retired로 판정돼 7일 기준을 지나 카드에서 숨겨졌다. 가로 넘침과 페이지·콘솔 오류는 없었다.
+- 수집기는 매 주기 개인 설정을 다시 읽으므로 11월 1일 00:10 이후 10월 결산은 $220·$110 비례 평균으로 만들어진다. 이 결산 결과는 아직 관측하지 않았다.
