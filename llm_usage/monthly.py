@@ -46,20 +46,26 @@ def first_record(c):
     return first
 
 
-def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
-    """One month's settlement. A rebuild (`stored`) keeps the monthly prices it was first
-    built with, and its quota figures when less of the month's quota history is kept now."""
+def build(store,start,now,pricing=None,prices=None,ended=None,stored=None,history=None):
+    """One month's settlement. A rebuild (`stored`) keeps the monthly prices and price
+    changes it was first built with, and its quota figures when less of the month's quota
+    history is kept now. A price changed during the month counts for the part it applied:
+    `monthly_usd` is the month's time-weighted price, `list_usd` the price at its end."""
     from .insights import token_total
     from .reconciliation import RESIDUAL,held
     from .claude_accounts import FAMILY,registry
     from .reports import _accounts,_names,_totals,quota_covered_from,quota_rows,residual_share
     end=shift(start,1)
     day=lambda d:d.strftime('%Y-%m-%d')
-    if stored is not None:prices,gone={s['route']:s['monthly_usd'] for s in stored.get('subscriptions') or []},set()
+    if stored is not None:
+        prices,gone={s['route']:s.get('list_usd',s['monthly_usd']) for s in stored.get('subscriptions') or []},set()
+        history=stored.get('price_history')
     else:prices,gone=active_prices(start,prices,ended)
+    from .subscriptions import clean_history
+    history={route:entries for route,entries in clean_history(history).items() if route in prices}
     span=dict(period='custom',start=day(start),end=day(end-timedelta(days=1)),pricing=pricing,now=now)
     with held():
-        usage=store.usage(group='route',sections='core',subscriptions=prices,ended=gone,**span)
+        usage=store.usage(group='route',sections='core',subscriptions=prices,ended=gone,price_history=history,**span)
         models=store.usage(group='model',sections='core',**span)
         insight=store.usage(group='route',sections='insights',**span)
         with store.connect() as c:
@@ -77,8 +83,10 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
         use,quota_from=stored['quota_use'],stored['quota_from']
     # A subscription with neither a price nor use in the month has nothing to settle. Claude
     # accounts keep their plan name of the moment for when the page has no names yet.
-    subs=[dict(route=s['route'],monthly_usd=s['monthly_usd'],value=s['period_cost'],tokens=s['period_tokens'],
-               ratio=s['period_cost']/s['monthly_usd'] if s['monthly_usd'] and s['period_cost'] is not None else None,
+    subs=[dict(route=s['route'],monthly_usd=s['effective_usd'],list_usd=s['monthly_usd'],value=s['period_cost'],tokens=s['period_tokens'],
+               ratio=s['period_cost']/s['effective_usd'] if s['effective_usd'] and s['period_cost'] is not None else None,
+               **({'price_segments':[{k:p[k] for k in ('start','end','monthly_usd','cost')} for p in s['price_segments']]}
+                  if s.get('price_segments') else {}),
                **({'label':names[s['route']]} if s['route'] in names else {}))
           for s in usage.get('subscriptions') or [] if (s['monthly_usd'] is not None or s['period_tokens']) and s['route'] not in later
           # A rebuild settles the same subscriptions as the first time.
@@ -92,10 +100,11 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None):
                 subscriptions=subs,
                 models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost'),advisor_calls=r.get('advisor_calls',0)) for r in top],
                 projects=[dict(project=p['project'],tokens=token_total(p),cost=p.get('cost')) for p in projects],
-                accounts=accounts,residual=residual,quota_use=use,quota_from=quota_from if use is not None else None)
+                accounts=accounts,residual=residual,quota_use=use,quota_from=quota_from if use is not None else None,
+                price_history={route:entries for route,entries in history.items() if any(s['route']==route for s in subs)})
 
 
-def ensure_months(store,now,pricing=None,prices=None,ended=None):
+def ensure_months(store,now,pricing=None,prices=None,ended=None,history=None):
     """Settle the finished months that have none yet, oldest first, within the kept count
     and never before the first record. Late records, received aggregates or rates of the
     last two finished months rebuild those two; a format change rebuilds every month kept.
@@ -126,7 +135,7 @@ def ensure_months(store,now,pricing=None,prices=None,ended=None):
             if month.strftime('%Y-%m') not in stored or reformat or (changed and back<2):due.append(month)
         for month in reversed(due):
             key=month.strftime('%Y-%m')
-            settled=build(store,month,now,pricing,prices,ended,stored.get(key))
+            settled=build(store,month,now,pricing,prices,ended,stored.get(key),history)
             with store.connect() as c:store.save_state(c,'month:'+key,settled)
     with store.connect() as c:
         if changed:store.save_state(c,'months:revision',revision)

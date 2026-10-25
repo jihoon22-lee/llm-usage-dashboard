@@ -6,6 +6,27 @@ function valueBar(ratio,top){
  const ticks=[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join('');
  return `<span class="value-bar${ratio<1?' under':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
 }
+// A price changed inside the span: each price's own span and value. A span under a day
+// gives no monthly multiple, as a few hours scaled to a month are noise.
+const MONTH_DAYS=30.44;
+function priceSpans(parts){
+ if(!parts||parts.length<2)return '';
+ const at=t=>when(Date.parse(t)/1000);
+ return `<small class="price-spans">${parts.map((p,i)=>{
+  const days=(Date.parse(p.end)-Date.parse(p.start))/864e5;
+  const ratio=p.cost!=null&&p.monthly_usd>0&&days>=1?p.cost/(p.monthly_usd*days/MONTH_DAYS):null;
+  const span=i===0?`~${at(p.end)}`:i===parts.length-1?`${at(p.start)}~`:`${at(p.start)}~${at(p.end)}`;
+  return `${esc(span)} ${usd(p.monthly_usd)}/월 · ${p.cost!=null?'환산 '+usd(p.cost):'미산정'}${ratio!=null?' · '+ratio.toFixed(1)+'배':days<1?' · 1일 미만':''}`;
+ }).join(' / ')}</small>`;
+}
+// The price the value is set against: the span's time-weighted price when it changed.
+const paidPrice=s=>s.effective_usd??s.monthly_usd;
+function priceText(s,current){
+ if(s.monthly_usd==null)return '월 구독료 미설정';
+ if(!s.monthly_usd&&!paidPrice(s))return '월 구독료 무료';
+ const list=current?s.monthly_usd:s.list_usd;
+ return list!=null&&Math.abs(paidPrice(s)-list)>.005?`월 구독료 ${usd(list)} · ${current?'기간':'월'} 평균 ${usd(paidPrice(s))}`:`월 구독료 ${usd(paidPrice(s))}`;
+}
 // Claude accounts sit together under their one service, the original account first.
 function subscriptionOrder(subs){
  const order=claudeAccounts.list.map(a=>a.route);
@@ -23,16 +44,16 @@ function renderInsights(data){
  const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
  const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
   ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';
- const ratios=subs.map(s=>s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null).filter(v=>v!=null);
+ const valueRatio=s=>paidPrice(s)>0&&s.monthly_equiv!=null?s.monthly_equiv/paidPrice(s):null;
+ const ratios=subs.map(valueRatio).filter(v=>v!=null);
  const top=Math.max(10,...ratios),bar=ratio=>valueBar(ratio,top);
  const ordered=subscriptionOrder(subs);
  $('subvalue').innerHTML=monthLine+monthAlert+(ordered.length?ordered.map(s=>{
-  const ratio=s.monthly_usd>0&&s.monthly_equiv!=null?s.monthly_equiv/s.monthly_usd:null;
-  const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
-  const result=s.monthly_usd==null?(s.monthly_equiv!=null?`월 환산 ${usd(s.monthly_equiv)} · 설정에서 구독료 입력`:'설정에서 구독료 입력'):s.monthly_usd===0?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—';
+  const ratio=valueRatio(s),price=priceText(s,true);
+  const result=s.monthly_usd==null?(s.monthly_equiv!=null?`월 환산 ${usd(s.monthly_equiv)} · 설정에서 구독료 입력`:'설정에서 구독료 입력'):!paidPrice(s)?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—';
   // No tokens in the period is stated as such; tokens without a list price stay 미산정.
   const period=s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:s.period_tokens===0?'기간 내 사용 기록 없음':'기간 내 미산정';
-  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${period} · ${price}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
+  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${period} · ${esc(price)}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
  }).join(''):month?'':'<p class="hint">구독료가 설정되지 않았습니다.</p>');
  applyGeometry($('subvalue'));
  renderCalendar(data);renderSessions(data);renderProjects(data);
@@ -153,16 +174,17 @@ function renderReports(list,week=lastWeek){
   :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>');
 }
 // Monthly subscription settlements (finished KST months): each subscription's list-price
-// value against the monthly price set when the month was first settled.
+// value against the month's price as set when it was first settled, prorated by time
+// when the price changed during the month.
 const monthStart=m=>Date.parse(m.start+'T00:00:00+09:00')/1000;
 function monthHtml(m){
  const subs=subscriptionOrder(m.subscriptions),top=Math.max(10,...subs.map(s=>s.ratio||0));
  const rows=subs.map(s=>{
-  const price=s.monthly_usd==null?'월 구독료 미설정':`월 구독료 ${s.monthly_usd?usd(s.monthly_usd):'무료'}`;
+  const price=priceText(s,false);
   const value=s.value!=null?`환산 ${usd(s.value)}`:s.tokens===0?'사용 기록 없음':'환산 미산정';
   const result=s.ratio!=null?`${s.ratio.toFixed(1)}배`:s.monthly_usd===0?'무료 프리뷰':'—';
   const name=familyOf(s.route)==='claude-code'&&!accountLabel(s.route)&&s.label?`${routeNames['claude-code']} · ${s.label}`:serviceFull(s.route);
-  return `<div class="sub-row${s.ratio!=null?' with-bar':''}"><strong>${esc(name)}</strong><span>${value} · ${price}${s.tokens?` · <span data-tip="${fmt(s.tokens)} 토큰">${compact(s.tokens)}</span> 토큰`:''}</span><strong>${esc(result)}</strong>${s.ratio!=null?valueBar(s.ratio,top):''}</div>`;
+  return `<div class="sub-row${s.ratio!=null?' with-bar':''}"><strong>${esc(name)}</strong><span>${value} · ${esc(price)}${s.tokens?` · <span data-tip="${fmt(s.tokens)} 토큰">${compact(s.tokens)}</span> 토큰`:''}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${s.ratio!=null?valueBar(s.ratio,top):''}</div>`;
  }).join('');
  const codex=subs.some(s=>s.route==='codex')&&m.totals.residual_tokens;
  const from=m.quota_from!=null&&m.quota_from>monthStart(m)?` · ${esc(when(m.quota_from))}부터 보존된 이력`:'';

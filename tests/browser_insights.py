@@ -520,6 +520,16 @@ async def main():
               {route:'devin',monthly_usd:10,period_cost:null,period_tokens:5,monthly_equiv:null}];renderInsights(d);}""")
             await expect(page.locator('#subvalue .sub-row',has_text='Codex')).to_contain_text('기간 내 사용 기록 없음')
             await expect(page.locator('#subvalue .sub-row',has_text='Devin')).to_contain_text('기간 내 미산정')
+            # A price changed inside the period: the value is set against the span's average
+            # price, and each price's span shows its own value (none for under a day).
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.subscriptions=[{route:'codex',monthly_usd:110,effective_usd:200,period_cost:900,period_tokens:5,monthly_equiv:400,
+              price_segments:[{start:'2026-09-02T00:00:00+09:00',end:'2026-09-08T00:00:00+09:00',days:6,monthly_usd:220,cost:880,tokens:4},
+                {start:'2026-09-08T00:00:00+09:00',end:'2026-09-08T12:00:00+09:00',days:.5,monthly_usd:110,cost:20,tokens:1}]}];renderInsights(d);}""")
+            changed=page.locator('#subvalue .sub-row',has_text='Codex')
+            await expect(changed).to_contain_text('월 구독료 $110 · 기간 평균 $200')
+            await expect(changed).to_contain_text('월 환산 $400 · 2.0배')
+            await expect(changed.locator('.price-spans')).to_contain_text('$220/월 · 환산 $880 · 20.3배')
+            await expect(changed.locator('.price-spans')).to_contain_text('$110/월 · 환산 $20 · 1일 미만')
             await page.evaluate('()=>renderInsights(lastUsage)')
             await view('status')
             await expect(page.locator('#quality')).to_be_visible()

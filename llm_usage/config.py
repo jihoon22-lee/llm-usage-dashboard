@@ -12,7 +12,7 @@ def config_path():
 # Keys the web UI may edit. They are stored in local.json next to the database
 # because systemd sandboxes mount ~/.config read-only (ProtectHome=read-only).
 LOCAL_KEYS = {'subscription_prices', 'thresholds', 'refresh_seconds', 'value_alert_usd', 'notify', 'project_budgets',
-              'ended_subscriptions', 'claude_account_names', 'residual_label'}
+              'ended_subscriptions', 'claude_account_names', 'residual_label', 'subscription_price_history'}
 
 
 def local_path(config):
