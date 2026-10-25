@@ -311,6 +311,8 @@ progress.level-low{accent-color:var(--error-ink)}
 .sub-row:first-child{border-top:0}
 .sub-row>strong{min-width:110px}
 .sub-row>span{flex:1;color:var(--muted)}
+.sub-row .price-spans{display:block;margin-top:2px;font-size:11px;color:var(--subtle)}
+.cfg-effective{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:8px;font-size:12px}
 #calendar{display:flex;gap:20px}
 .cal-scroll{overflow-x:auto;flex:1;min-width:0}
 .cal-months{display:grid;grid-template-columns:repeat(var(--cal-weeks,16),var(--cal-cell,11px));gap:3px;font-size:var(--fs-meta);color:var(--muted);margin-bottom:4px;white-space:nowrap}

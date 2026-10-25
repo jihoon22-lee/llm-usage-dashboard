@@ -5,6 +5,7 @@ file, collector, private origin or production database is consulted.
 """
 from browser_support import Sock, watch_csp, artifact_directory
 import argparse
+from datetime import datetime
 import json
 import sys
 import tempfile
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright, expect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from llm_usage.store import Store  # noqa: E402
+from llm_usage.store import KST, Store  # noqa: E402
 from llm_usage.webapp import create_app  # noqa: E402
 
 parser = argparse.ArgumentParser()
@@ -150,6 +151,30 @@ with sync_playwright() as p:
     assert saved['claude_account_names'] == {SECOND: '업무 Max'}, saved
     assert saved['subscription_prices'][SECOND] == 100, saved
     assert list(saved['ended_subscriptions']) == ['devin'], saved
+    assert 'subscription_price_history' not in saved or not saved['subscription_price_history'], saved
+    # A plan change from a given moment keeps the earlier price for the use made before it.
+    expect(page.locator('#cfg-subs-at')).to_be_hidden()
+    page.locator('#cfg-subs-effective').select_option('at')
+    expect(page.locator('#cfg-subs-at')).to_be_visible()
+    page.locator('#cfg-subs input[data-route="codex"]').fill('100')
+    page.locator('#cfg-subs-save').click()
+    expect(page.locator('#cfg-subs-msg')).to_contain_text('적용 시작 시각')
+    changed_at = datetime.fromtimestamp(now-2*86400, KST).strftime('%Y-%m-%dT%H:%M')
+    page.locator('#cfg-subs-at').fill(changed_at)
+    page.locator('#cfg-subs-save').click()
+    expect(page.locator('#cfg-subs-msg')).to_contain_text('저장했습니다')
+    saved = json.loads((root/'local.json').read_text())
+    history = saved['subscription_price_history']['codex']
+    assert [e['usd'] for e in history] == [200] and abs(history[0]['until']-datetime.strptime(changed_at, '%Y-%m-%dT%H:%M').replace(tzinfo=KST).timestamp()) < 1, history
+    assert saved['subscription_prices']['codex'] == 100 and SECOND not in saved['subscription_price_history'], saved
+    expect(page.locator('#cfg-subs .cfg-sub', has_text='OpenAI / Codex')).to_contain_text('이전 구독료 $200')
+    page.locator('#settings-back').click()
+    page.locator('#tab-reports').click()
+    codex_value = page.locator('#subvalue .sub-row', has_text='OpenAI / Codex')
+    expect(codex_value).to_contain_text('월 구독료 $100 · 기간 평균')
+    expect(codex_value.locator('.price-spans')).to_contain_text('$200/월')
+    expect(codex_value.locator('.price-spans')).to_contain_text('$100/월')
+    page.locator('#settings-open').click()
     page.screenshot(path=str(output/'claude-accounts-settings-1440.png'), full_page=True)
     page.locator('#settings-back').click()
     page.locator('#tab-quota').click()

@@ -299,7 +299,9 @@ class InsightStoreTests(unittest.TestCase):
             self.store.event(c,'e',stamp('2026-09-08T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
         data=self.store.usage(period='all',subscriptions={'codex':20,'devin':10})
         # Unpriced tokens and no tokens at all are told apart.
-        self.assertEqual(data['subscriptions'],[dict(route='codex',monthly_usd=20,period_cost=None,period_tokens=5,monthly_equiv=None),
-                                                dict(route='devin',monthly_usd=10,period_cost=None,period_tokens=0,monthly_equiv=None)])
+        self.assertEqual(data['subscriptions'],[dict(route='codex',monthly_usd=20,period_cost=None,period_tokens=5,monthly_equiv=None,
+                                                     effective_usd=20,price_segments=None),
+                                                dict(route='devin',monthly_usd=10,period_cost=None,period_tokens=0,monthly_equiv=None,
+                                                     effective_usd=10,price_segments=None)])
 
 if __name__=='__main__':unittest.main()

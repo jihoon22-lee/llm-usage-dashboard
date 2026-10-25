@@ -104,7 +104,7 @@ async function loadConfig(){
  if(epoch!==settingsEpoch||version!==configVersion)return;
  const drafts=settingsOnline?settingsDrafts():[];
  settingsAvailable(true);
- const prices=cfg.subscription_prices||{},ended=cfg.ended_subscriptions||{},accountNames=cfg.claude_account_names||{};
+ const prices=cfg.subscription_prices||{},ended=cfg.ended_subscriptions||{},accountNames=cfg.claude_account_names||{},history=cfg.subscription_price_history||{};
  if(Array.isArray(cfg.claude_accounts)&&setClaudeAccounts(cfg.claude_accounts))redrawReports();
  const claude=multiClaude()?claudeAccounts.list:[];
  const routes=[...new Set([...(cfg.subscription_routes||[]),...Object.keys(prices),...Object.keys(ended),...(lastUsage?.subscriptions||[]).map(s=>s.route)])]
@@ -116,7 +116,9 @@ async function loadConfig(){
   const name=serviceFull(r),since=ended[r]?.since,account=claude.find(x=>x.route===r);
   const plan=account?.plan_label&&account.plan_label!==accountLabel(r)?account.plan_label+' · ':'';
   const hint=account?plan+(accountWhere(account)||r):r;
-  return `<div class="cfg-row cfg-sub${ended[r]?' ended':''}"><span>${esc(name)}<small>${esc(hint)}${since?' · '+esc(when(since))+' 종료 표시':''}</small></span>`
+  // Earlier prices still value the use made while they applied.
+  const earlier=(history[r]||[]).map(e=>`${usd(e.usd)} ~${when(e.until)}`).join(' · ');
+  return `<div class="cfg-row cfg-sub${ended[r]?' ended':''}"><span>${esc(name)}<small>${esc(hint)}${since?' · '+esc(when(since))+' 종료 표시':''}${earlier?' · 이전 구독료 '+esc(earlier):''}</small></span>`
    +`<span class="cfg-sub-controls">${account?`<input type="text" maxlength="40" class="cfg-account-name" data-account-name="${esc(r)}" value="${esc(accountNames[r]??'')}" placeholder="${esc('표시 이름 · '+(account.plan_label||'계정'))}" aria-label="${esc(name)} 계정 표시 이름">`:''}`
    +`<input type="number" min="0" max="100000" step="0.01" data-route="${esc(r)}" value="${prices[r]??''}" placeholder="미설정" aria-label="${esc(name)} 월 구독료 (USD)">`
    +`<label class="cfg-check"><input type="checkbox" data-ended="${esc(r)}"${ended[r]?' checked':''}> 구독 종료</label></span></div>`;
@@ -124,6 +126,9 @@ async function loadConfig(){
   // The Codex account residual's name in model/project views, reports and notifications.
   +(routes.includes('codex')?`<div class="cfg-row cfg-sub"><span>Codex 계정 합계 차이 이름<small>계정 일별 합계 − 이 PC 기록 · 모델·프로젝트 보기의 별도 항목 · 비우면 ‘${esc(RESIDUAL_DEFAULT)}’</small></span>`
    +`<span class="cfg-sub-controls"><input type="text" maxlength="20" class="cfg-account-name" id="cfg-residual-label" value="${esc(cfg.residual_label??'')}" placeholder="${esc(RESIDUAL_DEFAULT)}" aria-label="Codex 계정 합계 차이 표시 이름"></span></div>`:'')
+  +'<div class="cfg-effective"><label>바뀐 구독료 적용 <select id="cfg-subs-effective"><option value="now">지금부터 · 요금제 변경</option><option value="at">지정한 시각부터</option>'
+  +'<option value="correct">현재 구독료 정정 · 이전 변경 유지</option><option value="all">전체 기간 · 이전 변경 삭제</option></select></label>'
+  +'<input type="datetime-local" id="cfg-subs-at" hidden aria-label="구독료 적용 시작 시각 (KST)"></div>'
   +'<button type="button" class="mini-btn" id="cfg-subs-save" aria-label="구독 설정 저장">저장</button>';
  $('cfg-pricing').innerHTML='<p class="hint">보존 시간별 단가가 비어 있으면 기본 캐시 쓰기 단가를 사용합니다. 보존 시간이 없는 기록은 기본 단가로 추정합니다.</p><div class="table-wrap"><table class="cfg-table"><thead><tr><th>모델</th><th>최근 30일</th>'+RATE_KEYS.map(k=>'<th>'+RATE_LABELS[k]+'</th>').join('')+'<th></th></tr></thead><tbody>'+priceModels(cfg).map(m=>priceRowHtml(cfg,m)).join('')+'</tbody></table></div>';
  applyPriceFilter();syncPriceDirty();
@@ -134,6 +139,7 @@ async function loadConfig(){
  for(const k of['low','reset','ops','exp'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
  restoreDrafts(drafts);
 }
+$('cfg-subs').addEventListener('change',e=>{if(e.target.id==='cfg-subs-effective')$('cfg-subs-at').hidden=e.target.value!=='at';});
 $('cfg-subs').addEventListener('click',async e=>{
  if(e.target.id!=='cfg-subs-save')return;
  const drafts=draftsIn('#cfg-subs');
@@ -145,7 +151,13 @@ $('cfg-subs').addEventListener('click',async e=>{
   prices[i.dataset.route]=v;
  }
  const ended=[...$('cfg-subs').querySelectorAll('input[data-ended]:checked')].map(i=>i.dataset.ended);
- const body={prices,ended};
+ const body={prices,ended,effective:$('cfg-subs-effective').value};
+ if(body.effective==='at'){
+  // The picker reads as KST wall time, like every time on the page.
+  const at=Date.parse($('cfg-subs-at').value+':00+09:00')/1000;
+  if(!Number.isFinite(at)){cfgMsg('cfg-subs-msg','적용 시작 시각을 입력하세요.');return;}
+  body.effective_at=at;
+ }
  const nameInputs=[...$('cfg-subs').querySelectorAll('input[data-account-name]')];
  if(nameInputs.length)body.names=Object.fromEntries(nameInputs.map(i=>[i.dataset.accountName,i.value.trim()]));
  if($('cfg-residual-label'))body.residual_label=$('cfg-residual-label').value.trim();

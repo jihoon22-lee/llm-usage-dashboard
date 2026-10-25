@@ -168,7 +168,8 @@ def main():
         else:
             from .pricing import load_pricing
             data=store.usage(**{k:v for k,v in vars(args).items() if k!='command'},pricing=load_pricing(config),
-                             subscriptions={k:v for k,v in (config.get('subscription_prices') or {}).items() if k not in ended},ended=ended)
+                             subscriptions={k:v for k,v in (config.get('subscription_prices') or {}).items() if k not in ended},ended=ended,
+                             price_history=config.get('subscription_price_history'))
     except (ValueError,TypeError,OverflowError) as exc:parser.error(str(exc))
     print(json.dumps(data,ensure_ascii=False,indent=2))
 

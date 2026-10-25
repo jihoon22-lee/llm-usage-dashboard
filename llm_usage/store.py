@@ -746,7 +746,7 @@ class Store:
             cache=self._usage_cache;cache[key]=body
             while len(cache)>12:cache.popitem(last=False)
 
-    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None):
+    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None, price_history=None):
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all','core','insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql,scope_args='',()
@@ -775,11 +775,13 @@ class Store:
                  tuple(lifetime.values()),collected_at,self.state(c,'data_version') or 0,
                  midnight.date().isoformat(),cutoff,
                  json.dumps(pricing,sort_keys=True) if pricing else None,
-                 json.dumps(subscriptions,sort_keys=True) if subscriptions else None,tuple(sorted(ended or ())))
+                 json.dumps(subscriptions,sort_keys=True) if subscriptions else None,tuple(sorted(ended or ())),
+                 json.dumps(price_history,sort_keys=True) if price_history else None)
             body=self._usage_get(key)
             if body is None:
                 body=self._usage_body(c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,set(ended or ()))
+                                      compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,set(ended or ()),
+                                      price_history)
                 if len(body['series'])<=5000:self._usage_put(key,body)
             body={**body,'prior':self._prior(c,body,period,compare,now,pricing,scope_sql,scope_args,sums,count) if sections!='insights' else None}
             from .reconciliation import apply as reconcile_usage
@@ -990,6 +992,23 @@ class Store:
         data['cache_share']=data['totals']['cached_input']/inputs*100 if inputs else None
         return data
 
+    def _price_segments(self,c,R,route,parts,pricing,scope_sql,scope_args):
+        """Each price span's value of one route's records. Rollup rows are hourly, so an
+        hour holding a price change is counted in the span it begins in."""
+        from .pricing import estimate,rate_for
+        from .insights import token_total
+        cases=' '.join(f'WHEN ts<{float(hi)!r} THEN {i}' for i,(_,hi,_) in enumerate(parts[:-1]))
+        sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
+        result=[dict(start=datetime.fromtimestamp(lo,KST).isoformat(),end=datetime.fromtimestamp(hi,KST).isoformat(),
+                     days=(hi-lo)/86400,monthly_usd=usd,cost=None,tokens=0) for lo,hi,usd in parts]
+        for r in c.execute(f"SELECT CASE {cases} ELSE {len(parts)-1} END AS part,model,date(ts,'unixepoch','+9 hours') AS day,"+sums+
+                           ' FROM '+R+' WHERE route=? AND ts>=? AND ts<?'+scope_sql+' GROUP BY 1,2,3',
+                           (route,parts[0][0],parts[-1][1],*scope_args)):
+            e=result[r['part']];e['tokens']+=token_total(dict(r))
+            rate=rate_for(r['model'],pricing,r['day']) if pricing else None
+            if rate:e['cost']=(e['cost'] or 0)+estimate(dict(r),rate)
+        return result
+
     def _prior(self,c,body,period,compare,now,pricing,scope_sql,scope_args,sums,count):
         """The card comparison: the window before (or the chosen comparison) cut at the same
         elapsed time. Worked out on every request, not cached with the body, so the cut
@@ -1022,7 +1041,8 @@ class Store:
         return prior
 
     def _usage_body(self,c,period,start,end,granularity,group,cumulative,now,midnight,pricing,subscriptions,
-                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,ended=frozenset()):
+                    compare,scope,scope_sql,scope_args,value_alert_usd,sections,sums,count,lifetime,cutoff,ended=frozenset(),
+                    price_history=None):
         first = c.execute('SELECT MIN(ts) FROM events WHERE 1=1'+scope_sql,scope_args).fetchone()[0]
         if period=='all':
             from .reconciliation import supplements,matches
@@ -1214,12 +1234,21 @@ class Store:
             if separate_claude:
                 for route in claude_routes:
                     if route not in ended:prices.setdefault(route,None)
+            from .subscriptions import MONTH_DAYS,clean_history,segments,weighted
+            history=clean_history(price_history)
+            lo,hi=a.timestamp(),min(b,now).timestamp()
             for route,monthly in prices.items():
                 if monthly is not None and (not isinstance(monthly,(int,float)) or monthly<0):continue
                 est=by_route.get(route)
+                # The value is set against the prices of the same span: a price changed
+                # later does not re-value earlier use.
+                parts=segments(monthly,history.get(route),lo,hi) if monthly is not None else []
                 # No tokens in the period is not the same as tokens without a list price.
                 subs.append(dict(route=route,monthly_usd=monthly,period_cost=est,period_tokens=tokens_by_route.get(route,0),
-                                 monthly_equiv=est*30.44/days if est is not None else None))
+                                 monthly_equiv=est*MONTH_DAYS/days if est is not None else None,
+                                 effective_usd=weighted(parts) if parts else monthly,
+                                 price_segments=self._price_segments(c,R,route,parts,pricing,scope_sql,scope_args)
+                                 if len(parts)>1 and (claude_split is None or not is_claude(route)) else None))
         labels = sorted({r['label'] for r in buckets})
         lookup = {(r['bucket'],r['label']):r for r in buckets}
         running = {label:dict(requests=0,cost=0.0,unpriced=0,**dict.fromkeys(METRICS,0)) for label in labels}

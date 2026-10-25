@@ -114,7 +114,8 @@ def create_app(config=None):
         try:
             as_of=float(request.args['as_of']) if 'as_of' in request.args else None
             data=(store.usage(period=request.args.get('period','7d'),start=request.args.get('start'),end=request.args.get('end'),
-                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=active_prices(),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of,names=config.get('claude_account_names'),ended=ended_routes(config)))
+                            granularity=request.args.get('granularity','day'),group=request.args.get('group','provider'),cumulative=request.args.get('cumulative')=='1',pricing=load_pricing(config),subscriptions=active_prices(),compare=request.args.get('compare'),scope=request.args.get('scope') or None,value_alert_usd=config.get('value_alert_usd'),sections=request.args.get('sections','all'),as_of=as_of,names=config.get('claude_account_names'),ended=ended_routes(config),
+                            price_history=config.get('subscription_price_history')))
             # The residual's name is a display setting, not part of the cached usage body.
             return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {},
                             'residual_label':residual_label()} if 'rows' in data else data)
@@ -261,7 +262,9 @@ def create_app(config=None):
         since=time.time()-30*86400
         with store.connect() as c:
             usage30={r[0]:r[1] for r in c.execute('SELECT model,SUM(uncached_input+cached_input+output+cache_creation) FROM events WHERE ts>=? GROUP BY model',(since,))}
+        from .subscriptions import clean_history
         return jsonify(subscription_routes=sorted(routes),subscription_prices=config.get('subscription_prices') or {},
+                       subscription_price_history=clean_history(config.get('subscription_price_history')),
                        ended_subscriptions=config.get('ended_subscriptions') or {},claude_accounts=claude,
                        claude_account_names=config.get('claude_account_names') or {},notify=masked(config.get('notify')),
                        residual_label=config.get('residual_label'),
@@ -282,20 +285,34 @@ def create_app(config=None):
             if not isinstance(route,str) or not ROUTE_RE.fullmatch(route):abort(400,description='경로 이름을 확인하세요.')
             if not number(value,0,100000):abort(400,description='구독료는 0~100000 범위의 숫자여야 합니다.')
             clean[route]=value
-        patch={'subscription_prices':clean}
+        # When a changed price applies: from now (a plan change, the default), from a
+        # given moment, as a correction of the current price, or for all time.
+        from .subscriptions import MODES,change as price_change,clean_history
+        mode=body.get('effective','now')
+        at=body.get('effective_at')
+        if mode not in MODES:abort(400,description='적용 시점을 확인하세요.')
+        now=time.time()
+        if mode=='at' and not number(at,1,now+60):abort(400,description='적용 시각은 지금 이전이어야 합니다.')
+        def prices_with_history(current):
+            before=current.get('subscription_prices') or {}
+            history=clean_history(current.get('subscription_price_history'))
+            after={route:price_change(history.get(route),before.get(route),clean.get(route),mode,min(at or now,now),now)
+                   for route in set(history)|set(clean)}
+            return {'subscription_prices':clean,'subscription_price_history':{r:e for r,e in after.items() if e},**extra}
+        extra={}
         names=body.get('names')
         if names is not None:
             # Display names of Claude accounts; emails are never stored or shown.
             if (not isinstance(names,dict) or len(names)>16 or not all(isinstance(r,str) and ROUTE_RE.fullmatch(r) and r.startswith('claude-code')
                     and isinstance(v,str) and len(v.strip())<=40 and not any(ord(ch)<32 or ord(ch)==127 for ch in v) for r,v in names.items())):
                 abort(400,description='계정 이름은 40자 이하로 입력하세요.')
-            patch['claude_account_names']={r:v.strip() for r,v in names.items() if v.strip()}
+            extra['claude_account_names']={r:v.strip() for r,v in names.items() if v.strip()}
         label=body.get('residual_label')
         if label is not None:
             # The name of the Codex account residual (e.g. '자동 리뷰'); empty restores the default.
             if not isinstance(label,str) or len(label.strip())>20 or any(ord(ch)<32 or ord(ch)==127 for ch in label):
                 abort(400,description='계정 합계 차이 이름은 20자 이하로 입력하세요.')
-            patch['residual_label']=label.strip() or None
+            extra['residual_label']=label.strip() or None
         ended=body.get('ended')
         if ended is not None:
             # Omitted keeps the stored state; a list replaces it and keeps the original dates.
@@ -303,10 +320,11 @@ def create_app(config=None):
                 abort(400,description='구독 종료 목록을 확인하세요.')
             def change(current):
                 before=current.get('ended_subscriptions') or {}
-                return {**patch,'ended_subscriptions':{r:before.get(r) or {'since':time.time()} for r in dict.fromkeys(ended)}}
+                return {**prices_with_history(current),'ended_subscriptions':{r:before.get(r) or {'since':time.time()} for r in dict.fromkeys(ended)}}
             saved=persist(change)
-        else:saved=persist(patch)
-        return jsonify(subscription_prices=clean,ended_subscriptions=saved.get('ended_subscriptions') or {},
+        else:saved=persist(prices_with_history)
+        return jsonify(subscription_prices=clean,subscription_price_history=saved.get('subscription_price_history') or {},
+                       ended_subscriptions=saved.get('ended_subscriptions') or {},
                        claude_account_names=saved.get('claude_account_names') or {},residual_label=saved.get('residual_label'))
 
     @app.post('/api/config/pricing')
