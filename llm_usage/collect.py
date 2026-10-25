@@ -722,7 +722,8 @@ def run(settings,once=False):
                             if weekly:
                                 from .notify import deliver
                                 deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label'),local.get('claude_account_names')))],current)
-                            ensure_months(store,current,pricing,local.get('subscription_prices'),local.get('ended_subscriptions'))
+                            ensure_months(store,current,pricing,local.get('subscription_prices'),local.get('ended_subscriptions'),
+                                          local.get('subscription_price_history'))
                     except Exception as exc:notify_failure(store,exc)  # never stops collection
             sd_notify('WATCHDOG=1')
             if not once and due(last_backup,backup_ok,now):
