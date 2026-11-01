@@ -678,6 +678,7 @@ details.source-group[open]>summary{margin-bottom:-8px}
 @media(min-width:601px){.sub-row>span+strong{text-align:right}}
 .value-bar.labelled{margin-bottom:16px}
 .value-bar em{position:absolute;top:9px;transform:translateX(-50%);font-style:normal;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
+.value-bar em.end{transform:translateX(-100%)}
 kbd{font:inherit;font-size:var(--fs-xs);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--surface)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 /* What-if pricing, project detail, capacity history and the notification log. */

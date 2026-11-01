@@ -4,7 +4,8 @@
 // of one list share a scale and line up; only the last one carries the scale's labels.
 function valueBar(ratio,top,labelled=false){
  const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
- const ticks=labelled?[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join(''):'';
+ // A tick at the end of the scale ends its label there, so the label stays inside the bar.
+ const ticks=labelled?[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}"${pos(v)>95?' class="end"':''}>${v}배</em>`).join(''):'';
  return `<span class="value-bar${ratio<1?' under':''}${labelled?' labelled':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
 }
 // A thin bar inside a table cell on a 0-100 scale. With no value it leaves an empty slot,

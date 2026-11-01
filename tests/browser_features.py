@@ -321,6 +321,11 @@ with sync_playwright() as p:
     older.locator('details > summary').click()
     expect(older).to_contain_text('부분 월(기록 08-20부터)')
     expect(older).to_contain_text('이 달의 한도 이력은 보존 기간이 지나')
+    # Every value under 10배 puts the 10배 tick at the scale's end; its label stays inside the bar.
+    ticks = older.locator('.value-bar.labelled').first.evaluate(
+        "b=>{const r=b.getBoundingClientRect();return [...b.querySelectorAll('em')].map(e=>{const t=e.getBoundingClientRect();"
+        "return [e.textContent,t.left>=r.left-.5&&t.right<=r.right+.5];});}")
+    assert ticks == [['1배', True], ['10배', True]], ticks
     # Account names that arrive after the settlements were drawn redraw them with the names.
     page.evaluate("window.shownAccounts=claudeAccounts.list;setClaudeAccounts([{route:'claude-code',label:'Pro'},"
                   "{route:'claude-code:abababababab',label:'두 번째'}])&&redrawReports()")
