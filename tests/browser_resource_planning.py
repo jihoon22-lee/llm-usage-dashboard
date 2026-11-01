@@ -90,10 +90,10 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             context=browser.new_context(viewport={'width':width,'height':900},service_workers='block')
             page=context.new_page();page_fixture(page)
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)));watch_csp(page,errors)
-            page.goto(ORIGIN)
+            page.goto(ORIGIN+'/?view=quota')
             expect(page.locator('#updated')).to_contain_text('마지막 갱신')
             expect(page.locator('#work-decision,#plan-summary,#tab-plan')).to_have_count(0)
-            # Subscription quota must be the first overview content on every width.
+            # Subscription quota must be the quota view's first content on every width.
             expect(page.locator('#view-quota > .section-heading h2').first).to_have_text('구독 한도')
             if width<600:page.locator('[data-quota="codex"]').click()
             page.evaluate('scrollTo(0,0)')
@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             assert quota['y'] < 900
             assert page.locator('#limits').bounding_box()['y'] < page.locator('#resource-panel').bounding_box()['y']
             tabs=page.locator('#tabs [role=tab]').evaluate_all('ts=>ts.map(t=>t.id)')
-            assert tabs==['tab-quota','tab-usage','tab-reports','tab-status'],tabs
+            assert tabs==['tab-overview','tab-quota','tab-usage','tab-reports'],tabs
             if width==1440:page.screenshot(path=str(output/'dashboard.png'))
             expect(page.locator('#quota-codex .bucket-decrease').first).to_be_visible()
             single=page.evaluate('''()=>{

@@ -87,7 +87,7 @@ export OTEL_LOG_RAW_API_BODIES=0
 연결된 누계 이벤트와 요청별 원본을 한 번만 집계하며, 이전 누계만 남은 구간은 보존합니다.
 수신기·요청 연결 fixture와 실제 CLI exporter 연결은 다른 검증입니다. [수집 범위 검토와 보완](../workthrough/2026-10-23-collection-coverage.md)를 참고하세요.
 
-`GET /api/collection`의 `telemetry`와 상태 탭의 telemetry 수신 상태에서 마지막 수신과 연결 대기 건수를
+`GET /api/collection`의 `telemetry`와 진단 화면의 telemetry 수신 상태에서 마지막 수신과 연결 대기 건수를
 확인할 수 있습니다. 로컬 기록에서 뒤늦게 요청이 연결되면 대기 건수·상태를 갱신하되 마지막 실제
 수신 시각을 새로 만들지 않습니다. 수신기 테스트 성공은 실제 CLI에서 토큰을 받았다는 뜻이 아닙니다.
 

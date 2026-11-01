@@ -77,7 +77,7 @@ with sync_playwright() as p:
         fixture_page(page)
         page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
         preview(page, 30)
-        assert page.goto(origin+'/').status == 200
+        assert page.goto(origin+'/?view=quota').status == 200
         expect(page.locator('#refresh')).to_be_enabled()
         # One low quota is the only alert; it must be visible on mobile too.
         chips = page.locator('#alerts .alert-chip')
@@ -93,7 +93,7 @@ with sync_playwright() as p:
         expect(note).to_have_count(1)
         expect(note).to_contain_text('5시간 창을 보고')
         expect(note).to_be_visible()
-        page.locator('#tabs [data-view="status"]').click()
+        page.locator('#data-status').click()
         expect(page.locator('#sources')).to_contain_text('claude-code · 미사용')
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         page.screenshot(path=str(output/f'status-{width}.png'), full_page=True)

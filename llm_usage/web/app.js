@@ -11,11 +11,24 @@ function showSource(name,source){
 function offlineText(){
  $('offline').hidden=!offlineSince;
  if(offlineSince)$('offline').textContent=`오프라인 · ${ago(offlineSince/1000)} 받은 데이터를 표시합니다. 연결되면 다음 갱신에서 최신 값으로 바뀝니다.`;
+ // A failure turns lasting with wall time, so the data status follows this 30-second tick too.
+ renderDataStatus();
+}
+// The header's data status: the collection problems sourceProblems finds, or why there is no
+// verdict (no answer yet, a failed refresh, an offline copy). It opens 진단.
+let refreshFailed=false;
+function renderDataStatus(){
+ const el=$('data-status');
+ const problems=lastUsage&&!refreshFailed&&!offlineSince?sourceProblems(lastUsage.sources,Date.now()/1000):null;
+ const [level,text]=refreshFailed?['warning','갱신 실패']:offlineSince?['offline','오프라인 사본']:!problems?['pending','확인 중']
+  :problems.action.length?['critical','조치 필요 '+problems.action.length]:problems.retry.length?['warning','일시 실패 '+problems.retry.length]:['ok','수집 정상'];
+ el.dataset.level=level;el.querySelector('.ds-text').textContent=text;
+ el.setAttribute('aria-label',`데이터 상태 ${text} · 진단 열기`);
 }
 window.addEventListener('llm-data-source-change',offlineText);
 function insightsState(state,message=''){
  const ready=state==='ready',failed=state==='error';
- $('insights-status').hidden=ready||currentView==='quota'||currentView==='usage'&&usageView!=='tokens';$('insights-status').setAttribute('role',failed?'alert':'status');
+ $('insights-status').hidden=ready||!INSIGHT_VIEWS.includes(currentView)||currentView==='usage'&&usageView!=='tokens';$('insights-status').setAttribute('role',failed?'alert':'status');
  $('insights-message').textContent=failed?'인사이트를 불러오지 못했습니다. '+message:ready?'':'인사이트를 불러오는 중…';
  $('insights-retry').hidden=!failed;
  for(const id of ['csv-projects','csv-sessions'])$(id).disabled=!ready;
@@ -118,9 +131,11 @@ async function refresh(manual=false){
      if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))await loadInsights();
      if(currentView==='usage'&&usageView!=='tokens')void loadCodexView(true);
      if(currentView==='status')loadNotifyLog();
+     if(currentView==='overview')void loadOverview(true);
+     refreshFailed=false;renderDataStatus();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
-     else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';}
+     else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';refreshFailed=true;renderDataStatus();}
     }
    }while(queued||queuedManual);
   }finally{coreController=null;$('refresh').disabled=false;setBusy(false);pending=null;updatedText();schedule();}
@@ -130,7 +145,7 @@ function applyRefreshMs(ms){refreshMs=ms;$('auto-label').textContent=(ms>=60000?
 function schedule(){clearTimeout(timer);if($('auto').checked&&!document.hidden)timer=setTimeout(()=>refresh(),refreshMs);}
 $('theme').value=window.LLMTheme.choice;
 $('theme').addEventListener('change',()=>window.LLMTheme.set($('theme').value));
-window.addEventListener('llm-theme-change',()=>{syncThemeColor();updateColors();if(lastUsage){chart(lastUsage);composition(lastUsage);ranking(lastUsage);renderCacheTrend(lastUsage);}});
+window.addEventListener('llm-theme-change',()=>{syncThemeColor();updateColors();if(lastUsage){chart(lastUsage);composition(lastUsage);ranking(lastUsage);renderCacheTrend(lastUsage);}if(lastOverview)renderOverview(lastOverview);});
 $('refresh').addEventListener('click',()=>refresh(true));$('auto').addEventListener('change',schedule);
 for(const id of FILTER_IDS)$(id).addEventListener('change',()=>{
  if(id==='period'&&$('period').value==='1h'){$('granularity').value='hour';sessSort.key='tokens';sessSort.dir='desc';}
@@ -170,20 +185,21 @@ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  if($('period').value==='1h'){sessSort.key='tokens';sessSort.dir='desc';}
  setUsageView(get('usage_view')||'tokens',false,false);
- setView(params.get('view')??saved?.view);filterSummary();
+ // Defaults saved before the 개요 tab existed open on it once; later choices are kept.
+ setView(params.get('view')??(saved?.layout===2?saved.view:null));filterSummary();
 }
 $('filter-reset').addEventListener('click',()=>{
  $('period').value='7d';$('granularity').value='day';$('group').value='route';$('cumulative').value='0';$('metric').value='tokens';$('compare').value='';$('scope').value='';
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
-// Keyboard shortcuts outside text fields: r refreshes, 1–4 switch tabs, , opens settings,
-// / focuses the current view's search, ? lists them.
-const SHORTCUT_VIEWS=['quota','usage','reports','status'];
+// Keyboard shortcuts outside text fields: r refreshes, 1–4 switch tabs, 5 opens 진단,
+// , opens settings, / focuses the current view's search, ? lists them.
+const SHORTCUT_VIEWS=['overview','quota','usage','reports','status'];
 document.addEventListener('keydown',event=>{
  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,select,textarea,[contenteditable]')||document.querySelector('dialog[open]'))return;
  const view=SHORTCUT_VIEWS[Number(event.key)-1];
- if(view){event.preventDefault();setView(view);$('tab-'+view).focus();return;}
+ if(view){event.preventDefault();setView(view);(view==='status'?$('status-back'):$('tab-'+view)).focus({preventScroll:view==='status'});return;}
  if(event.key===','){event.preventDefault();setView('settings');$('settings-back').focus({preventScroll:true});return;}
  if(event.key==='r'){event.preventDefault();refresh(true);}
  else if(event.key==='/'){
@@ -197,5 +213,7 @@ if('serviceWorker' in navigator){
  navigator.serviceWorker.getRegistrations().then(list=>list.filter(r=>new URL(r.scope).pathname==='/assets/').forEach(r=>r.unregister())).catch(()=>{});
  notificationRegistration().catch(()=>{});
 }
+// Static ⓘ buttons carry their note once, in data-tip; the accessible name repeats it.
+document.querySelectorAll('.info[data-tip]:not([aria-label])').forEach(b=>b.setAttribute('aria-label','설명: '+b.dataset.tip));
 applyPanelOrder();
 refresh();

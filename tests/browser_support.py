@@ -93,6 +93,22 @@ def fixture_json(request):
         response.close()
 
 
+def show_filter_details(page):
+    """Open the usage filters and their 세부 설정 (interval, comparison, chart form, scope and
+    quick picks), which start folded; the choice is kept per browser, so a reload keeps it."""
+    if page.locator('#filter-fold').get_attribute('open') is None:
+        page.locator('#filter-fold > summary').click()
+    if page.locator('#filter-more').get_attribute('aria-expanded') != 'true':
+        page.locator('#filter-more').click()
+
+
+async def show_filter_details_async(page):
+    if await page.locator('#filter-fold').get_attribute('open') is None:
+        await page.locator('#filter-fold > summary').click()
+    if await page.locator('#filter-more').get_attribute('aria-expanded') != 'true':
+        await page.locator('#filter-more').click()
+
+
 def fixture_page(page):
     """Install the final route before test overrides; unexpected network fails closed."""
     def handle(route):

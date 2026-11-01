@@ -1,5 +1,5 @@
 """Real Chromium checks for new insights and delayed filter responses, all API data fixture-only."""
-from browser_support import CSP_HEADERS, watch_csp
+from browser_support import CSP_HEADERS, watch_csp, show_filter_details_async
 import argparse
 import asyncio
 from pathlib import Path
@@ -106,8 +106,9 @@ async def main():
             assert not await page.evaluate("document.body.classList.contains('busy')")
             # Auto refresh moved to the settings tab; switch it off without leaving the overview.
             await page.evaluate("$('auto').checked=false;$('auto').dispatchEvent(new Event('change'))")
-            # Quotas, usage (filters and filter-dependent panels), reports and status are separate tabs.
-            async def view(name):await page.locator(f'#tabs [data-view="{name}"]').first.click()
+            # Quotas, usage (filters and filter-dependent panels) and reports are separate tabs;
+            # the header's data status opens 진단 (view 'status').
+            async def view(name):await (page.locator('#data-status') if name=='status' else page.locator(f'#tabs [data-view="{name}"]').first).click()
             await view('usage')
             await page.locator('#period').select_option('today')
             await expect(page.locator('#comparison')).to_contain_text('+100.0%')
@@ -219,6 +220,7 @@ async def main():
             await view('usage')
             await page.locator('#period').select_option('30d')
             await page.locator('#group').select_option('model')
+            await show_filter_details_async(page)
             await page.locator('#cumulative').select_option('1')
             release.set()
             await expect(page.locator('#refresh')).to_be_enabled()
@@ -244,10 +246,10 @@ async def main():
             await expect(page.locator('.limit-card:visible')).to_have_count(0)
             overview=await page.locator('#quota-overview').bounding_box()
             assert overview['height']<350
-            order=await page.locator('main h3, #sources-panel h2').all_text_contents()
+            order=await page.locator('main h3').all_text_contents()
             assert order==['다음 초기화','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
-                           '프로젝트별 사용량','세션별 사용량','이전 기간과 비교','캐시 활용률 분석','일별 한도 소비','소비 분해 상세','주간 리포트','일별 활동','구독 가치 분석','월간 구독 결산',
-                           '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','구독','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
+                           '프로젝트별 사용량','세션별 사용량','모델별 증감','캐시 활용률 분석','일별 한도 소비','소비 분해 상세','주간 리포트','일별 활동','구독 가치 분석','월간 구독 결산',
+                           '수집 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','구독','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('usage')
             # Filters fold behind a one-line summary on mobile; opening reveals them.
             fold=page.locator('#filter-fold')
@@ -255,12 +257,17 @@ async def main():
             await expect(page.locator('#filter-summary')).to_contain_text('30일')
             await expect(page.locator('#filter-summary')).to_contain_text('모델')
             await fold.locator('summary').click()
+            await show_filter_details_async(page)
             for size in (320,390):
                 await page.set_viewport_size({'width':size,'height':844})
-                # Six filters wrap into two rows; period, granularity and group stay on the first.
-                boxes=[await page.locator('#'+name).bounding_box() for name in ('period','granularity','group','metric','compare','cumulative')]
-                assert max(b['y'] for b in boxes[:3])-min(b['y'] for b in boxes[:3])<2
-                assert len({round(b['y']) for b in boxes})<=2
+                # Period, group, metric and 세부 설정 share the first row; interval, comparison,
+                # chart form and scope the next.
+                bottoms=lambda boxes:{round(b['y']+b['height']) for b in boxes}
+                main=[await page.locator('#'+name).bounding_box() for name in ('period','group','metric','filter-more')]
+                more=[await page.locator('#'+name).bounding_box() for name in ('granularity','compare','cumulative','scope')]
+                assert max(bottoms(main))-min(bottoms(main))<2,main
+                assert max(bottoms(more))-min(bottoms(more))<2,more
+                assert min(b['y'] for b in more)>max(b['y'] for b in main)
                 assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             for grain in ('week','month'):
                 await page.locator('#granularity').select_option(grain)
@@ -514,7 +521,16 @@ async def main():
             await expect(page.locator('#subvalue')).to_contain_text('이번 달 환산')
             await expect(page.locator('#subvalue')).to_contain_text('월말 예상')
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.insights.month.alert_usd=0.0001;renderInsights(d);}""")
-            await expect(page.locator('#subvalue')).to_contain_text('알림 기준')
+            await expect(page.locator('#subvalue')).to_contain_text('월말 예상 환산 가치가 알림 기준')
+            # Before the 7th there is no estimate: the line says when it starts and the alert
+            # compares what has accrued, worded as such.
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);Object.assign(d.insights.month,{days_elapsed:3,projected:null,projected_from_day:7,alert_usd:0.0001});renderInsights(d);}""")
+            month_line = page.locator('#subvalue .sub-row').first
+            await expect(month_line).to_contain_text('월말 예상은 7일째부터')
+            assert '월말 예상 $' not in await month_line.inner_text()
+            await expect(page.locator('#subvalue')).to_contain_text('이번 달 누적 환산 가치가 알림 기준')
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);Object.assign(d.insights.month,{days_elapsed:3,projected:null,projected_from_day:7,alert_usd:1e9});renderInsights(d);}""")
+            await expect(page.locator('#subvalue .warn-text')).to_have_count(0)
             # A subscription without tokens in the period is not shown as unpriced.
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.subscriptions=[{route:'codex',monthly_usd:20,period_cost:null,period_tokens:0,monthly_equiv:null},
               {route:'devin',monthly_usd:10,period_cost:null,period_tokens:5,monthly_equiv:null}];renderInsights(d);}""")
@@ -621,7 +637,7 @@ async def main():
             previous_save=await page.locator('#cfg-subs-save').element_handle()
             assert previous_save is not None
             await page.keyboard.press('End')
-            await expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+            await expect(page.locator('#tab-reports')).to_have_attribute('aria-selected','true')
             await page.locator('#settings-open').click()
             await expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
             await page.wait_for_function('previous=>!previous.isConnected',arg=previous_save)
@@ -715,9 +731,9 @@ async def main():
             assert (await pending.value).suggested_filename.startswith('llm-usage-sessions-')
             await touch.locator('#tabs [data-view="reports"]').click()
             assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
-            # The status tab leads with its summary and what needs action, visible
+            # 진단 leads with its summary and what needs action, visible
             # without unfolding anything (M4); normal sources fold.
-            await touch.locator('#tabs [data-view="status"]').click()
+            await touch.locator('#data-status').click()
             await expect(touch.locator('#sources .source-summary')).to_be_visible()
             await expect(touch.locator('#sources .source-clear, #sources .source-action .source').first).to_be_visible()
             assert not touch_errors,touch_errors

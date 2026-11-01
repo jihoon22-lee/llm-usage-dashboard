@@ -97,33 +97,51 @@ function renderConsumption(data){
  $('consumption-day').value=rows.some(d=>d.day===old)?old:rows.at(-1)?.day||'';
  renderConsumptionChart(data);renderConsumptionDetail(data);
 }
+// The seven largest categories of the period keep a series color, one per category while the
+// page is open (this chart's own palette store); the rest share the muted 기타 color in the
+// bars and legend. Bars stack and the legend runs in color-slot order, 기타 on top and last.
+// The tooltip still lists every category.
+const consumptionColorIndex=new Map();
+function consumptionColors(rows,dimension){
+ const sums=new Map();
+ for(const d of rows)for(const g of consumptionGroups(d,dimension))sums.set(g.label,(sums.get(g.label)||0)+g.value);
+ const order=[...sums.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([label])=>label);
+ const kept=order.length>8?order.slice(0,7):order,folded=order.length>kept.length;
+ const colorOf=paletteFor(kept,{},consumptionColorIndex),legend=colorOf.order(kept);
+ const color=label=>kept.includes(label)?colorOf(label):mutedColor;
+ // A day's stack: kept categories in legend order, then one 기타 segment for the rest.
+ const stack=groups=>[...legend.map(label=>[color(label),groups.filter(g=>g.label===label).reduce((n,g)=>n+g.value,0)]),
+  [mutedColor,groups.filter(g=>!kept.includes(g.label)).reduce((n,g)=>n+g.value,0)]];
+ return {color,stack,legend:folded?[...legend,'기타']:legend,folded};
+}
 function renderConsumptionChart(data){
  const box=$('consumption-chart');if(!box.clientWidth)return;
  consumptionChartWidth=box.clientWidth;
  const rows=data.days||[],dimension=$('consumption-group').value;
- if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 상태 탭에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
- const labels=[...new Set(rows.flatMap(d=>consumptionGroups(d,dimension).map(g=>g.label)))];
- $('consumption-legend').innerHTML=labels.map((label,i)=>`<span class="consumption-key"><i class="consumption-color color-${i%8}"></i>${esc(label)}</span>`).join('');
+ if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 진단에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
+ const palette=consumptionColors(rows,dimension);
+ const swatch=fill=>`<svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2" fill="${fill}"/></svg>`;
+ $('consumption-legend').innerHTML=palette.legend.map(label=>`<span class="consumption-key">${swatch(label==='기타'&&palette.folded?mutedColor:palette.color(label))}${esc(label)}</span>`).join('');
  const byDay=new Map(rows.map(d=>[d.day,d])),dates=[];
  for(let day=Date.parse(data.start+'T00:00:00Z'),end=Date.parse(data.end+'T00:00:00Z');day<=end;day+=86400000)dates.push(new Date(day).toISOString().slice(0,10));
- const maximum=Math.max(1,...rows.map(d=>consumptionGroups(d,dimension).reduce((sum,g)=>sum+g.value,0)));
+ const peak=Math.max(0,...rows.map(d=>consumptionGroups(d,dimension).reduce((sum,g)=>sum+g.value,0)));
+ const tick=niceStep(peak),maximum=Math.max(tick,Math.ceil(peak/tick)*tick);
  const width=Math.max(280,box.clientWidth),height=220,left=45,top=22,bottom=32,plot=height-top-bottom,step=(width-left-8)/dates.length;
  const tickEvery=Math.max(1,Math.ceil(dates.length/Math.max(3,Math.floor(width/65))));
  let svg=`<svg tabindex="0" aria-describedby="consumption-keyboard-hint" viewBox="0 0 ${width} ${height}" role="img" aria-label="일별 한도 소비율 · 제공사 기준일 · 단위 퍼센트"><text x="0" y="${top+5}" class="consumption-axis">${esc(consumptionPercent(maximum))}</text><text x="17" y="${height-bottom}" class="consumption-axis">0%</text><line x1="${left}" x2="${width-5}" y1="${height-bottom}" y2="${height-bottom}" stroke="var(--border)"/>`;
  dates.forEach((date,index)=>{
   const d=byDay.get(date),groups=d?consumptionGroups(d,dimension):[],x=left+index*step+step*.12,w=step*.76;
-  let offset=0;
   svg+=`<g data-consumption-day="${date}"><rect x="${x}" y="${top}" width="${w}" height="${plot}" fill="transparent"/>`;
   if(d&&groups.length){
-   for(const group of groups){const h=group.value/maximum*plot;svg+=`<rect x="${x}" y="${height-bottom-offset-h}" width="${w}" height="${h}" fill="var(--chart-${labels.indexOf(group.label)%8})"/>`;offset+=h;}
+   svg+=stackRects(x,w,v=>height-bottom-v/maximum*plot,palette.stack(groups));
   }else svg+=`<text x="${x+w/2}" y="${height-bottom-8}" text-anchor="middle" class="consumption-axis">—</text>`;
   svg+='</g>';
   if(index%tickEvery===0||index===dates.length-1)svg+=`<text x="${Math.min(width-20,x+w/2)}" y="${height-9}" text-anchor="middle" class="consumption-axis">${date.slice(5)}</text>`;
  });
  box.innerHTML=svg+`<line class="chart-cursor" x1="0" x2="0" y1="${top}" y2="${height-bottom}" visibility="hidden"/></svg><span id="consumption-keyboard-hint" class="sr-only">좌우 방향키로 날짜를 선택하고 Enter로 분해 내역을 표시하며 Escape로 툴팁을 닫습니다.</span><div id="consumption-tooltip" class="chart-tooltip" role="status" aria-live="polite" tabindex="0" hidden></div>`;
- bindConsumptionTooltip(data,dates,byDay,labels,{width,height,left,top,bottom,step,dimension});
+ bindConsumptionTooltip(data,dates,byDay,palette,{width,height,left,top,bottom,step,dimension});
 }
-function bindConsumptionTooltip(data,dates,byDay,labels,geometry){
+function bindConsumptionTooltip(data,dates,byDay,palette,geometry){
  const root=$('consumption-chart'),svg=root.querySelector('svg'),tooltip=$('consumption-tooltip'),cursor=root.querySelector('.chart-cursor');
  let selected=-1,scrollable=false;
  function hide(){tooltip.hidden=true;cursor.setAttribute('visibility','hidden');selected=-1;}
@@ -137,7 +155,7 @@ function bindConsumptionTooltip(data,dates,byDay,labels,geometry){
    data.plan?.approximate===true?'제공사 근사값':null,data.plan?.coverage_complete!==true?'제공 범위 일부 또는 미확인':null].filter(Boolean);
   scrollable=groups.length>8;tooltip.classList.toggle('scrollable',scrollable);
   tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)}</strong><small>제공사 기준일 · ${geometry.dimension==='model'?'모델별':'기능별'} 한도 소비율</small></div>`
-   +groups.map(g=>`<div class="tooltip-row"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="var(--chart-${labels.indexOf(g.label)%8})"/></svg> ${esc(g.label)}</span><strong>${esc(consumptionPercent(g.value))}</strong></div>`).join('')
+   +groups.map(g=>`<div class="tooltip-row"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${palette.color(g.label)}"/></svg> ${esc(g.label)}</span><strong>${esc(consumptionPercent(g.value))}</strong></div>`).join('')
    +(!groups.length?`<div class="tooltip-row tooltip-missing"><span>${day?'이 분류의 값 미제공':'미수신'}</span><strong>—</strong></div>`:'')
    +`<div class="tooltip-total"><span>표시 항목 합계</span><strong>${total==null?'—':esc(consumptionPercent(total))}</strong></div>`
    +(notices.length?`<div class="tooltip-hint">${notices.map(esc).join(' · ')}</div>`:'');
@@ -214,7 +232,7 @@ function renderActivity(data){
  const names={all:'일반 작업',archived:'보관 작업',code_review:'코드 리뷰',security_review:'보안 검토'};
  $('activity-coverage').innerHTML=Object.entries(data.coverage||{}).map(([key,c])=>`<p><strong>${esc(names[key]||key)}</strong> · ${c.complete?'전체 탐색 이력 있음':'페이지 수집 중 / 미수집'}${c.completed_at?' · 끝 페이지 확인 '+esc(when(c.completed_at))+' KST':''}${c.continuing?' · 추가 페이지 탐색 중':''}${c.oldest?' · 수집된 최초 생성 '+esc(when(c.oldest))+' KST':''}${c.checked?' · 목록 조회 '+esc(when(c.checked))+' KST':''}${c.error?' · 조회 실패 '+esc(c.error):''}</p>`).join('');
  for(const c of taskReads.values())c.abort();taskReads.clear();
- $('activity-rows').innerHTML=(data.items||[]).map(task=>`<tr><td class="activity-identity" data-label="작업">${taskIdentity(task)}</td><td data-label="종류">${esc(ACTIVITY_KINDS[task.kind]||'미분류')}</td><td data-label="생성 KST">${task.created?esc(when(task.created)):'시각 미확인'}</td><td data-label="실행 상태"><span class="execution-state ${esc(task.status)}">${esc(EXECUTION_NAMES[task.status]||'미확인')}</span></td><td data-label="소비 데이터">${taskConsumption(task)}</td><td class="activity-action"><button type="button" class="mini-btn" data-task-id="${task.id}" aria-expanded="false" aria-controls="task-detail-${task.id}">상세</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">선택 조건에서 수집된 작업이 없습니다. 수집 범위와 상태를 확인하세요.</td></tr>';
+ $('activity-rows').innerHTML=(data.items||[]).map(task=>`<tr><td class="activity-identity" data-label="작업">${taskIdentity(task)}</td><td data-label="종류">${esc(ACTIVITY_KINDS[task.kind]||'미분류')}</td><td data-label="생성 KST">${task.created?esc(when(task.created)):'시각 미확인'}</td><td data-label="실행 상태"><span class="execution-state ${esc(task.status)}">${esc(EXECUTION_NAMES[task.status]||'미확인')}</span></td><td data-label="소비 데이터">${taskConsumption(task)}</td><td class="activity-action"><button type="button" class="mini-btn" data-task-id="${task.id}" aria-expanded="false" aria-controls="task-detail-${task.id}">상세</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">선택 조건에서 수집된 작업이 없습니다. 진단에서 수집 상태를 확인하세요.</td></tr>';
  $('activity-page').textContent=`${data.page} / ${Math.max(1,Math.ceil(data.total/data.page_size))} · ${fmt(data.total)}개`;
  $('activity-prev').disabled=data.page<=1;$('activity-next').disabled=data.page*data.page_size>=data.total;
  for(const key of opened)$('activity-rows').querySelector(`[data-task-id="${CSS.escape(key)}"]`)?.click();

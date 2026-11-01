@@ -72,6 +72,13 @@ const estimateWith=(rows,rate)=>rows.reduce((s,r)=>{const basic=rate.cache_write
  return s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)+(r.output||0)*rate.output
  +Math.max(0,(r.cache_creation||0)-five-hour)*basic+five*(rate.cache_write_5m??basic)+hour*(rate.cache_write_1h??basic))/1e6;},0);
 const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
+// A stored week by its Monday: 지난주 when it is the last full KST week, else the day it began
+// (a report not built yet leaves an older week as the latest).
+function weekName(start,now=Date.now()/1000){
+ const monday=new Date(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul'}).format(new Date(now*1000))+'T00:00:00Z');
+ monday.setUTCDate(monday.getUTCDate()-(monday.getUTCDay()+6)%7-7);
+ return start===monday.toISOString().slice(0,10)?'지난주':`${Number(start.slice(5,7))}월 ${Number(start.slice(8,10))}일 주`;
+}
 // A period card's change against the window it is compared with (API `prior`, cut at the
 // same elapsed time): '직전 7일 같은 시점 대비 +12.3%', or a multiple from twice as much
 // ('3.2배', past a hundred '100배 이상'). A window older than the first record says so; a
@@ -105,17 +112,14 @@ const RESIDUAL='/account-residual',RESIDUAL_DEFAULT='로컬 미기록';
 let residualName=RESIDUAL_DEFAULT;
 const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
 const residualText=v=>v===RESIDUAL?residualName:v;
-// Series colors. Light themes keep a pale tint of the accent in --chart-1, which beside
-// --chart-0 reads as one color, so series take it last; the dark themes' palettes are
-// already spread. In ocean, sand comes before blue (blue is close to the teal accent).
-const CHART_ORDER={charcoal:[0,1,2,3,4,5,6,7],midnight:[0,1,2,3,4,5,6,7],ocean:[0,3,2,4,5,6,7,1]};
-const chartOrder=theme=>CHART_ORDER[theme]||[0,2,3,4,5,6,7,1];
-// Each service keeps one series slot in every period, by service or by maker. Further
-// Claude accounts take the next free slots in name order: every known account first,
-// shown in the period or not, so one account keeps its color; then any other Claude
-// label of the period (계정 미확인). Other groupings have none.
-const ROUTE_SLOTS={codex:0,'claude-code':1,antigravity:2,devin:3,'opencode-go':4,opencode:5};
-const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Google:2,Cognition:3};
+// Each service keeps one series slot (--series-N) in every period and theme, by service or
+// by maker. Series stack in slot order, so neighbors are the palette's checked adjacent
+// pairs; the services used most often come first, so one that is missing rarely leaves a
+// gap between the others. Further Claude accounts take the next free slots in name order:
+// every known account first, shown in the period or not, so one account keeps its color;
+// then any other Claude label of the period (계정 미확인). Other groupings have none.
+const ROUTE_SLOTS={codex:0,'claude-code':1,devin:2,antigravity:3,opencode:4,'opencode-go':5};
+const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Cognition:2,Google:3};
 function groupSlots(group,labels){
  if(group==='provider')return {...PROVIDER_SLOTS};
  if(group!=='route'&&group!=='account')return {};
@@ -129,6 +133,15 @@ function groupSlots(group,labels){
   out[label]=next;used.add(next);
  }
  return out;
+}
+// Stacked bar segments, bottom to top, from [[fill,value],...] in stacking order. A 2px
+// surface gap separates neighbors, taken from the top of the lower one (at most half of
+// it), so two similar colors never touch; the top segment keeps its full height.
+function stackRects(x,width,y,parts){
+ const segs=[];let sum=0;
+ for(const [fill,value] of parts)if(value>0){segs.push([fill,sum,sum+value]);sum+=value;}
+ return segs.map(([fill,lo,hi],k)=>{const top=y(hi),height=y(lo)-top,gap=k<segs.length-1?Math.min(2,height/2):0;
+  return `<rect x="${x.toFixed(1)}" y="${(top+gap).toFixed(1)}" width="${width.toFixed(1)}" height="${(height-gap).toFixed(1)}" fill="${fill}"/>`;}).join('');
 }
 // Calendar steps 1-5 by rank among the shown days with use (five equal groups; ties share
 // a step), so one very large day does not leave every other day in the first step.
@@ -206,6 +219,29 @@ const SOURCE_HINTS={error:'수집에 실패했습니다. 다음 주기에 다시
  stale:'최근 관측이 없습니다. 해당 도구를 쓰거나 다음 수집 주기에 갱신됩니다.',
  idle:'이 경로는 지금 쓰이지 않습니다. 다른 경로가 값을 대신 채웁니다.',ended:'구독이 없어 수집을 멈췄습니다.'};
 const sourceGroup=name=>(SOURCE_GROUPS.find(([,re])=>re.test(name))||['기타'])[0];
+// An ⓘ beside a title or value keeps an explanation one hover, focus or tap away instead of a
+// paragraph under every panel (the shared tooltip shows data-tip); screen readers get the
+// same text as the button's name.
+const infoTip=(text,label='설명')=>text?`<button type="button" class="info" data-tip="${esc(text)}" aria-label="${esc(label+': '+text)}"></button>`:'';
+// What the collection sources ask of the owner. The header badge and the 진단 groups both
+// read this, so they never disagree (external notifications use the same 30 minutes):
+// - action: an operations job (collector, backup, verification) stale or failing, a source
+//   with no success for 30 minutes, an actively collected source left behind.
+// - retry: a failed poll the next cycle usually repairs; while the collector is down, the
+//   actively collected sources that age with it (the collector row says why).
+// Partial, unavailable, unused and passively observed sources are states, not problems.
+const OPS_SOURCES=['수집기','일일 백업','원본 대조'];
+const activeSource=s=>{const base=sourceBase(s.name);return base.endsWith('-records')||base.endsWith('-oauth')||base.startsWith('WSL ')||base.startsWith('Windows ');};
+function sourceProblems(sources,now){
+ const list=sources||[],collector=list.find(s=>s.name==='수집기');
+ const collectorDown=!!collector&&collector.status!=='ok',action=[],retry=[];
+ for(const s of list){
+  if(OPS_SOURCES.includes(s.name)){if(s.status==='stale'||s.status==='error'||s===collector&&collectorDown)action.push(s);}
+  else if(s.status==='error')(!s.last_success||now-s.last_success>=1800?action:retry).push(s);
+  else if(s.status==='stale'&&activeSource(s))(collectorDown?retry:action).push(s);
+ }
+ return {action,retry,collectorDown};
+}
 // Round tick step (1/2/2.5/5×10^n) so y labels stay readable numbers.
 function niceStep(max){
  const rough=Math.max(max,1)/4,mag=Math.pow(10,Math.floor(Math.log10(rough)));

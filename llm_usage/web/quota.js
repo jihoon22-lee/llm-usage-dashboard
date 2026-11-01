@@ -1,6 +1,6 @@
 'use strict';
 // Heatmap, shared tooltip, quota cards, panel order, alert chips and browser notifications.
-function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView==='settings'?previousView:currentView,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
+function saveDefaults(){storage.set('llmDefaults',JSON.stringify({layout:2,view:lastTab,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
 function renderHeatmap(cells){
  const grid=Array.from({length:7},()=>Array(24).fill(0));let max=0;
  (cells||[]).forEach(c=>{const v=cellMetric(c);grid[c.dow][c.hour]=v;if(v!=null)max=Math.max(max,v);});
@@ -67,6 +67,24 @@ function briefQuota(rows,route){
  }).join('');
 }
 const lowPercent=()=>lastLimits?.low_percent??15;
+// Services in the saved order, split into the ones shown and the ones folded away: no fresh
+// window and ended, or nothing heard for quota_hide_days. The 개요 tab lists the same ones.
+function serviceGroups(data){
+ const groups=Object.entries(names).map(([route,name])=>{
+  const rows=data.limits.filter(r=>familyOf(r.route)===route);
+  if(route==='antigravity')rows.sort((a,b)=>Number(!a.bucket.toLowerCase().includes('gemini'))-Number(!b.bucket.toLowerCase().includes('gemini')));
+  return {route,name,rows};
+ });
+ const savedQuota=orderStore.get().quota;
+ if(savedQuota&&savedQuota.length)groups.sort((a,b)=>{const ai=savedQuota.indexOf(a.route),bi=savedQuota.indexOf(b.route);return(ai<0?1e9:ai)-(bi<0?1e9:bi);});
+ const nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
+ const quiet=rows=>!rows.some(r=>r.status==='fresh')
+  &&(rows.some(r=>r.status==='ended')
+   ||(Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
+ // A service with several Claude accounts folds only when every account is quiet.
+ const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
+ return {active:groups.filter(g=>!dormant(g)),folded:groups.filter(dormant)};
+}
 // Claude accounts of one card in the API's order (original account first).
 function accountGroups(rows){
  const order=claudeAccounts.list.map(a=>a.route),by=new Map();
@@ -82,6 +100,8 @@ function renderLimits(data){
  function bucket(r,shared,folded=false){
   const lowPct=data.low_percent??15,blocked=r.blocked_by;
   const low=r.status==='fresh'&&r.remaining!=null&&r.remaining<=lowPct;
+  const empty=r.status==='fresh'&&r.remaining!=null&&r.remaining<=0;
+  const badge=blocked?'주간 소진':empty?'소진':low?'잔여 적음':'';
   const level=r.remaining==null?'':blocked||r.remaining<=lowPct?'level-low':r.remaining<=50?'level-mid':'level-ok';
   const win=r.window?`<p class="window-usage">이번 한도 구간의 로컬 기록 <strong>${compact(r.window.tokens)}</strong> 토큰 · ${fmt(r.window.requests)}회 요청${r.window.open?'':' · 종료된 구간'}</p>`:'';
  const events=r.events&&r.events.exhausted?`<p class="quota-events">최근 ${r.events.days}일 소진 ${r.events.exhausted}회 · 마지막 ${esc(when(r.events.last_exhausted))} KST</p>`:'';
@@ -97,9 +117,11 @@ function renderLimits(data){
   // '초기화 4일 15시간 후'; the desktop row keeps the countdown under its card's caption.
   const word=text=>`<span class="reset-word">${text}</span>`;
   const reset=!r.resets?word('초기화 정보 ')+'미제공':r.seconds_to_reset<=0?word('초기화 경과 · ')+'재확인 대기':word('초기화 ')+esc(soon(r.seconds_to_reset))+word(' 후');
-  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges">${state}${blocked?'<span class="badge low">주간 소진</span>':low?'<span class="badge low">잔여 적음</span>':''}</span></div>`
-   +`<div class="bucket-summary"><div class="remaining">${r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${r.status==='fresh'?'잔여':'이전 관측'}${blocked?' · 사용 불가':''}</small></div>`
-   +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${Math.max(0,Math.min(100,r.remaining))}" aria-label="잔여 ${r.remaining}%"></progress></div>`)
+  return `<div class="bucket ${r.stale?'stale':''}"><div class="limit-head"><span class="bucket-label">${esc(bucketName(r))}</span><span class="badges">${state}${badge?`<span class="badge low">${badge}</span>`:''}</span></div>`
+   // A window held by its exhausted parent leads with what is usable now (nothing); its own
+   // remaining value stays beside it, over an empty bar instead of a full one.
+   +`<div class="bucket-summary"><div class="remaining">${blocked?'사용 불가':r.remaining==null?'—':Number(r.remaining.toFixed(1))+'%'}<small>${blocked?(r.remaining==null?'창 잔여 미제공':'창 잔여 '+Number(r.remaining.toFixed(1))+'%'):r.status==='fresh'?'잔여':'이전 관측'}</small></div>`
+   +(r.remaining==null?'':`<div class="bar-wrap"><progress class="${level}" max="100" value="${blocked?0:Math.max(0,Math.min(100,r.remaining))}" aria-label="${blocked?'사용 불가 · 창 잔여 '+r.remaining+'%':'잔여 '+r.remaining+'%'}"></progress></div>`)
    +`<p class="bucket-reset">${reset}</p></div>${blockedNote}`
    +(r.note&&!folded?`<p class="quota-note">${esc(r.note)}</p>`:'')
    +(fell?`<p class="bucket-decrease"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
@@ -108,21 +130,7 @@ function renderLimits(data){
    +(decrease&&!fell?`<p class="decrease-detail"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
    +`${events}${win}${quotaHistory(r,opened,data.now)}</details></div>`;
  }
- const groups=Object.entries(names).map(([route,name])=>{
-  const rows=data.limits.filter(r=>familyOf(r.route)===route);
-  if(route==='antigravity')rows.sort((a,b)=>Number(!a.bucket.toLowerCase().includes('gemini'))-Number(!b.bucket.toLowerCase().includes('gemini')));
-  return {route,name,rows};
- });
- const savedQuota=orderStore.get().quota;
- if(savedQuota&&savedQuota.length)groups.sort((a,b)=>{const ai=savedQuota.indexOf(a.route),bi=savedQuota.indexOf(b.route);return(ai<0?1e9:ai)-(bi<0?1e9:bi);});
- // Routes with no fresh bucket that ended or stopped reporting fold away.
- const nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
- const quiet=rows=>!rows.some(r=>r.status==='fresh')
-  &&(rows.some(r=>r.status==='ended')
-   ||(Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
- // A service with several Claude accounts folds only when every account is quiet.
- const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
- const active=groups.filter(g=>!dormant(g)),folded=groups.filter(dormant);
+ const {active,folded}=serviceGroups(data),nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
  // Desktop columns follow the number of service cards (up to three), so none stands empty.
  $('limits').dataset.cards=String(Math.min(active.length,3));
  $('quota-overview').classList.toggle('editing',editingQuota);
@@ -159,16 +167,19 @@ function renderLimits(data){
   else merged.push({route:r.route,resets:r.resets,seconds:r.seconds_to_reset,items:[r]});
  }
  const service=route=>serviceShort(route);
- // A 7-day axis places each reset; later ones sit at the right edge.
- const axis=merged.length?`<div class="reset-axis" role="img" aria-label="앞으로 7일 초기화 시각">${[0,1,2,3,4,5,6,7].map(d=>`<i class="reset-tick" data-x="${(d/7*100).toFixed(2)}"><small>${d?d+'일':'지금'}</small></i>`).join('')}${merged.map(m=>`<b class="reset-dot${exhausted(m.items[0])?' low':''}" data-x="${Math.min(100,m.seconds/(7*86400)*100).toFixed(2)}" tabindex="0" data-tip="${esc((m.items.length===1?quotaLabel(m.items[0]):service(m.route)+' '+m.items.map(r=>bucketName(r)).join(' · '))+' · '+left(m.seconds)+' · '+when(m.resets)+' KST')}"></b>`).join('')}</div>`:'';
+ // One shared 7-day scale; each window sits on its own row at its reset (later ones at the edge).
+ const at=seconds=>Math.min(100,Math.max(0,seconds/(7*86400)*100)).toFixed(2);
+ const axis=merged.length?`<div class="reset-scale" aria-hidden="true"><span></span><div class="reset-axis">${[0,1,2,3,4,5,6,7].map(d=>`<i class="reset-tick" data-x="${(d/7*100).toFixed(2)}"><small>${d?d+'일':'지금'}</small></i>`).join('')}</div><span></span></div>`:'';
  $('reset-timeline').innerHTML=merged.length?`<h3>다음 초기화</h3>${axis}<div class="reset-list">${merged.map(m=>{
-  const first=m.items[0];
+  const first=m.items[0],low=exhausted(first)?' low':'';
   const label=m.items.length===1?quotaLabel(first):`${service(m.route)} ${m.items.map(r=>quotaLabel(r).replace(service(m.route)+' ','')).join(' · ')}`;
   // Only a current observation says the quota is exhausted now.
-  const tag=exhausted(first)?` <span class="badge low">${first.status==='fresh'?'소진 중':'이전 관측 소진'}</span>`:'';
-  return `<div class="reset-item${exhausted(first)?' low':''}"><strong>${esc(label)}${tag}</strong><span><b>${esc(soon(m.seconds))}</b> · <time datetime="${new Date(m.resets*1000).toISOString()}">${esc(when(m.resets))}</time></span></div>`;
+  const tag=exhausted(first)?` <span class="badge low">${first.status==='fresh'?'소진':'이전 관측 소진'}</span>`:'';
+  const track=`<span class="reset-track" aria-hidden="true"><i data-w="${at(m.seconds)}"></i><b class="reset-dot${low}" data-x="${at(m.seconds)}" data-tip="${esc(label+' · '+left(m.seconds)+' · '+when(m.resets)+' KST')}"></b></span>`;
+  return `<div class="reset-item${low}"><strong>${esc(label)}${tag}</strong>${track}<span><b>${esc(soon(m.seconds))}</b> · <time datetime="${new Date(m.resets*1000).toISOString()}">${esc(when(m.resets))}</time></span></div>`;
  }).join('')}</div>`:'';
  applyGeometry($('reset-timeline'));
+ renderOverviewQuota();
  // One quota body: its current windows, older observations and model windows. `prefix`
  // keeps each Claude account's folds apart (the service route alone otherwise).
  const cardBody=(route,rows,prefix)=>{
@@ -185,7 +196,8 @@ function renderLimits(data){
   const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=prefix+':secondary';
   const checks=[...new Set(rows.map(r=>r.checked??null))],details=[...new Set(rows.map(r=>r.detail).filter(Boolean))];
   const shared=checks.length<=1&&details.length<=1;
-  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${details[0]?(checks[0]!=null?' · ':'')+esc(details[0]):''}</p>`:'';
+  // How the value was read (path, endpoint) is a note, not a line on the card.
+  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${infoTip(details[0],'조회 경로')}</p>`:'';
   // Beside a current value, older observations fold into one line so cards stay short.
   const current=primary.some(r=>r.status==='fresh')?primary.filter(r=>r.status==='fresh'||r.remaining==null):primary;
   const older=primary.filter(r=>!current.includes(r)),olderKey=prefix+':older';
@@ -208,8 +220,9 @@ function renderLimits(data){
  // Several Claude accounts stay one Claude Code card with a section per account.
  const accountSection=(route,account,rows)=>{
   const info=accountInfo(account),label=accountLabel(account)||info.label||'계정';
-  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',accountWhere(info),info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
-  const title=`<h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>`;
+  // The plan and a login to renew stay on the title; where the login lives is a note.
+  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
+  const title=`<div class="quota-account-head"><h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>${infoTip(accountWhere(info),'로그인 위치')}</div>`;
   return `<section class="quota-account${accountEnded(rows)?' ended':''}" aria-label="${esc('Claude '+label+' 계정')}">${title}${cardBody(route,rows,account)}</section>`;
  };
  const cardHtml=({route,name,rows})=>{
@@ -298,30 +311,24 @@ function renderAlerts(limits,usage){
   const label=quotaLabel(r);
   if(r.status==='fresh'&&r.remaining!=null&&r.remaining<=(limits.low_percent??15)){
    const others=r.remaining<=0?otherAccounts(limits.limits,r):[];
-   items.push({text:`${label} 잔여 ${percent(r.remaining)}${others.length?' · 다른 계정 '+others.join(', '):''}`,route:familyOf(r.route)});
+   items.push({text:`${label} 잔여 ${percent(r.remaining)}${others.length?' · 다른 계정 '+others.join(', '):''}`,route:familyOf(r.route),level:r.remaining<=0?'critical':'warning'});
   }
  });
  // Balances and reset grants ending within a day; the chip jumps to the resource card.
- expiringResources(limits.resources?.items,limits.now).forEach(e=>items.push({text:expiryText(e,limits.now),resource:e.id}));
+ expiringResources(limits.resources?.items,limits.now).forEach(e=>items.push({text:expiryText(e,limits.now),resource:e.id,level:'warning'}));
  for(const [project,budget] of Object.entries(usage.project_budgets||{})){
   if(!usage.project_month)break;
   const st=budgetState(usage.project_month.projects[project],budget);
-  if(st.ratio>=.8)items.push({text:`${project} 월 예산 ${Math.round(st.ratio*100)}%${st.ratio>=1?' 초과':''}`,view:'usage'});
+  if(st.ratio>=.8)items.push({text:`${project} 월 예산 ${Math.round(st.ratio*100)}%${st.ratio>=1?' 초과':''}`,view:'usage',level:st.ratio>=1?'critical':'warning'});
  }
  // A burst far above this account's usual hours, and models whose cost cannot be estimated.
- if(usage.spike)items.push({text:`사용량 급증 · ${when(usage.spike.hour_start)}부터 1시간 ${compact(usage.spike.tokens)} 토큰 (평소 상위 5%의 ${usage.spike.ratio.toFixed(1)}배)`,view:'usage'});
- if((usage.unpriced_models||[]).length)items.push({text:`단가 미등록 모델 ${usage.unpriced_models.length}개 · ${usage.unpriced_models.slice(0,3).join(', ')}${usage.unpriced_models.length>3?' 외':''}`,view:'settings'});
- // Only states the owner can act on become chips: an 'unavailable' source (an app that is
- // closed, a status line not in use, a path that does not exist) stays in 수집 상태.
- // A failed poll the next cycle usually repairs also stays there: the chip appears once the
- // source has not succeeded for 30 minutes, when the external notification is sent too.
- const ops=['수집기','일일 백업','원본 대조'],now=limits.now??Date.now()/1000;
- const lasting=s=>s.status==='error'&&!ops.includes(s.name)&&(!s.last_success||now-s.last_success>=1800);
- (usage.sources||[]).filter(lasting).forEach(s=>items.push({text:`${sourceName(s.name)} ${statuses[s.status]||s.status}`,sources:true}));
- (usage.sources||[]).filter(s=>ops.includes(s.name)&&(s.status==='stale'||s.status==='error'))
-  .forEach(s=>items.push({text:`${s.name} ${statuses[s.status]||s.status}`,sources:true}));
- const activeStale=s=>{const base=sourceBase(s.name);return s.status==='stale'&&(base.endsWith('-records')||base.endsWith('-oauth')||base.startsWith('WSL ')||base.startsWith('Windows '));};
- (usage.sources||[]).filter(activeStale).forEach(s=>items.push({text:`${sourceName(s.name)} 수집 지연`,sources:true}));
+ if(usage.spike)items.push({text:`사용량 급증 · ${when(usage.spike.hour_start)}부터 1시간 ${compact(usage.spike.tokens)} 토큰 (평소 상위 5%의 ${usage.spike.ratio.toFixed(1)}배)`,view:'usage',level:'info'});
+ if((usage.unpriced_models||[]).length)items.push({text:`단가 미등록 모델 ${usage.unpriced_models.length}개 · ${usage.unpriced_models.slice(0,3).join(', ')}${usage.unpriced_models.length>3?' 외':''}`,view:'settings',level:'info'});
+ // Collection problems are not chips: the header's data status counts them (sourceProblems)
+ // and opens 진단, so a stopped collector no longer adds one chip per source it left behind.
+ // Exhausted quotas and spent budgets lead; usage notes follow.
+ const rank={critical:0,warning:1,info:2};
+ items.sort((a,b)=>rank[a.level]-rank[b.level]);
  // A stopped collector freezes every number on the page, so it is stated above all.
  const collector=(usage.sources||[]).find(s=>s.name==='수집기');
  const banner=$('collector-banner');
@@ -334,8 +341,8 @@ function renderAlerts(limits,usage){
  // Two or more alerts collapse behind one toggle on narrow screens; the chips
  // keep their data-alert indices so the toggle must not be a chip itself.
  el.classList.toggle('expanded',alertsExpanded);
- el.innerHTML=(items.length>=2?`<button type="button" id="alerts-toggle" aria-expanded="${alertsExpanded}">⚠ 알림 ${items.length}개 · ${esc(items[0].text)}</button>`:'')
-  +items.map((it,i)=>`<button type="button" class="alert-chip" data-alert="${i}">${esc(it.text)}</button>`).join('');
+ el.innerHTML=(items.length>=2?`<button type="button" id="alerts-toggle" class="sev-${items[0].level}" aria-expanded="${alertsExpanded}">알림 ${items.length}개 · ${esc(items[0].text)}</button>`:'')
+  +items.map((it,i)=>`<button type="button" class="alert-chip sev-${it.level}" data-alert="${i}">${esc(it.text)}</button>`).join('');
  const toggle=el.querySelector('#alerts-toggle');
  if(toggle)toggle.onclick=()=>{alertsExpanded=!alertsExpanded;el.classList.toggle('expanded',alertsExpanded);toggle.setAttribute('aria-expanded',String(alertsExpanded));};
  el.querySelectorAll('[data-alert]').forEach(button=>button.onclick=()=>{
@@ -347,7 +354,6 @@ function renderAlerts(limits,usage){
    setView('quota');selectedQuota=it.route;syncQuotaSelection();
    document.getElementById('quota-'+it.route)?.scrollIntoView({behavior:motion(),block:'nearest'});
   }else if(it.view){setView(it.view);if(it.view==='settings'){priceFilter.unset=true;$('price-unset').setAttribute('aria-pressed','true');$('price-unset').classList.add('on');}}
-  else{setView('status');$('sources-panel').scrollIntoView({behavior:motion()});}
  });
 }
 const notifyEnabled=()=>'Notification' in window&&Notification.permission==='granted'&&storage.get('llmNotify')==='1';
@@ -383,7 +389,7 @@ async function sendNotification(title,options){
 }
 let opsBad=new Set();
 function checkOpsNotify(usage){
- const bad=new Set(((usage&&usage.sources)||[]).filter(s=>['수집기','일일 백업','원본 대조'].includes(s.name)&&(s.status==='stale'||s.status==='error'||s.status==='unavailable')).map(s=>s.name));
+ const bad=new Set(((usage&&usage.sources)||[]).filter(s=>OPS_SOURCES.includes(s.name)&&(s.status==='stale'||s.status==='error'||s.status==='unavailable')).map(s=>s.name));
  for(const name of bad)if(!opsBad.has(name)&&ntfEnabled('ops'))void sendNotification('수집 상태 경고',{body:name+' 확인이 필요합니다',tag:'ops-'+name});
  opsBad=bad;
 }

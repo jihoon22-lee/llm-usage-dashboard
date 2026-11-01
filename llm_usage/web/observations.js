@@ -23,6 +23,8 @@ function keepObservationFocus(render){
  const active=document.activeElement;
  let selector=active?.id?'#'+CSS.escape(active.id):null;
  if(!selector&&active?.matches('[data-quota]'))selector=`[data-quota="${CSS.escape(active.dataset.quota)}"]`;
+ // 개요's rows: one per service, Claude account or Antigravity model family.
+ if(!selector&&active?.matches('[data-ov-key]'))selector=`[data-ov-key="${CSS.escape(active.dataset.ovKey)}"]`;
  if(!selector&&active?.tagName==='SUMMARY'){
   const parent=active.parentElement;
   for(const attr of ['data-history','data-resource-detail'])if(parent.hasAttribute(attr))selector=`details[${attr}="${CSS.escape(parent.getAttribute(attr))}"] > summary`;
