@@ -773,7 +773,10 @@ class Store:
         midnight = now.replace(hour=0,minute=0,second=0,microsecond=0)
         sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         count='COALESCE(SUM(requests),0) AS requests'
-        with self.connect() as c:
+        from .reconciliation import held
+        # One read snapshot: the body, the overlay and the month all take the supplements
+        # worked out once in it (or in an enclosing block's).
+        with held(),self.connect() as c:
             c.execute('BEGIN')
             lifetime=dict(c.execute('SELECT '+sums+','+self.rcount+' FROM '+self.table+' WHERE 1=1'+scope_sql,scope_args).fetchone())
             collected_at=self.state(c,'last_local')
