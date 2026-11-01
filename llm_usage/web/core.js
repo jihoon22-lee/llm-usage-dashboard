@@ -150,7 +150,7 @@ function applyGeometry(root){
 }
 // Fixed-viewBox charts scale their geometry with the panel, which used to
 // shrink or grow the axis text with it. Scale each <text> back so it renders
-// at ~11px (13px for the end-of-line badge) on screen at any width.
+// at 12px (14px for the end-of-line badge) on screen at any width.
 function fitSvgText(root){
  const svgs=root.querySelectorAll?root.querySelectorAll('svg.percent-chart,svg.quota-line,svg.quota-bars'):[];
  svgs.forEach(svg=>{
@@ -158,7 +158,7 @@ function fitSvgText(root){
   if(!vb||!vb.width||!w)return;
   const ratio=vb.width/w;
   svg.querySelectorAll('text').forEach(t=>{
-   t.style.fontSize=(t.classList.contains('quota-end')?13:11)*ratio+'px';
+   t.style.fontSize=(t.classList.contains('quota-end')?14:12)*ratio+'px';
   });
  });
 }
