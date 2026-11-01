@@ -24,6 +24,9 @@ SERIES_KEYS = (*METRICS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+# A month's end is extrapolated from its days so far only from this day of the month on:
+# a few days scaled to a whole month are noise. Before it there is no estimate at all.
+PROJECTION_FROM_DAY = 7
 ONE_TIME_SOURCES = {'session-backfill'}
 # Source detail written while a subscription is marked ended in the settings.
 USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
@@ -676,8 +679,9 @@ class Store:
                 if by_route:
                     month_total=sum(by_route.values());elapsed=max(1,midnight.day)
                     month=dict(days_elapsed=elapsed,days_in_month=days_in_month,
-                               cost_by_route={r:round(v,4) for r,v in sorted(by_route.items())},
-                               total=round(month_total,4),projected=round(month_total/elapsed*days_in_month,4))
+                               cost_by_route={r:round(v,4) for r,v in sorted(by_route.items())},total=round(month_total,4),
+                               projected=round(month_total/elapsed*days_in_month,4) if elapsed>=PROJECTION_FROM_DAY else None,
+                               projected_from_day=PROJECTION_FROM_DAY)
             cal={}
             for r in c.execute("SELECT date(ts,'unixepoch','+9 hours') AS day,model,"+sums+','+self.rcount+
                                ' FROM '+self.table+' WHERE ts>=?'+scope_sql+' GROUP BY day,model',
@@ -893,16 +897,17 @@ class Store:
                 session['last_ts']=max(session['last_ts'],e['end'])
         sessions=sorted(sessions,key=lambda r:(-r['tokens'],r['session']))[:10]
         elapsed=now.day;days_in_month=((month_start.replace(day=28)+timedelta(days=4)).replace(day=1)-month_start).days
-        cost=month['cost'] if month['priced'] else None
+        cost=month['cost'] if month['priced'] else None;early=elapsed<PROJECTION_FROM_DAY
         projection=dict(month=month_start.strftime('%Y-%m'),days_elapsed=elapsed,days_in_month=days_in_month,
                         tokens=month['tokens'],cost=round(cost,4) if cost is not None else None,
-                        projected_tokens=month['tokens']/elapsed*days_in_month,
-                        projected_cost=round(cost/elapsed*days_in_month,4) if cost is not None else None,
+                        projected_tokens=None if early else month['tokens']/elapsed*days_in_month,
+                        projected_cost=round(cost/elapsed*days_in_month,4) if cost is not None and not early else None,
+                        projected_from_day=PROJECTION_FROM_DAY,
                         priced_share=month['priced']/month['tokens']*100 if month['tokens'] else None)
         if budget:
             from .notify import budget_level
             _,projection['budget_ratio']=budget_level(dict(tokens=month['tokens'],cost=cost),budget)
-            _,projection['projected_budget_ratio']=budget_level(dict(tokens=projection['projected_tokens'],cost=projection['projected_cost']),budget)
+            projection['projected_budget_ratio']=None if early else budget_level(dict(tokens=projection['projected_tokens'],cost=projection['projected_cost']),budget)[1]
             projection['budget']=budget
         for m in models.values():m['cost']=round(m['cost'],4) if m['cost'] is not None else None
         return dict(project=project,days=days,start=start.strftime('%Y-%m-%d'),unallocated_intervals=unallocated,

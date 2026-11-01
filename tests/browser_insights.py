@@ -521,7 +521,16 @@ async def main():
             await expect(page.locator('#subvalue')).to_contain_text('이번 달 환산')
             await expect(page.locator('#subvalue')).to_contain_text('월말 예상')
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.insights.month.alert_usd=0.0001;renderInsights(d);}""")
-            await expect(page.locator('#subvalue')).to_contain_text('알림 기준')
+            await expect(page.locator('#subvalue')).to_contain_text('월말 예상 환산 가치가 알림 기준')
+            # Before the 7th there is no estimate: the line says when it starts and the alert
+            # compares what has accrued, worded as such.
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);Object.assign(d.insights.month,{days_elapsed:3,projected:null,projected_from_day:7,alert_usd:0.0001});renderInsights(d);}""")
+            month_line = page.locator('#subvalue .sub-row').first
+            await expect(month_line).to_contain_text('월말 예상은 7일째부터')
+            assert '월말 예상 $' not in await month_line.inner_text()
+            await expect(page.locator('#subvalue')).to_contain_text('이번 달 누적 환산 가치가 알림 기준')
+            await page.evaluate("""()=>{const d=structuredClone(lastUsage);Object.assign(d.insights.month,{days_elapsed:3,projected:null,projected_from_day:7,alert_usd:1e9});renderInsights(d);}""")
+            await expect(page.locator('#subvalue .warn-text')).to_have_count(0)
             # A subscription without tokens in the period is not shown as unpriced.
             await page.evaluate("""()=>{const d=structuredClone(lastUsage);d.subscriptions=[{route:'codex',monthly_usd:20,period_cost:null,period_tokens:0,monthly_equiv:null},
               {route:'devin',monthly_usd:10,period_cost:null,period_tokens:5,monthly_equiv:null}];renderInsights(d);}""")

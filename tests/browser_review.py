@@ -112,6 +112,11 @@ async def main():
             await expect(page.locator('#projects .sess-detail')).to_contain_text('월말 예상')
             await expect(page.locator('#projects .sess-detail')).to_contain_text('예산')
             assert page.url==url,page.url
+            # Before the 7th there is no month-end extrapolation and no projected budget share.
+            early=await page.evaluate("""async()=>{const d=await api('/api/project?name=alpha');
+              Object.assign(d.month,{days_elapsed:3,projected_tokens:null,projected_cost:null,projected_budget_ratio:null,projected_from_day:7});
+              return projectDetailHtml(d);}""")
+            assert '→ 월말 예상' not in early and '7일째부터 표시' in early and '예산' in early, early
 
             # Reports: value bars have width. Shortcuts ignore keys typed into fields; leave the select first.
             await page.evaluate('document.activeElement.blur()')
