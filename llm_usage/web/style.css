@@ -369,7 +369,27 @@ tr[data-scope]:hover{background:var(--raised)}
 .cfg-table td:first-child{font-size:var(--fs-sm)}
 .cfg-table td:first-child small{display:block;color:var(--muted);font-size:var(--fs-xs)}
 .warn-text{color:var(--warning-ink)}
-.tip{position:fixed;z-index:50;background:var(--surface);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:var(--fs-xs);box-shadow:0 4px 14px #0002;pointer-events:none;white-space:nowrap}
+.tip{position:fixed;z-index:50;background:var(--surface);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:var(--fs-xs);line-height:1.5;box-shadow:0 4px 14px #0002;pointer-events:none;max-width:min(340px,calc(100vw - 16px));overflow-wrap:break-word}
+/* ⓘ: an explanation one hover, focus or tap away instead of a paragraph under the panel. */
+.info{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-height:24px;padding:0;margin-left:4px;border:0;background:none;color:var(--muted);font:italic 600 var(--fs-xs)/1 Georgia,serif;vertical-align:middle;cursor:help}
+/* The circle is drawn inside the button, so phones get a 32px target around the same mark. */
+.info::before{content:"i";display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid var(--border);border-radius:50%}
+.info:hover,.info:focus-visible{color:var(--ink)}
+.info:hover::before,.info:focus-visible::before{border-color:var(--muted)}
+@media(max-width:600px){.info{width:32px;height:32px;min-height:32px;margin-left:0}}
+/* A folding panel's ⓘ stays outside <summary>, since a toggle holds no other control, but is
+   drawn in the title row between the caption and the fold mark, which keeps a fixed width. */
+:is(.mobile-fold,.fold){position:relative}
+:is(.mobile-fold,.fold) .panel-tools>.info:first-child{position:absolute;top:23px;right:43px;margin:0}
+.panel-tools:has(>.info:only-child){display:contents}
+/* Inline in a label or meta line, it keeps the line's height. */
+.stat-label .info,.card-meta .info,.quota-account-head .info{margin-top:-6px;margin-bottom:-6px}
+/* Beside a title, outside the heading so its accessible name stays the title alone. */
+.section-heading>.info{margin-left:-4px;margin-right:auto}
+.quota-account-head{display:flex;align-items:baseline;gap:2px}
+.explain{margin-top:12px;font-size:var(--fs-xs);color:var(--muted)}
+.explain>summary{cursor:pointer;color:var(--accent);width:max-content}
+.explain>p{margin:6px 0 0;line-height:1.6;max-width:75ch}
 .tip[hidden]{display:none}
 .alerts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
 .alerts[hidden]{display:none}
@@ -417,9 +437,14 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
 :is(.mobile-fold,.fold)>summary h3{display:inline;font-size:var(--fs-md)}
 :is(.mobile-fold,.fold):not([open])>summary{margin-bottom:0}
 /* Every folding panel shows whether it is open, on every width. */
-:is(.mobile-fold,.fold)>summary::after{content:'＋';color:var(--muted);margin-left:6px}
+:is(.mobile-fold,.fold)>summary::after{content:'＋';color:var(--muted);margin-left:6px;width:1em;text-align:center}
 :is(.mobile-fold,.fold)[open]>summary::after{content:'−'}
 :is(.mobile-fold,.fold)>summary>span{margin-left:auto}
+:is(.mobile-fold,.fold):has(.panel-tools>.info:first-child)>summary::after{margin-left:30px}
+@media(max-width:600px){
+ :is(.mobile-fold,.fold) .panel-tools>.info:first-child{top:13px;right:31px}
+ :is(.mobile-fold,.fold):has(.panel-tools>.info:first-child)>summary::after{margin-left:32px}
+}
 @media(max-width:600px){
 
 
@@ -737,9 +762,9 @@ body:has(dialog[open]){overflow:hidden}
  .stat small{font-size:var(--fs-xs);line-height:1.5}
 }
 
-.reconciliation-banner{margin:0 0 12px;border:1px solid var(--border);border-radius:8px;background:var(--soft);font-size:var(--fs-xs);color:var(--muted);line-height:1.6}
+.reconciliation-banner{margin:-4px 0 12px;border-bottom:1px solid var(--line);font-size:var(--fs-xs);color:var(--muted);line-height:1.6}
 .reconciliation-banner[hidden]{display:none}
-.reconciliation-banner summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;padding:10px 14px;cursor:pointer;list-style:none}
+.reconciliation-banner summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;padding:6px 2px;cursor:pointer;list-style:none}
 .reconciliation-banner summary::-webkit-details-marker{display:none}
 .reconciliation-banner summary strong,.reconciliation-banner summary b{color:var(--ink)}
 .reconciliation-banner summary small{margin-left:4px;font-size:var(--fs-xs);font-weight:400;color:var(--muted)}
@@ -749,13 +774,13 @@ body:has(dialog[open]){overflow:hidden}
 .reconciliation-toggle{margin-left:auto;color:var(--accent);font-size:var(--fs-xs)}
 .reconciliation-toggle::after{content:' ＋'}
 .reconciliation-banner details[open] .reconciliation-toggle::after{content:' −'}
-.reconciliation-detail{padding:0 14px 12px;border-top:1px solid var(--line);line-height:1.65}
+.reconciliation-detail{padding:0 2px 12px;border-top:1px solid var(--line);line-height:1.65}
 .reconciliation-detail p{margin:10px 0 0}
 .reconciliation-detail h4{margin:12px 0 4px;font-size:var(--fs-sm);color:var(--ink)}
 .reconciliation-intervals{list-style:none;margin:0;padding:0;max-height:240px;overflow:auto}
 .reconciliation-intervals li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
 .reconciliation-intervals b{font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums}
-@media(max-width:600px){.reconciliation-banner summary{gap:5px 10px;padding:9px 10px}.reconciliation-detail{padding:0 10px 10px}}
+@media(max-width:600px){.reconciliation-banner summary{gap:5px 10px;padding:6px 2px}.reconciliation-detail{padding:0 2px 10px}}
 
 /* Usage modes keep quota percentages and activity separate from token filters. */
 .usage-nav{display:flex;gap:6px;padding:6px;background:var(--raised);border:1px solid var(--border);border-radius:12px;margin:18px 0 24px;max-width:560px}

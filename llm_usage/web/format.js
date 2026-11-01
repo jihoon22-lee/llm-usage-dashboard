@@ -206,6 +206,10 @@ const SOURCE_HINTS={error:'수집에 실패했습니다. 다음 주기에 다시
  stale:'최근 관측이 없습니다. 해당 도구를 쓰거나 다음 수집 주기에 갱신됩니다.',
  idle:'이 경로는 지금 쓰이지 않습니다. 다른 경로가 값을 대신 채웁니다.',ended:'구독이 없어 수집을 멈췄습니다.'};
 const sourceGroup=name=>(SOURCE_GROUPS.find(([,re])=>re.test(name))||['기타'])[0];
+// An ⓘ beside a title or value keeps an explanation one hover, focus or tap away instead of a
+// paragraph under every panel (the shared tooltip shows data-tip); screen readers get the
+// same text as the button's name.
+const infoTip=(text,label='설명')=>text?`<button type="button" class="info" data-tip="${esc(text)}" aria-label="${esc(label+': '+text)}"></button>`:'';
 // What the collection sources ask of the owner. The header badge and the 진단 groups both
 // read this, so they never disagree (external notifications use the same 30 minutes):
 // - action: an operations job (collector, backup, verification) stale or failing, a source

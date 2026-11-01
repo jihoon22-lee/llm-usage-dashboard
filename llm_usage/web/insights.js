@@ -84,12 +84,15 @@ function renderInsights(data){
   const absolute=c.status==='observed'&&c.percent==null;
   const change=absolute?`${signed(c.delta)} 토큰`:c.percent==null?'증감률 계산 불가':`${c.percent>0?'+':''}${c.percent.toFixed(1)}%`;
   const span=`현재 ${c.start.slice(0,16).replace('T',' ')} → ${c.end_exclusive.slice(0,16).replace('T',' ')} · 이전 ${c.previous_start.slice(0,16).replace('T',' ')} → ${c.previous_end_exclusive.slice(0,16).replace('T',' ')} KST · 종료 미포함`;
-  $('comparison').innerHTML=`<div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong data-tip="${esc(signed(r.delta))} 토큰">${r.delta>0?'+':'−'}${compact(Math.abs(r.delta))}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div>`
+  // What a normal comparison covers is a note; why no rate is shown (records start too late,
+  // an empty earlier window) changes how the number reads, so that stays visible.
+  const observed=c.status==='observed';
+  const note=[observed?c.reason:'','변화량이 큰 모델 6개까지 · 캐시 생성 포함.',data.reconciliation?'서버 누계 보완분을 더한 기간 전체의 변화는 위 기간 요약 카드에 있습니다.':''].filter(Boolean).join(' ');
+  $('comparison').innerHTML=`<div class="panel-tools">${infoTip(note)}</div><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong data-tip="${esc(signed(r.delta))} 토큰">${r.delta>0?'+':'−'}${compact(Math.abs(r.delta))}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div>`
    +`<p class="comparison-total" data-tip="${esc(span)}">세부 요청 기록 합계 <span class="comparison-value">${esc(change)}</span>${absolute?'':` <small>${esc(signed(c.delta))} 토큰</small>`}</p>`
-   +`<p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''} 변화량이 큰 모델 6개까지 · 캐시 생성 포함.</p>`;
+   +(!observed||c.previous===0?`<p class="hint">${observed?'':esc(c.reason)+' '}${c.previous===0?'이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p>`:'');
  }
  const cache=insights.cache;
- if(data.reconciliation)$('comparison').insertAdjacentHTML('beforeend','<p class="hint">서버 누계 보완분을 더한 기간 전체의 변화는 위 기간 요약 카드에 있습니다.</p>');
  const saved=data.cost&&data.cost.cache_savings;
  $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>세부 요청 기록의 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
  const selected=$('cache-series').value;
@@ -324,7 +327,7 @@ function fitCalendar(){
 }
 function renderCalendar(data){
  calWeeks=calendarWeeks();
- $('calendar-caption').textContent=`최근 ${calWeeks}주 · 일별 `+metricName()+' · 기간 필터 무관';
+ $('calendar-caption').textContent=`최근 ${calWeeks}주 · 일별 `+metricName();
  if(!('calendar' in data)){if(!$('calendar').textContent.trim())$('calendar').innerHTML='<div class="empty">불러오는 중…</div>';return;}
  const days=Object.fromEntries((data.calendar||[]).map(r=>[r.day,r]));
  const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Seoul'}));

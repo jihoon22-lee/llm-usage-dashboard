@@ -213,5 +213,7 @@ if('serviceWorker' in navigator){
  navigator.serviceWorker.getRegistrations().then(list=>list.filter(r=>new URL(r.scope).pathname==='/assets/').forEach(r=>r.unregister())).catch(()=>{});
  notificationRegistration().catch(()=>{});
 }
+// Static ⓘ buttons carry their note once, in data-tip; the accessible name repeats it.
+document.querySelectorAll('.info[data-tip]:not([aria-label])').forEach(b=>b.setAttribute('aria-label','설명: '+b.dataset.tip));
 applyPanelOrder();
 refresh();

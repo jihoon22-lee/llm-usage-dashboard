@@ -196,7 +196,8 @@ function renderLimits(data){
   const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=prefix+':secondary';
   const checks=[...new Set(rows.map(r=>r.checked??null))],details=[...new Set(rows.map(r=>r.detail).filter(Boolean))];
   const shared=checks.length<=1&&details.length<=1;
-  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${details[0]?(checks[0]!=null?' · ':'')+esc(details[0]):''}</p>`:'';
+  // How the value was read (path, endpoint) is a note, not a line on the card.
+  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${infoTip(details[0],'조회 경로')}</p>`:'';
   // Beside a current value, older observations fold into one line so cards stay short.
   const current=primary.some(r=>r.status==='fresh')?primary.filter(r=>r.status==='fresh'||r.remaining==null):primary;
   const older=primary.filter(r=>!current.includes(r)),olderKey=prefix+':older';
@@ -219,8 +220,9 @@ function renderLimits(data){
  // Several Claude accounts stay one Claude Code card with a section per account.
  const accountSection=(route,account,rows)=>{
   const info=accountInfo(account),label=accountLabel(account)||info.label||'계정';
-  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',accountWhere(info),info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
-  const title=`<h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>`;
+  // The plan and a login to renew stay on the title; where the login lives is a note.
+  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
+  const title=`<div class="quota-account-head"><h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>${infoTip(accountWhere(info),'로그인 위치')}</div>`;
   return `<section class="quota-account${accountEnded(rows)?' ended':''}" aria-label="${esc('Claude '+label+' 계정')}">${title}${cardBody(route,rows,account)}</section>`;
  };
  const cardHtml=({route,name,rows})=>{

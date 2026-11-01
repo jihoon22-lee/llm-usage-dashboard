@@ -95,9 +95,18 @@ with sync_playwright() as p:
     claude = page.locator('#quota-claude-code')
     expect(claude.locator('.quota-account')).to_have_count(2)
     expect(claude.locator('.quota-account-title').nth(0)).to_contain_text('Pro')
-    expect(claude.locator('.quota-account-title').nth(0)).to_contain_text('기본 Claude 홈')
+    # Where each login lives is a note beside the account name (hover, focus or tap), with
+    # the same text as its accessible name.
+    expect(claude.locator('.quota-account-head').nth(0).locator('.info')).to_have_attribute('data-tip','기본 Claude 홈')
     expect(claude.locator('.quota-account-title').nth(1)).to_contain_text('Max 5x')
-    expect(claude.locator('.quota-account-title').nth(1)).to_contain_text('zerosub 관리 홈 claude-0123abcd4567')
+    home=claude.locator('.quota-account-head').nth(1).locator('.info')
+    expect(home).to_have_attribute('data-tip','zerosub 관리 홈 claude-0123abcd4567')
+    expect(home).to_have_attribute('aria-label','로그인 위치: zerosub 관리 홈 claude-0123abcd4567')
+    home.hover();expect(page.locator('#tip')).to_have_text('zerosub 관리 홈 claude-0123abcd4567')
+    # The read path is a note too: the card line keeps only when it was checked.
+    meta=claude.locator('.quota-account').nth(1).locator('.card-meta')
+    expect(meta).not_to_contain_text('OAuth')
+    expect(meta.locator('.info')).to_have_attribute('data-tip','계정 사용량 조회 · 내부 OAuth 경로')
     expect(claude.locator('.quota-account').nth(1).locator('.remaining').first).to_contain_text('92%')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')

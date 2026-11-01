@@ -248,9 +248,11 @@ function renderUsage(data){
  const cost=data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?data.cost:null;
  $('cards').innerHTML=card('전체 토큰',compact(tokens),fmt(tokens),
    change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small><small>${callText(data.totals)}</small>`)
-  +(cost?card('비용 추정',usd(cost.period),usd(cost.period),
+  // How much of the cost is priced is a note on the label; the card itself says only when
+  // part of the period could not be priced (as the 개요 tiles do).
+  +(cost?card('비용 추정'+infoTip(`공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.cache_estimated_tokens?` · 캐시 ${compact(cost.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}`),usd(cost.period),usd(cost.period),
    change(cost.period,prior?prior.cost??(total(prior)?null:0):null)
-   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}${cost.cache_estimated_tokens?` · 캐시 ${compact(cost.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</small>`):'')
+   +`<small>공개 단가 환산${cost.coverage!=null&&cost.coverage<99.5?' · 일부 미산정':''}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}</small>${cost.cache_savings?`<small>캐시 읽기 절감 ${usd(cost.cache_savings)}</small>`:''}`):'')
   +[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output']].map(([label,k])=>
    card(label,compact(data.totals[k]),fmt(data.totals[k]),`<small>선택 기간 · 전체 누계 ${compact(data.lifetime[k])}</small>`)).join('');
  renderModelTable(data);renderHeatmap(data.heatmap);
