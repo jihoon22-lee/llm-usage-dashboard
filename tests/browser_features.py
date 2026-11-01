@@ -18,6 +18,7 @@ output.mkdir(parents=True, exist_ok=True)
 now = time.time()
 SOURCES = [dict(name='수집기', status='ok', checked=now-20, detail='idle'),
            dict(name='codex', status='error', checked=now-60, detail='HTTP 500'),
+           dict(name='claude-oauth', status='error', checked=now-60, last_success=now-300, detail='HTTP 503'),
            dict(name='WSL .claude/projects', status='partial', checked=now-60, detail='12개 기록 파일 확인 · 해석 실패 1건'),
            dict(name='claude-code', status='idle', checked=now-3*86400, detail='최근 24시간 상태줄 수신 없음'),
            dict(name='normalization', status='ok', checked=now-60, detail='카운터 초기화 구간을 구분한 집계'),
@@ -135,16 +136,25 @@ with sync_playwright() as p:
     expect(alerts).to_contain_text('사용량 급증')
     expect(alerts).to_contain_text('단가 미등록 모델 1개 · brand-new-model')
     expect(alerts).to_contain_text('fixture-project 월 예산 90%')
-    # Sources: failures and values to check first with a hint, what is not collected
-    # listed in a neutral color, normal sources (internal work inside) folded.
+    # 진단 groups sources by what they ask of the owner, with the header badge's rule: a
+    # failure with no success yet needs a look, one 5 minutes after a success retries; a
+    # partly read source and an unused status line stay listed as rows; normal sources fold.
+    expect(page.locator('#data-status')).to_have_text('조치 필요 1')
     page.locator('#data-status').click()
     expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
-    assert page.locator('.source-summary > span').all_text_contents()==['실패 1','확인 필요 1','미제공 0','미사용 1','정상 3']
+    assert page.locator('.source-summary > span').all_text_contents()==['조치 필요 1','일시 실패 1','일부만 확인 1','수집하지 않음 1','정상 3']
     action = page.locator('#sources .source-action')
-    expect(action.locator('h4')).to_have_text('조치 필요 2개')
-    assert action.locator('.source strong').all_text_contents()==['codex','WSL .claude/projects']
+    expect(action.locator('h4')).to_have_text('조치 필요 1개')
+    assert action.locator('.source strong').all_text_contents()==['codex']
     expect(action.locator('.source').first).to_be_visible()
-    expect(action).to_contain_text('다음 주기에 다시 시도')
+    expect(action).to_contain_text('원인을 확인')
+    retry = page.locator('#sources .source-retry')
+    assert retry.locator('.source strong').all_text_contents()==['claude-oauth']
+    expect(retry).to_contain_text('다음 수집 주기에 다시 시도')
+    partly = page.locator('#sources .source-partly')
+    expect(partly.locator('li').first).to_contain_text('WSL .claude/projects · 일부 미수집')
+    expect(partly.locator('li').first).to_contain_text('해석 실패 1건')
+    assert partly.locator('.src-bad,.src-warn').count()==0
     quiet = page.locator('#sources .source-quiet')
     expect(quiet.locator('li').first).to_be_visible()
     expect(quiet.locator('li').first).to_contain_text('claude-code · 미사용')

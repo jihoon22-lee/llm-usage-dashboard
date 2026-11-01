@@ -76,7 +76,8 @@ function renderInsights(data){
   ['불완전 시작 세션',fmt(q.partial_sessions)+'개','info','기록 시작 전 사용분은 알 수 없어 관측 이후만 집계'],
   ['시각·카운터 불일치 세션',fmt(q.ambiguous_sessions)+'개','info','순서가 엇갈린 관측 · 큰 값을 중복 없이 보수적으로 처리'],
   ['0 요청 기준값 전환 세션',fmt(q.zero_baseline_sessions)+'개','info','요청 없이 기준값만 바뀐 경우 · 사용량에 더하지 않음']];
- $('quality').innerHTML=`<div class="quality-stats">${qualityRows.map(([label,value,level,note])=>`<div class="q-${level}"><span>${label}</span><strong>${value}</strong><small>${esc(note)}</small></div>`).join('')}</div><p class="hint">${esc(q.scope)} Codex 세션 ${fmt(q.sessions)}개 진단 / ${fmt(q.sessions_observed)}개 관측.</p><details><summary>수집원별 마지막 성공</summary>${q.last_successes.map(s=>`<p class="hint"><strong>${esc(s.name)}</strong> · ${esc(when(s.last_success))} KST</p>`).join('')||'<p>성공 기록이 아직 없습니다.</p>'}</details>`;
+ // Diagnostic counts are a table, not headline numbers; the level shows as a mark and a color.
+ $('quality').innerHTML=`<div class="table-wrap"><table class="quality-table"><thead><tr><th scope="col">항목</th><th scope="col">값</th><th scope="col">처리</th></tr></thead><tbody>${qualityRows.map(([label,value,level,note])=>`<tr class="q-${level}"><th scope="row">${label}</th><td>${value}</td><td>${esc(note)}</td></tr>`).join('')}</tbody></table></div><p class="hint">${esc(q.scope)} Codex 세션 ${fmt(q.sessions)}개 진단 / ${fmt(q.sessions_observed)}개 관측.</p><details><summary>수집원별 마지막 성공</summary>${q.last_successes.map(s=>`<p class="hint"><strong>${esc(s.name)}</strong> · ${esc(when(s.last_success))} KST</p>`).join('')||'<p>성공 기록이 아직 없습니다.</p>'}</details>`;
  const c=insights.comparison;
  if(c.current==null)$('comparison').innerHTML=`<p>${esc(c.reason)}</p>`;
  else{

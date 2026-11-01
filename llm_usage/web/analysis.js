@@ -299,34 +299,45 @@ function renderReconciliation(r){
   +'<p>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</p></div></details>';
  if(focused)box.querySelector('summary').focus({preventScroll:true});
 }
-// Collection status, problems first: failures and values to check as cards; what is not
-// collected now (미제공·미사용) stays listed in a neutral color, never folded away; the
-// normal sources fold by provider. Fold states survive the periodic refresh.
-const SOURCE_BUCKETS={error:'bad',partial:'warn',stale:'warn',unavailable:'na',idle:'idle',ended:'idle'};
+// 진단 lists the sources by what they ask of the owner, with the rule the header badge uses
+// (sourceProblems): 조치 필요 and 일시 실패 as cards with their detail first. Sources only partly
+// confirmed or observed long ago, and those not collected now (미제공·미사용·구독 없음), are
+// one-line rows that stay listed: a state that is not received is never hidden. Normal
+// sources fold by provider. A group explains each status once, not once per source.
+// Fold states survive the periodic refresh.
+const ACTION_HINTS={error:'수집하지 못했습니다. 상세 문구의 원인을 확인하세요.',stale:'수집 주기가 지나도 갱신되지 않았습니다. 수집기와 경로를 확인하세요.',
+ unavailable:'실행 기록이 없습니다. 수집기를 시작하세요.'};
+const RETRY_HINTS={error:'다음 수집 주기에 다시 시도합니다. 30분 동안 성공하지 못하면 조치 필요로 옮깁니다.',stale:'수집기가 멈춰 갱신되지 않았습니다. 수집기가 다시 돌면 함께 갱신됩니다.'};
+const PARTLY_HINTS={partial:'일부 기록을 읽지 못했거나 확인하지 못했습니다. 개수는 각 줄에 있습니다.'};
 function renderSources(list){
  const box=$('sources'),opened=new Set([...box.querySelectorAll('details[open]')].map(el=>el.dataset.fold));
- const bucket=s=>SOURCE_BUCKETS[s.status]||'ok';
  const order=(a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name);
- const counts={bad:0,warn:0,na:0,idle:0,ok:0};list.forEach(s=>counts[bucket(s)]++);
- const action=list.filter(s=>['bad','warn'].includes(bucket(s))).sort(order);
- const quiet=list.filter(s=>['na','idle'].includes(bucket(s))).sort(order);
+ const {action,retry}=sourceProblems(list,Date.now()/1000),flagged=new Set([...action,...retry]);
+ const rest=list.filter(s=>!flagged.has(s));
+ const partly=rest.filter(s=>s.status==='partial'||s.status==='stale').sort(order);
+ const off=rest.filter(s=>['unavailable','idle','ended'].includes(s.status)).sort(order);
+ const normal=rest.filter(s=>!partly.includes(s)&&!off.includes(s));
  const groups=new Map();
- for(const s of list.filter(s=>bucket(s)==='ok').sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
+ for(const s of normal.sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
  const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업'));
  const time=s=>`<small>${s.checked?when(s.checked):'확인 기록 없음'}</small>`;
- const card=s=>`<div class="source src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${bucket(s)!=='ok'&&SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const label=s=>`<strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}`;
+ const card=(s,kind)=>`<div class="source src-${kind}"><p class="source-line"><span>${label(s)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}</div>`;
+ const row=s=>`<li><span>${label(s)}</span><span class="source-detail">${esc(s.detail||'')}</span>${time(s)}</li>`;
+ const hints=(items,texts)=>`<p class="source-hint">${[...new Set(items.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${texts[st]||SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`;
+ const section=(cls,title,items,body)=>`<section class="source-group ${cls}"><h4>${title} <small>${items.length}개</small></h4>${body}</section>`;
  const fold=(key,summary,body)=>`<details class="source-group" data-fold="${key}"${opened.has(key)?' open':''}><summary>${summary}</summary>${body}</details>`;
- const tally=(name,key)=>`<span class="${counts[key]?key:''}">${name} <strong>${counts[key]}</strong></span>`;
- box.innerHTML=`<div class="source-summary">${tally('실패','bad')}${tally('확인 필요','warn')}${tally('미제공','na')}${tally('미사용','idle')}${tally('정상','ok')}</div>`
-  +(action.length?`<section class="source-group source-action"><h4>조치 필요 <small>${action.length}개</small></h4><div class="source-list">${action.map(card).join('')}</div></section>`
+ const tally=(name,n,cls)=>`<span class="${n?cls:''}">${name} <strong>${n}</strong></span>`;
+ box.innerHTML=`<div class="source-summary">${tally('조치 필요',action.length,'bad')}${tally('일시 실패',retry.length,'warn')}${tally('일부만 확인',partly.length,'na')}${tally('수집하지 않음',off.length,'idle')}${tally('정상',normal.length,'ok')}</div>`
+  +(action.length?section('source-action','조치 필요',action,hints(action,ACTION_HINTS)+`<div class="source-list">${action.sort(order).map(s=>card(s,'bad')).join('')}</div>`)
    :'<p class="source-clear">조치가 필요한 수집원이 없습니다.</p>')
-  +(quiet.length?`<section class="source-group source-quiet"><h4>지금 수집하지 않는 경로 <small>${quiet.length}개</small></h4>`
-   +`<p class="source-hint">${[...new Set(quiet.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`
-   +`<ul class="source-rows">${quiet.map(s=>`<li><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${s.detail?`<span class="source-detail">${esc(s.detail)}</span>`:''}${time(s)}</li>`).join('')}</ul></section>`:'')
-  +(counts.ok?fold('ok',`정상 ${counts.ok}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
+  +(retry.length?section('source-retry','일시 실패',retry,hints(retry,RETRY_HINTS)+`<div class="source-list">${retry.sort(order).map(s=>card(s,'warn')).join('')}</div>`):'')
+  +(partly.length?section('source-partly','일부만 확인',partly,hints(partly,PARTLY_HINTS)+`<ul class="source-rows">${partly.map(row).join('')}</ul>`):'')
+  +(off.length?section('source-quiet','지금 수집하지 않는 경로',off,hints(off,{})+`<ul class="source-rows">${off.map(row).join('')}</ul>`):'')
+  +(normal.length?fold('ok',`정상 ${normal.length}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
    ordered.map(([name,items])=>name==='내부 작업'
-    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(card).join('')}</div>`)
-    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('')):'');
+    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(s=>card(s,'ok')).join('')}</div>`)
+    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(s=>card(s,'ok')).join('')}</div></section>`).join('')):'');
 }
 let modelFilter='';
 $('model-search').addEventListener('input',event=>{modelFilter=event.target.value.trim().toLowerCase();if(lastUsage)renderModelTable(lastUsage);});

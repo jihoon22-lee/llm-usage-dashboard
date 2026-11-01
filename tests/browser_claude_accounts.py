@@ -46,8 +46,8 @@ with store.connect() as c:
         store.limit(c, 'devin', bucket, 100, now+86400, now-60, 'devin')
     store.source(c, 'devin', 'ok', 'Free · 계정 사용량 조회', now-60)
     store.source(c, 'claude-accounts', 'ok', 'Claude 계정 2개 · 훅 기록 12건 · 계정 미확인 요청 3건', now-60)
-    # A source that never succeeded is a chip at once; one that failed five minutes after a
-    # success is not yet (the status tab shows both).
+    # A source that never succeeded needs a look at once; one that failed five minutes after
+    # a success waits for the next cycle (진단 shows both, in different groups).
     store.source(c, 'claude-credits:abababababab', 'error', 'HTTP 500', now-120)
     store.source(c, 'claude-resets:abababababab', 'ok', '', now-400)
     store.source(c, 'claude-resets:abababababab', 'error', 'HTTP 503', now-100)
@@ -137,10 +137,10 @@ with sync_playwright() as p:
     expect(subvalue).to_contain_text('Anthropic / Claude Code · Pro')
     expect(subvalue.locator('.sub-row', has_text='Max 5x')).to_contain_text('월 구독료 미설정')
     expect(subvalue).not_to_contain_text('Cognition / Devin')
-    # 진단 sources name their account.
+    # 진단 sources name their account, in the groups the header badge counted.
     page.locator('#data-status').click()
-    expect(page.locator('#sources')).to_contain_text('claude-oauth · Max 5x')
-    expect(page.locator('#sources')).to_contain_text('claude-resets · Max 5x')
+    assert page.locator('#sources .source-action .source strong').all_text_contents()==['claude-credits · Max 5x','claude-oauth · Max 5x']
+    assert page.locator('#sources .source-retry .source strong').all_text_contents()==['claude-resets · Max 5x']
     expect(page.locator('#sources')).to_contain_text('claude-accounts')
     # Settings: a row per Claude account with a display name; the ended toggle is kept.
     page.locator('#settings-open').click()

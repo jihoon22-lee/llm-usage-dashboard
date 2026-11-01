@@ -202,9 +202,6 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .legend .unavailable-series::before {content:'○'; color:var(--muted)}
 .tooltip-missing {color:var(--muted)}
 
-.quality-stats{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:22px 0}
-.quality-stats span{display:block;font-size:var(--fs-xs);color:var(--muted)}
-.quality-stats strong{display:block;font-size:var(--fs-lg);margin-top:7px;font-variant-numeric:tabular-nums}
 .comparison-value{font-size:var(--fs-lg);font-weight:650;color:var(--accent)}
 .comparison-value small{display:block;font-size:var(--fs-xs);font-weight:400;color:var(--muted);margin:5px 0 14px}
 .contributions>div{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:var(--fs-sm)}
@@ -484,8 +481,6 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
  .panel{padding:13px;margin-bottom:10px}
  .panel h3,:is(.mobile-fold,.fold)>summary h3{font-size:var(--fs-md)}
  :is(.mobile-fold,.fold)>summary{min-height:32px;line-height:1.6;font-size:var(--fs-xs)}
- .mobile-fold .quality-stats{gap:13px;margin:15px 0}
- .quality-stats strong{font-size:var(--fs-lg)}
  .chart-grid{grid-template-columns:1fr;gap:0}
  .chart{min-height:165px}
  .legend{gap:7px;margin-bottom:10px}
@@ -518,14 +513,20 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
 .cal-key{display:inline-block;width:11px;height:11px;border-radius:2px;background:var(--line)}
 .cal-key.a1{background:var(--chart-0);opacity:.25}.cal-key.a2{background:var(--chart-0);opacity:.45}.cal-key.a3{background:var(--chart-0);opacity:.65}.cal-key.a4{background:var(--chart-0);opacity:.85}.cal-key.a5{background:var(--chart-0)}
 .cal-key.na{background:repeating-linear-gradient(45deg,var(--line) 0 2px,transparent 2px 5px)}
-.quality-stats small{display:block;font-size:var(--fs-xs);color:var(--muted);margin-top:4px;line-height:1.5}
-.quality-stats .q-warn strong{color:var(--warning-ink)}
-.quality-stats .q-ok strong{color:var(--accent)}
 .sess-detail{padding:8px 4px;text-align:left;font-size:var(--fs-sm)}
 .sess-hours{display:block;width:100%;height:40px;margin:6px 0}
 .sess-hours rect{fill:var(--chart-0)}
 .sess-models{width:100%;margin-top:6px}
 .sess-models th,.sess-models td{padding:6px 8px;font-size:var(--fs-xs)}
+/* Data reliability: counts in a table; the level is a mark beside the value, not color alone. */
+.quality-table{margin:14px 0 4px}
+.quality-table thead th{text-align:left}
+.quality-table thead th:nth-child(2),.quality-table td{text-align:right;font-variant-numeric:tabular-nums}
+.quality-table th[scope=row]{width:13em;text-align:left;font-size:var(--fs-sm);color:var(--ink);background:none;font-weight:500}
+.quality-table td:nth-child(2){width:7em}
+.quality-table td:last-child{text-align:left;white-space:normal;color:var(--muted);font-size:var(--fs-xs);min-width:14em}
+.quality-table .q-warn td:nth-child(2){color:var(--warning-ink);font-weight:650}
+.quality-table .q-warn td:nth-child(2)::before{content:"▲ "}
 .source-summary{display:flex;flex-wrap:wrap;gap:8px 18px;margin:14px 0 4px;font-size:var(--fs-sm);color:var(--muted)}
 .source-summary strong{color:var(--ink);font-variant-numeric:tabular-nums}
 .source-summary .warn strong{color:var(--warning-ink)}.source-summary .bad strong{color:var(--error-ink)}
@@ -538,16 +539,16 @@ details.source-group>summary{cursor:pointer;margin-bottom:0}
 .source-summary .na strong,.source-summary .idle strong{color:var(--muted)}
 .source-group>h4 small{font-weight:400;color:var(--muted);margin-left:4px}
 .source-clear{margin:16px 0 0;font-size:var(--fs-sm);color:var(--muted)}
-.source-quiet>.source-hint{margin:14px 0 0;font-size:var(--fs-xs)}
-.source-rows{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 8px}
-.source-rows li{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface);font-size:var(--fs-sm);line-height:1.5;color:var(--muted)}
+.source-group>.source-hint{margin:14px 0 0;font-size:var(--fs-xs)}
+.source-rows{list-style:none;margin:8px 0 0;padding:0}
+.source-rows li{display:grid;grid-template-columns:minmax(12em,18em) minmax(0,1fr) auto;gap:2px 16px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:var(--fs-sm);line-height:1.5;color:var(--muted)}
 .source-rows li strong{color:var(--ink)}
-.source-rows li>small{margin-left:auto;font-variant-numeric:tabular-nums}
-.source-rows .source-detail{flex-basis:100%;font-size:var(--fs-xs)}
+.source-rows li>small{font-variant-numeric:tabular-nums;white-space:nowrap}
+.source-rows .source-detail{font-size:var(--fs-xs);overflow-wrap:anywhere}
 details.source-group>summary small{font-weight:400;color:var(--muted);margin-left:4px}
 details.source-group[open]>summary{margin-bottom:-8px}
 .coverage-fold>p{color:var(--muted);margin:14px 0 0}
-@media(max-width:600px){.source-rows{grid-template-columns:1fr}}
+@media(max-width:600px){.source-rows li{grid-template-columns:minmax(0,1fr) auto}.source-rows .source-detail{grid-column:1/-1;grid-row:2}}
 .heat-cell:focus-visible,.cal-cell:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Phones: tabs sit at the bottom, within thumb reach; content keeps clear of them. */
 @media(max-width:600px){
