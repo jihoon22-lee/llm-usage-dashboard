@@ -70,14 +70,14 @@ function renderScope(data){
  if(scope)chip.textContent=scopeText(scope)+' ×';
 }
 // Earlier releases used other tab names; saved views and bookmarked URLs still resolve.
-const VIEW_ALIASES={plan:'quota',overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
+const VIEW_ALIASES={plan:'quota',analysis:'usage',insights:'reports',sources:'status'};
 // Panels fed by the lazily fetched insights section.
 const INSIGHT_VIEWS=['usage','reports','status'];
-let currentView='quota',previousView='quota';
+let currentView='overview',previousView='overview';
 const viewEls=[...document.querySelectorAll('main>[data-view]')];
 function setView(name,sync=true){
  name=VIEW_ALIASES[name]||name;
- const next=viewEls.some(e=>e.dataset.view===name)?name:'quota';
+ const next=viewEls.some(e=>e.dataset.view===name)?name:'overview';
  // Settings is not a tab: remember where to return, and keep the last tab reachable by Tab.
  if(next==='settings'&&currentView!=='settings')previousView=currentView;
  currentView=next;
@@ -90,6 +90,7 @@ function setView(name,sync=true){
  if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))loadInsights();
  if(currentView==='usage')setUsageView(usageView,false);
  if(currentView==='reports')loadReports();
+ if(currentView==='overview')loadOverview();
  // A hidden chart skipped its draw; render synchronously on tab switch so the
  // ResizeObserver sees the same width and does not queue a duplicate redraw.
  if(chartData&&$('chart').clientWidth)chart(chartData);
@@ -117,7 +118,7 @@ function syncUrl(push){
   const v=$(id).value;
   if(FILTER_DEFAULTS[id]===undefined||v!==FILTER_DEFAULTS[id])q.set(id,v);
  }
- if(currentView!=='quota')q.set('view',currentView);
+ if(currentView!=='overview')q.set('view',currentView);
  if(currentView==='usage'&&usageView!=='tokens')q.set('usage_view',usageView);
  const s=q.toString();
  history[push?'pushState':'replaceState'](null,'',location.pathname+(s?'?'+s:''));
@@ -149,13 +150,15 @@ window.addEventListener('popstate',()=>{
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  setUsageView(params.get('usage_view')||'tokens',false,false);
- setView(params.get('view')||'quota');saveDefaults();filterSummary();refresh();
+ setView(params.get('view')||'overview');saveDefaults();filterSummary();refresh();
 });
+// A row listed for a fixed span (개요's 30 days) opens over that span, so the number matches.
+const drillSpan=el=>el.dataset.period?{period:el.dataset.period,granularity:'day'}:{};
 document.addEventListener('click',event=>{
  const scope=event.target.closest('[data-scope]');
  // A button inside a drillable row (project 상세) acts on its own.
  if(scope&&event.target.closest('button')&&!event.target.closest('button[data-scope]'))return;
- if(scope){applyDrill({scope:scope.dataset.scope});return;}
+ if(scope){applyDrill({scope:scope.dataset.scope,...drillSpan(scope)});return;}
  const day=event.target.closest('[data-day]');
  if(day)applyDrill({period:'custom',start:day.dataset.day,end:day.dataset.day,granularity:'hour'});
 });
@@ -175,7 +178,7 @@ document.addEventListener('keydown',event=>{
  if(event.key!=='Enter'&&event.key!==' ')return;
  if(event.target.closest('button,input,select,textarea,a'))return;
  const scope=event.target.closest?.('[data-scope]');
- if(scope){event.preventDefault();applyDrill({scope:scope.dataset.scope});}
+ if(scope){event.preventDefault();applyDrill({scope:scope.dataset.scope,...drillSpan(scope)});}
 });
 const compactMedia=matchMedia('(max-width:600px)');
 const foldedPanels=[...document.querySelectorAll('details.mobile-fold')];

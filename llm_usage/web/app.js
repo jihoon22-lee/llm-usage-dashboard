@@ -15,7 +15,7 @@ function offlineText(){
 window.addEventListener('llm-data-source-change',offlineText);
 function insightsState(state,message=''){
  const ready=state==='ready',failed=state==='error';
- $('insights-status').hidden=ready||currentView==='quota'||currentView==='usage'&&usageView!=='tokens';$('insights-status').setAttribute('role',failed?'alert':'status');
+ $('insights-status').hidden=ready||!INSIGHT_VIEWS.includes(currentView)||currentView==='usage'&&usageView!=='tokens';$('insights-status').setAttribute('role',failed?'alert':'status');
  $('insights-message').textContent=failed?'인사이트를 불러오지 못했습니다. '+message:ready?'':'인사이트를 불러오는 중…';
  $('insights-retry').hidden=!failed;
  for(const id of ['csv-projects','csv-sessions'])$(id).disabled=!ready;
@@ -118,6 +118,7 @@ async function refresh(manual=false){
      if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))await loadInsights();
      if(currentView==='usage'&&usageView!=='tokens')void loadCodexView(true);
      if(currentView==='status')loadNotifyLog();
+     if(currentView==='overview')void loadOverview(true);
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
      else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';}
@@ -130,7 +131,7 @@ function applyRefreshMs(ms){refreshMs=ms;$('auto-label').textContent=(ms>=60000?
 function schedule(){clearTimeout(timer);if($('auto').checked&&!document.hidden)timer=setTimeout(()=>refresh(),refreshMs);}
 $('theme').value=window.LLMTheme.choice;
 $('theme').addEventListener('change',()=>window.LLMTheme.set($('theme').value));
-window.addEventListener('llm-theme-change',()=>{syncThemeColor();updateColors();if(lastUsage){chart(lastUsage);composition(lastUsage);ranking(lastUsage);renderCacheTrend(lastUsage);}});
+window.addEventListener('llm-theme-change',()=>{syncThemeColor();updateColors();if(lastUsage){chart(lastUsage);composition(lastUsage);ranking(lastUsage);renderCacheTrend(lastUsage);}if(lastOverview)renderOverview(lastOverview);});
 $('refresh').addEventListener('click',()=>refresh(true));$('auto').addEventListener('change',schedule);
 for(const id of FILTER_IDS)$(id).addEventListener('change',()=>{
  if(id==='period'&&$('period').value==='1h'){$('granularity').value='hour';sessSort.key='tokens';sessSort.dir='desc';}
@@ -170,16 +171,17 @@ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  if($('period').value==='1h'){sessSort.key='tokens';sessSort.dir='desc';}
  setUsageView(get('usage_view')||'tokens',false,false);
- setView(params.get('view')??saved?.view);filterSummary();
+ // Defaults saved before the 개요 tab existed open on it once; later choices are kept.
+ setView(params.get('view')??(saved?.layout===2?saved.view:null));filterSummary();
 }
 $('filter-reset').addEventListener('click',()=>{
  $('period').value='7d';$('granularity').value='day';$('group').value='route';$('cumulative').value='0';$('metric').value='tokens';$('compare').value='';$('scope').value='';
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
-// Keyboard shortcuts outside text fields: r refreshes, 1–4 switch tabs, , opens settings,
+// Keyboard shortcuts outside text fields: r refreshes, 1–5 switch tabs, , opens settings,
 // / focuses the current view's search, ? lists them.
-const SHORTCUT_VIEWS=['quota','usage','reports','status'];
+const SHORTCUT_VIEWS=['overview','quota','usage','reports','status'];
 document.addEventListener('keydown',event=>{
  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,select,textarea,[contenteditable]')||document.querySelector('dialog[open]'))return;
  const view=SHORTCUT_VIEWS[Number(event.key)-1];

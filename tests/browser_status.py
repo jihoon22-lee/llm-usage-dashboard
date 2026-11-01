@@ -77,7 +77,7 @@ with sync_playwright() as p:
         fixture_page(page)
         page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
         preview(page, 30)
-        assert page.goto(origin+'/').status == 200
+        assert page.goto(origin+'/?view=quota').status == 200
         expect(page.locator('#refresh')).to_be_enabled()
         # One low quota is the only alert; it must be visible on mobile too.
         chips = page.locator('#alerts .alert-chip')

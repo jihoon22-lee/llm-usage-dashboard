@@ -1,6 +1,6 @@
 'use strict';
 // Heatmap, shared tooltip, quota cards, panel order, alert chips and browser notifications.
-function saveDefaults(){storage.set('llmDefaults',JSON.stringify({view:currentView==='settings'?previousView:currentView,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
+function saveDefaults(){storage.set('llmDefaults',JSON.stringify({layout:2,view:currentView==='settings'?previousView:currentView,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
 function renderHeatmap(cells){
  const grid=Array.from({length:7},()=>Array(24).fill(0));let max=0;
  (cells||[]).forEach(c=>{const v=cellMetric(c);grid[c.dow][c.hour]=v;if(v!=null)max=Math.max(max,v);});
@@ -67,6 +67,24 @@ function briefQuota(rows,route){
  }).join('');
 }
 const lowPercent=()=>lastLimits?.low_percent??15;
+// Services in the saved order, split into the ones shown and the ones folded away: no fresh
+// window and ended, or nothing heard for quota_hide_days. The 개요 tab lists the same ones.
+function serviceGroups(data){
+ const groups=Object.entries(names).map(([route,name])=>{
+  const rows=data.limits.filter(r=>familyOf(r.route)===route);
+  if(route==='antigravity')rows.sort((a,b)=>Number(!a.bucket.toLowerCase().includes('gemini'))-Number(!b.bucket.toLowerCase().includes('gemini')));
+  return {route,name,rows};
+ });
+ const savedQuota=orderStore.get().quota;
+ if(savedQuota&&savedQuota.length)groups.sort((a,b)=>{const ai=savedQuota.indexOf(a.route),bi=savedQuota.indexOf(b.route);return(ai<0?1e9:ai)-(bi<0?1e9:bi);});
+ const nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
+ const quiet=rows=>!rows.some(r=>r.status==='fresh')
+  &&(rows.some(r=>r.status==='ended')
+   ||(Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
+ // A service with several Claude accounts folds only when every account is quiet.
+ const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
+ return {active:groups.filter(g=>!dormant(g)),folded:groups.filter(dormant)};
+}
 // Claude accounts of one card in the API's order (original account first).
 function accountGroups(rows){
  const order=claudeAccounts.list.map(a=>a.route),by=new Map();
@@ -112,21 +130,7 @@ function renderLimits(data){
    +(decrease&&!fell?`<p class="decrease-detail"${decreaseSpan}>${esc(decreaseText)}</p>`:'')
    +`${events}${win}${quotaHistory(r,opened,data.now)}</details></div>`;
  }
- const groups=Object.entries(names).map(([route,name])=>{
-  const rows=data.limits.filter(r=>familyOf(r.route)===route);
-  if(route==='antigravity')rows.sort((a,b)=>Number(!a.bucket.toLowerCase().includes('gemini'))-Number(!b.bucket.toLowerCase().includes('gemini')));
-  return {route,name,rows};
- });
- const savedQuota=orderStore.get().quota;
- if(savedQuota&&savedQuota.length)groups.sort((a,b)=>{const ai=savedQuota.indexOf(a.route),bi=savedQuota.indexOf(b.route);return(ai<0?1e9:ai)-(bi<0?1e9:bi);});
- // Routes with no fresh bucket that ended or stopped reporting fold away.
- const nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
- const quiet=rows=>!rows.some(r=>r.status==='fresh')
-  &&(rows.some(r=>r.status==='ended')
-   ||(Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))&&nowTs-Math.max(0,...rows.map(r=>r.checked||r.last_attempt||0))>cutoff));
- // A service with several Claude accounts folds only when every account is quiet.
- const dormant=g=>g.route==='claude-code'&&multiClaude()?accountGroups(g.rows).every(([,rows])=>quiet(rows)):quiet(g.rows);
- const active=groups.filter(g=>!dormant(g)),folded=groups.filter(dormant);
+ const {active,folded}=serviceGroups(data),nowTs=data.now||Date.now()/1000,cutoff=(data.quota_hide_days??7)*86400;
  // Desktop columns follow the number of service cards (up to three), so none stands empty.
  $('limits').dataset.cards=String(Math.min(active.length,3));
  $('quota-overview').classList.toggle('editing',editingQuota);
@@ -175,6 +179,7 @@ function renderLimits(data){
   return `<div class="reset-item${low}"><strong>${esc(label)}${tag}</strong>${track}<span><b>${esc(soon(m.seconds))}</b> · <time datetime="${new Date(m.resets*1000).toISOString()}">${esc(when(m.resets))}</time></span></div>`;
  }).join('')}</div>`:'';
  applyGeometry($('reset-timeline'));
+ renderOverviewQuota();
  // One quota body: its current windows, older observations and model windows. `prefix`
  // keeps each Claude account's folds apart (the service route alone otherwise).
  const cardBody=(route,rows,prefix)=>{

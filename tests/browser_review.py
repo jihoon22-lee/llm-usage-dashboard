@@ -80,7 +80,7 @@ async def main():
             await context.route('**/*',handle)
             page=await context.new_page();errors=[]
             page.on('pageerror',lambda error:errors.append(str(error)));watch_csp(page,errors)
-            await page.goto(ORIGIN+'/')
+            await page.goto(ORIGIN+'/?view=quota')
             await expect(page.locator('#updated')).to_contain_text('마지막 갱신')
 
             # Plans and cross-provider rankings no longer occupy the quota view.
@@ -92,7 +92,7 @@ async def main():
             assert await page.locator('.pace-mark').count()==0
 
             # Usage: presets, the unified total and what-if pricing.
-            await page.keyboard.press('2')
+            await page.keyboard.press('3')
             await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
             await page.locator('[data-preset="models"]').click()
             await expect(page.locator('#group')).to_have_value('model')
@@ -114,13 +114,13 @@ async def main():
 
             # Reports: value bars have width. Shortcuts ignore keys typed into fields; leave the select first.
             await page.evaluate('document.activeElement.blur()')
-            await page.keyboard.press('3')
+            await page.keyboard.press('4')
             # The lazy insights answer redraws the panel; wait for the bar to carry its width.
             await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
 
             # Status: the notification history lists the failed send waiting for retry.
             await page.evaluate('document.activeElement.blur()')
-            await page.keyboard.press('4')
+            await page.keyboard.press('5')
             await expect(page.locator('#notify-log')).to_contain_text('전송 실패 · 재시도')
             if args.artifacts:
                 args.artifacts.mkdir(parents=True,exist_ok=True)

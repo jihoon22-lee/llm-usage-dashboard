@@ -121,6 +121,12 @@ def create_app(config=None):
                             'residual_label':residual_label()} if 'rows' in data else data)
         except (ValueError,TypeError,OverflowError):abort(400,description='기간 또는 집계 단위를 확인하세요.')
 
+    @app.get('/api/overview')
+    def overview():
+        from .overview import build
+        return jsonify(build(store,pricing=load_pricing(config),subscriptions=active_prices(),ended=ended_routes(config),
+                             names=config.get('claude_account_names')))
+
     @app.get('/api/session')
     def session_detail():
         sid=request.args.get('id','')

@@ -42,7 +42,7 @@ const storage={
 const OFFLINE_CACHE='llm-usage-data-v1',OFFLINE_KEEP=40;
 // Exact paths only: configuration, authentication and notification endpoints never
 // enter the statistics cache, including query-string variants and future APIs.
-const OFFLINE_PATHS=new Set(['/api/usage','/api/limits','/api/reports','/api/session','/api/project']);
+const OFFLINE_PATHS=new Set(['/api/usage','/api/overview','/api/limits','/api/reports','/api/session','/api/project']);
 let offlineSince=0,offlineCacheReady=null,offlineCacheEpoch=0;
 function cacheablePath(path){
  try{const url=new URL(path,location.origin);return url.origin===location.origin&&OFFLINE_PATHS.has(url.pathname);}catch{return false;}
