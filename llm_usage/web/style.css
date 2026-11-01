@@ -440,10 +440,11 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
 :is(.mobile-fold,.fold)>summary::after{content:'＋';color:var(--muted);margin-left:6px;width:1em;text-align:center}
 :is(.mobile-fold,.fold)[open]>summary::after{content:'−'}
 :is(.mobile-fold,.fold)>summary>span{margin-left:auto}
-:is(.mobile-fold,.fold):has(.panel-tools>.info:first-child)>summary::after{margin-left:30px}
+/* Room for the ⓘ only while it shows, so closed panels keep their captions aligned. */
+:is(.mobile-fold,.fold)[open]:has(.panel-tools>.info:first-child)>summary::after{margin-left:30px}
 @media(max-width:600px){
  :is(.mobile-fold,.fold) .panel-tools>.info:first-child{top:13px;right:31px}
- :is(.mobile-fold,.fold):has(.panel-tools>.info:first-child)>summary::after{margin-left:32px}
+ :is(.mobile-fold,.fold)[open]:has(.panel-tools>.info:first-child)>summary::after{margin-left:32px}
 }
 @media(max-width:600px){
 
