@@ -16,6 +16,7 @@ Node24를 사용합니다. Linux 브라우저 라이브러리가 없으면 playw
 기본 브라우저 검사는 임시 DB·합성 응답·예제 origin을 사용합니다. 실제 레이아웃·CSP·모바일 검사와 실제 계정 인증은 다릅니다.
 `tests/browser_resource_planning.py`는 실제 Flask API와 320/390/1440px에서 관측 감소량·보유 자원 정렬·지출 카드 제외·수동 기록 충돌·중복 저장 방지·오프라인 복구를 검사합니다. `tests/browser_recent_usage.py`는 같은 세 폭에서 최근 1시간 집계·고정된 상세 범위·귀속 누락·CSV·시간 경과를 확인합니다. 제공사 읽기와 초기화권 소비·구매 검증을 혼동하지 않습니다. 공개 fixture에는 실제 잔액·계정 식별자·인증정보를 넣지 않습니다.
 `browser_smoke.py --origin https://dashboard.example.ts.net:9444`는 본인의 사설 사이트를 명시하는 운영 검사이며 공개 CI에서 실행하지 않습니다.
+README와 사용 안내의 합성 화면은 `--artifacts DIR`로 다시 만듭니다. `tests/browser_overview.py`의 `dashboard.png`가 `docs/assets/dashboard.png`, `tests/browser_resource_planning.py`의 `resource-expiry.png`가 `docs/assets/resource-expiry.png`입니다.
 
 ## 변경과 릴리스
 
