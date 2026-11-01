@@ -192,7 +192,8 @@ function thisWeekHtml(w){
  return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${callText(w)}${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
   +reportLines([['서비스별',w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')],
    ['Claude 계정별',w.accounts?accountParts(w.accounts):''],['세부',detailsLine(w)]])
-  +(w.routes.length?'':'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')+'</div>';
+  +(w.routes.length?'':'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
+  +quotaUseHtml(w,'주',w.quota_from!=null?` · ${esc(when(w.quota_from))}부터 보존된 이력`:'')+'</div>';
 }
 function reportHtml(r){
  const residual=r.residual?.tokens&&r.residual.account_tokens?`<span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)`:'';

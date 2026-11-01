@@ -364,7 +364,8 @@ def _ensure_report(store,now,pricing=None):
 
 def this_week(store,now,pricing=None):
     """This week so far (KST Monday 00:00 to now) against last week cut at the same time:
-    the period cards' comparison (`prior`), with this week's services and Claude accounts."""
+    the period cards' comparison (`prior`), with this week's services, Claude accounts and
+    quota use so far (None once the quota history of the week is pruned)."""
     from .insights import token_total
     from .reconciliation import held
     monday,_=last_week(now);monday+=timedelta(days=7)
@@ -373,9 +374,14 @@ def this_week(store,now,pricing=None):
         usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now)
     routes={}
     for row in usage['rows']:routes[row['route']]=routes.get(row['route'],0)+token_total(row)
-    with store.connect() as c:accounts=_accounts(c,usage)
+    with store.connect() as c:
+        accounts=_accounts(c,usage)
+        # Quota use so far, as the finished weeks show it; no streak while the week runs.
+        quota_from=quota_covered_from(store,c,monday.timestamp())
+        use=quota_rows(c,quota_from,now) if quota_from<now else None
     return dict(start=day(monday),end=day(monday+timedelta(days=6)),**_totals(usage),prior=usage.get('prior'),accounts=accounts,
-                routes=[dict(route=route,tokens=tokens) for route,tokens in sorted(routes.items(),key=lambda x:-x[1]) if tokens])
+                routes=[dict(route=route,tokens=tokens) for route,tokens in sorted(routes.items(),key=lambda x:-x[1]) if tokens],
+                quota_use=use,quota_from=quota_from if quota_from>monday.timestamp() else None)
 
 
 def recent(store,limit=KEEP):

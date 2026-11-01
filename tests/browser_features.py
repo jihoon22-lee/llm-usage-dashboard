@@ -261,6 +261,19 @@ with sync_playwright() as p:
     expect(week).to_contain_text('지난주 같은 시점 기록 부족')
     expect(week).to_contain_text('이번 주에는 아직 사용 기록이 없습니다.')
     page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(THIS_WEEK)))
+    # The running week shows its quota use so far like a finished week, with no streak; a
+    # week whose start was pruned from the quota history says from when.
+    running = {**THIS_WEEK, 'quota_use': [dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간',
+               observed_hours=6, zero_hours=1.5, exhausted=1, resets_observed=0, before_reset=None)], 'quota_from': None}
+    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(running)))
+    week_use = week.locator('.quota-use tbody tr')
+    expect(week_use).to_have_count(1)
+    expect(week_use.first).to_contain_text('1.5시간')
+    expect(week_use.first.locator('.badge')).to_have_count(0)
+    expect(week).not_to_contain_text('부터 보존된 이력')
+    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps({**running, 'quota_from': 1759417200})))
+    expect(week).to_contain_text('부터 보존된 이력')
+    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(THIS_WEEK)))
     # Monthly settlements: the last month in full, each subscription against the price it
     # was settled with; the month-by-month table; older months folded.
     monthly = page.locator('#monthly')
