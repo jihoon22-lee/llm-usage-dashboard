@@ -121,8 +121,9 @@ def _window(row):
     return {k: row[k] for k in ('route', 'bucket', 'display_name', 'account_label') if row.get(k) is not None}
 
 
-def _week_facts(report):
-    """Quota exhaustion, time spent at 0% and the largest service change of the last full week."""
+def week_facts(report):
+    """Quota exhaustion, time spent at 0% and the largest service change of a stored week. The
+    개요 tab reads the latest week's; the reports tab shows each week's above its tables."""
     if not report:
         return []
     facts = []
@@ -199,7 +200,7 @@ def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, name
     models, model_routes = _models(last30)
     month = _month(store)
     report = (reports(store, 1) or [None])[0]
-    facts = _week_facts(report) + _subscription_facts(subscriptions, last30, month) + _usage_facts(recent, per_day, last30.get('heatmap'))
+    facts = week_facts(report) + _subscription_facts(subscriptions, last30, month) + _usage_facts(recent, per_day, last30.get('heatmap'))
     return dict(generated=now, collected_at=last30.get('collected_at'),
                 today=_period(today, now), week=_period(week, now), recent=recent,
                 models=[{**m, 'route': model_routes.get(m['name'])} for m in _ranked(models, recent['tokens'])],

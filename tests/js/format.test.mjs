@@ -12,7 +12,7 @@ const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,tota
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
   familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange,
-  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems})`,
+  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems,weekName})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -469,4 +469,16 @@ test('collection problems: what needs the owner, what retries, what is only a st
   assert.deepEqual(names(down.retry),['WSL .codex/sessions','devin-records']);
   // A collector that never ran is not a verdict of health either.
   assert.deepEqual(names(f.sourceProblems([src('수집기','unavailable')],now).action),['수집기']);
+});
+
+test('a stored week is 지난주 only while it is the last full KST week',()=>{
+  const at=iso=>Date.parse(iso)/1000;
+  // Sunday 23:59 KST: the week of 10-26 is still this week.
+  assert.equal(f.weekName('2026-10-19',at('2026-11-01T23:59:00+09:00')),'지난주');
+  assert.equal(f.weekName('2026-10-26',at('2026-11-01T23:59:00+09:00')),'10월 26일 주');
+  // Monday 00:00 KST (Sunday 15:00 UTC) turns it into last week.
+  assert.equal(f.weekName('2026-10-26',at('2026-11-01T15:00:00Z')),'지난주');
+  assert.equal(f.weekName('2026-10-19',at('2026-11-01T15:00:00Z')),'10월 19일 주');
+  // Across a year boundary.
+  assert.equal(f.weekName('2025-12-29',at('2026-01-07T12:00:00+09:00')),'지난주');
 });

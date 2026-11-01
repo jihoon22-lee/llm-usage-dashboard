@@ -34,6 +34,8 @@ REPORT = dict(week='2026-09-21', start='2026-09-21', end='2026-09-27', built=now
               routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
               models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
               exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24',
+              facts=[dict(kind='exhausted', week='2026-09-21', route='claude-code', bucket='five_hour', count=2, streak=3),
+                     dict(kind='zero_hours', week='2026-09-21', route='claude-code', bucket='five_hour', hours=3.5)],
               accounts=[dict(account='claude-code', label='Pro', tokens=4e8, cost=None),
                         dict(account='claude-code:unknown', label='계정 미확인', tokens=1e8, cost=None)],
               projects=[dict(project='fixture-project', tokens=2e9, cost=500.0), dict(project='미분류', tokens=1e9, cost=None)],
@@ -203,11 +205,16 @@ with sync_playwright() as p:
     week = reports.locator('.this-week')
     expect(week).to_contain_text('이번 주 2026-09-28 ~ 2026-10-04 · 진행 중 · 09. 30. 12:00 기준')
     expect(week).to_contain_text('지난주 같은 시점 대비 +25.0%')
-    expect(week).to_contain_text('서비스별: Codex 1B · Claude 500M')
-    expect(week.locator('.hint')).to_have_count(1)
+    # Breakdowns are label and value lines; this week has no accounts or details to list.
+    lines = "el=>[...el.querySelectorAll(':scope>.report-lines>div')].map(d=>d.querySelector('dt').textContent+': '+d.querySelector('dd').textContent)"
+    assert week.evaluate(lines) == ['서비스별: Codex 1B · Claude 500M'], week.evaluate(lines)
+    expect(week.locator('.hint')).to_have_count(0)
     assert reports.locator(':scope > *').first.get_attribute('class') == 'this-week'
-    expect(reports).to_contain_text('Claude 계정별: Pro 400M · 계정 미확인 100M')
-    expect(reports).to_contain_text('상위 프로젝트: fixture-project 2B · 미분류 1B')
+    assert reports.evaluate(lines) == ['상위 모델: gpt-fixture 2.5B', 'Claude 계정별: Pro 400M · 계정 미확인 100M',
+                                       '상위 프로젝트: fixture-project 2B · 미분류 1B'], reports.evaluate(lines)
+    # The week's facts lead its report without repeating which week it is.
+    expect(reports.locator(':scope > .report-facts li > span:last-child')).to_have_text(
+        ['Claude 5시간 한도 2회 소진 · 3주 연속', 'Claude 5시간 한도가 0%로 머문 시간 3.5시간'])
     # Quota use: observed facts per window, the tightest first; nothing unobserved reads as 0.
     use = reports.locator('.quota-use tbody tr')
     expect(use).to_have_count(3)
@@ -219,6 +226,24 @@ with sync_playwright() as p:
     expect(use.nth(1)).to_contain_text('41.0% · 1회')
     expect(use.nth(2)).to_contain_text('미관측')
     expect(use.nth(2)).to_contain_text('30분')
+    # Windows with no exhaustion and no time at 0% stay in the table, folded under it.
+    shown = reports.locator(':scope > .table-wrap .quota-use tbody tr:visible')
+    expect(shown).to_have_count(1)
+    quiet = reports.locator(':scope > .quota-quiet-toggle > summary')
+    expect(quiet).to_have_text('소진·0% 시간 없는 한도 2개')
+    quiet.click()
+    expect(shown).to_have_count(3)
+    # A redraw (an account renamed) keeps it open.
+    page.evaluate('redrawReports()')
+    expect(shown).to_have_count(3)
+    # A Claude account goes by its name now in the table, as in the facts above it, over the
+    # plan label stored when the week was built.
+    page.evaluate("setClaudeAccounts([{route:'claude-code',label:'Ultra'},{route:'claude-code:abc',label:'Max'}])")
+    page.evaluate("renderReports([{...%s,quota_use:[{route:'claude-code',bucket:'five_hour',account_label:'Pro',observed_hours:10,"
+                  "zero_hours:1,exhausted:1,streak:0,resets_observed:0,before_reset:null}]}])" % json.dumps(REPORT))
+    expect(use.first.locator('td').first).to_have_text('Claude(Ultra) 5시간')
+    expect(reports.locator(':scope > .report-facts li').first).to_contain_text('Claude(Ultra) 5시간 한도 2회 소진 · 3주 연속')
+    page.evaluate('setClaudeAccounts([])')
     # Older reports without the field keep their exhaustion line; a week whose history was
     # pruned before it was built says so.
     page.evaluate("renderReports([{...%s,quota_use:undefined}])" % json.dumps(REPORT))

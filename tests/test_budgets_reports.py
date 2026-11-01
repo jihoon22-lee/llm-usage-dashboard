@@ -418,5 +418,26 @@ class BudgetWebTests(unittest.TestCase):
         # This week so far, with nothing recorded: no use, and nothing to compare left out.
         self.assertEqual((reports['this_week']['tokens'],reports['this_week']['routes']),(0,[]))
 
+    def test_each_report_carries_its_own_week_facts(self):
+        # Every stored week, not only the latest, says what the 개요 tab says of the latest.
+        store=Store(self.root/'usage.db')
+        with store.connect() as c:
+            store.save_state(c,'report:2026-10-19',dict(start='2026-10-19',end='2026-10-25',totals=dict(tokens=1000),
+                routes=[dict(route='codex',tokens=950,change_pct=80.0),dict(route='claude-code',tokens=50,change_pct=-90.0)],
+                exhausted=[dict(route='claude-code',bucket='five_hour',count=3)],
+                quota_use=[dict(route='claude-code',bucket='five_hour',zero_hours=6.0,streak=2,exhausted=3,observed_hours=160)]))
+            # An older week without quota history: only what it holds.
+            store.save_state(c,'report:2026-10-12',dict(start='2026-10-12',end='2026-10-18',totals=dict(tokens=500),
+                routes=[dict(route='codex',tokens=500,change_pct=None)],exhausted=None,quota_use=None))
+        listed=self.get('/api/reports').get_json()['reports']
+        self.assertEqual([r['start'] for r in listed],['2026-10-19','2026-10-12'])
+        latest=listed[0]['facts']
+        self.assertEqual([f['kind'] for f in latest],['exhausted','zero_hours','service_change'])
+        self.assertEqual({f['week'] for f in latest},{'2026-10-19'})
+        self.assertEqual((latest[0]['count'],latest[0]['streak'],latest[1]['hours']),(3,2,6.0))
+        # Claude Code's -90% is 5% of the week, under the floor, so the change named is Codex's.
+        self.assertEqual((latest[2]['route'],latest[2]['change_pct']),('codex',80.0))
+        self.assertEqual(listed[1]['facts'],[])
+
 
 if __name__=='__main__':unittest.main()

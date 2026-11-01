@@ -72,6 +72,13 @@ const estimateWith=(rows,rate)=>rows.reduce((s,r)=>{const basic=rate.cache_write
  return s+((r.uncached_input||0)*rate.input+(r.cached_input||0)*(rate.cached??rate.input)+(r.output||0)*rate.output
  +Math.max(0,(r.cache_creation||0)-five-hour)*basic+five*(rate.cache_write_5m??basic)+hour*(rate.cache_write_1h??basic))/1e6;},0);
 const pctChange=v=>v==null?'—':`${v>0?'+':''}${v.toFixed(0)}%`;
+// A stored week by its Monday: 지난주 when it is the last full KST week, else the day it began
+// (a report not built yet leaves an older week as the latest).
+function weekName(start,now=Date.now()/1000){
+ const monday=new Date(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul'}).format(new Date(now*1000))+'T00:00:00Z');
+ monday.setUTCDate(monday.getUTCDate()-(monday.getUTCDay()+6)%7-7);
+ return start===monday.toISOString().slice(0,10)?'지난주':`${Number(start.slice(5,7))}월 ${Number(start.slice(8,10))}일 주`;
+}
 // A period card's change against the window it is compared with (API `prior`, cut at the
 // same elapsed time): '직전 7일 같은 시점 대비 +12.3%', or a multiple from twice as much
 // ('3.2배', past a hundred '100배 이상'). A window older than the first record says so; a

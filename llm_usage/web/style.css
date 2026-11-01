@@ -609,6 +609,19 @@ details.source-group[open]>summary{margin-bottom:-8px}
 .week-delta{white-space:nowrap}
 .report-older{margin-top:10px;font-size:var(--fs-xs)}
 .report-older details{margin:6px 0 0 10px}
+/* A week's facts lead its report; breakdowns read as label and value lines. */
+.report-facts{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:6px}
+.report-facts li{display:flex;align-items:baseline;gap:8px;font-size:var(--fs-sm);line-height:1.5}
+.report-lines{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:baseline;gap:4px 14px;margin:10px 0 0;font-size:var(--fs-sm);line-height:1.5}
+.report-lines>div{display:contents}
+.report-lines dt{font-size:var(--fs-xs);color:var(--muted)}
+.report-lines dd{margin:0;overflow-wrap:anywhere}
+.this-week .report-lines{margin:0 0 6px}
+@media(max-width:600px){.report-lines{grid-template-columns:minmax(0,1fr);gap:0}.report-lines dd{margin-bottom:6px}}
+/* Quota windows with nothing to report stay in the table, hidden until the fold below opens. */
+.table-wrap:has(+.quota-quiet-toggle:not([open])) .quota-quiet{display:none}
+.quota-quiet-toggle{margin-top:4px;font-size:var(--fs-xs);color:var(--muted)}
+.quota-quiet-toggle>summary{width:max-content;cursor:pointer}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */
 .na-text{color:var(--muted);font-size:var(--fs-xs)}
 /* Overview: risk-ordered strip, recommended order and the reset axis. */
