@@ -612,6 +612,15 @@ details.source-group[open]>summary{margin-bottom:-8px}
 @media(max-width:600px){.report-table .col-req{display:none}.report-table td,.report-table th{padding:6px 5px}}
 /* Month by month: the ratios of several subscriptions wrap in their cell. */
 .month-trend td:last-child{white-space:normal;min-width:12em}
+/* In-cell bars share one 0-100 track per column; an empty slot keeps the numbers aligned. */
+.cell-bar{display:inline-block;position:relative;width:56px;height:6px;margin-right:8px;border-radius:3px;background:var(--line);vertical-align:middle;overflow:hidden}
+.cell-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--chart-0)}
+.cell-bar.partial i{opacity:.5}
+.cell-bar.none{visibility:hidden}
+.cell-num{display:inline-block;min-width:4.8em;text-align:right}
+/* On a phone the month table's bars sit above their numbers and the ratios wrap, so it fits. */
+@media(max-width:600px){.cell-bar{width:28px;margin-right:6px}.cell-num{min-width:0}
+ .month-trend .cell-bar{display:block;width:auto;margin:0 0 4px}.month-trend td:last-child{min-width:0}}
 .month-trend small{color:var(--muted)}
 .ratio-item{white-space:nowrap}
 #monthly>.sub-row:first-of-type{border-top:0}
@@ -663,7 +672,11 @@ details.source-group[open]>summary{margin-bottom:-8px}
 #filter-adv .presets{margin:0 0 16px}
 /* A phone's quarter-width cell has room for the name and count; the pressed style shows it is open. */
 @media(max-width:600px){.filter-more{min-height:36px;padding:4px}.filter-more:is([aria-expanded])::after{content:none}#filter-adv .filters{margin-top:-4px}}
-.value-bar{margin-bottom:16px}
+/* A value bar takes its own full line under the row's text, so every bar of a list starts at
+   the same edge; only the labelled one needs room for the scale under it. */
+.sub-row>.value-bar{flex:1 1 100%}
+@media(min-width:601px){.sub-row>span+strong{text-align:right}}
+.value-bar.labelled{margin-bottom:16px}
 .value-bar em{position:absolute;top:9px;transform:translateX(-50%);font-style:normal;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
 kbd{font:inherit;font-size:var(--fs-xs);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--surface)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}

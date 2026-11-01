@@ -267,6 +267,13 @@ with sync_playwright() as p:
     expect(monthly).to_contain_text('2026-09 · 09-01 ~ 09-30 · 5.2B 토큰 · 40,000회 요청 · 공개 단가 환산 $4,100')
     expect(monthly.locator(':scope > .sub-row')).to_have_count(3)
     expect(monthly.locator(':scope > .sub-row .value-bar')).to_have_count(2)
+    # The bars of one list start at the same edge on one scale; only the last carries its labels.
+    bars = monthly.locator(':scope > .sub-row .value-bar')
+    edges = bars.evaluate_all('els=>els.map(e=>{const r=e.getBoundingClientRect();return [Math.round(r.left),Math.round(r.width)];})')
+    assert len({tuple(e) for e in edges}) == 1, edges
+    expect(monthly.locator(':scope > .sub-row .value-bar.labelled')).to_have_count(1)
+    expect(bars.last).to_have_class('value-bar labelled')
+    expect(bars.first.locator('em')).to_have_count(0)
     codex = monthly.locator(':scope > .sub-row', has_text='OpenAI / Codex')
     expect(codex).to_contain_text('환산 $3,600 · 월 구독료 $200 · 4.5B 토큰')
     expect(codex).to_contain_text('18.0배')
@@ -280,12 +287,21 @@ with sync_playwright() as p:
     expect(month_use.nth(1).locator('td').nth(2)).to_have_text('미관측')
     expect(month_use.nth(1).locator('td.col-req')).to_have_text('미관측')
     expect(month_use.first.locator('td').nth(2)).to_have_text('12.5시간')
+    # Beside the hours, a bar shows their share of the observed time; 미관측 has an empty slot.
+    zero_bar = month_use.first.locator('td').nth(2).locator('.cell-bar')
+    expect(zero_bar).to_have_attribute('role', 'img')
+    assert zero_bar.get_attribute('aria-label').startswith('관측 ') and zero_bar.get_attribute('aria-label').endswith('%')
+    expect(month_use.nth(1).locator('td').nth(2).locator('.cell-bar')).to_have_class('cell-bar none')
     expect(monthly).to_contain_text('‘미관측’은 관측 시간으로 셀 연속 측정이 없었다는 뜻입니다.')
     expect(reports).not_to_contain_text('‘미관측’은 관측 시간으로')
     trend = monthly.locator('.month-trend tbody tr')
     expect(trend).to_have_count(2)
     expect(trend.first).to_contain_text('Claude 5.0배 · Codex 18.0배')
     expect(trend.nth(1)).to_contain_text('2026-08 부분')
+    # Tokens and value each get a bar on their own scale; a partial month's are lighter.
+    expect(trend.first.locator('.cell-bar:not(.none)')).to_have_count(2)
+    expect(trend.first.locator('.cell-bar.partial')).to_have_count(0)
+    expect(trend.nth(1).locator('.cell-bar').first).to_have_class('cell-bar partial')
     older = monthly.locator('.report-older')
     expect(older.locator(':scope > summary')).to_have_text('이전 결산 1개')
     older.locator(':scope > summary').click()
@@ -352,7 +368,8 @@ with sync_playwright() as p:
     table = mobile.locator('#reports .report-table').first
     assert table.locator('tbody td').first.inner_text() == 'Codex', table.locator('tbody td').first.inner_text()
     expect(table.locator('th.col-req')).to_be_hidden()
-    assert mobile.evaluate("[...document.querySelectorAll('#reports .table-wrap')].every(w=>w.scrollWidth<=w.clientWidth)")
+    wraps = mobile.evaluate("[...document.querySelectorAll('#reports .table-wrap, #monthly .table-wrap')].map(w=>[!!w.closest('#monthly'),w.scrollWidth,w.clientWidth])")
+    assert any(m and c > 0 for m, _, c in wraps) and all(s <= c for _, s, c in wraps), wraps
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
     mobile.screenshot(path=str(output/'features-mobile.png'), full_page=True)
     assert not [p for p in posts if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')], posts
