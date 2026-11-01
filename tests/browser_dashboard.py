@@ -1,5 +1,5 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory, show_filter_details
 import argparse
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -74,16 +74,25 @@ with sync_playwright() as playwright:
     loaded(page)
     page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#group')).to_have_value('route')
-    # The scope picker is width-capped so it stays on the filter row (L5).
-    scope_box=page.locator('#scope').bounding_box();metric_box=page.locator('#metric').bounding_box()
-    assert abs(scope_box['y']-metric_box['y'])<2,(scope_box,metric_box)
+    # The scope picker is width-capped so it stays on the 세부 설정 row (L5).
+    show_filter_details(page)
+    scope_box=page.locator('#scope').bounding_box();grain_box=page.locator('#granularity').bounding_box()
+    assert abs(scope_box['y']-grain_box['y'])<2,(scope_box,grain_box)
     expect(page.locator('#usage-gaps')).to_contain_text('Antigravity · 토큰 상세 미수집')
     expect(page.locator('#legend .unavailable-series')).to_contain_text('Antigravity')
     expect(page.get_by_role('heading',name='모델별 사용량 상세',exact=True)).to_be_visible()
-    expect(page.locator('#rows tr').filter(has_text='model-OpenAI').locator('td').nth(8)).to_have_text('1,339')  # 100+200+40 plus cache creation 999
+    # Short numbers by default, the exact value in each cell's tooltip; the toggle keeps exact ones.
+    total_cell=page.locator('#rows tr').filter(has_text='model-OpenAI').locator('td').nth(8)
+    expect(total_cell).to_have_text('1.34K')
+    expect(total_cell.locator('[data-tip]')).to_have_attribute('data-tip','1,339')  # 100+200+40 plus cache creation 999
     expect(page.locator('#rows tr').filter(has_text='model-OpenAI').locator('td').nth(10)).to_have_text('999')
-    expect(page.locator('#total-row tr').first.locator('td').nth(6)).to_have_text('33,475')  # 8,500 plus cache creation 24,975
-    expect(page.locator('#total-row tr').nth(1).locator('td').nth(6)).to_have_text('66,950')
+    page.locator('#num-compact').click()
+    expect(total_cell).to_have_text('1,339')
+    expect(page.locator('#num-compact')).to_have_attribute('aria-pressed','false')
+    page.locator('#num-compact').click()
+    expect(total_cell).to_have_text('1.34K')
+    expect(page.locator('#total-row tr').first.locator('td').nth(6).locator('[data-tip]')).to_have_attribute('data-tip','33,475')  # 8,500 plus cache creation 24,975
+    expect(page.locator('#total-row tr').nth(1).locator('td').nth(6).locator('[data-tip]')).to_have_attribute('data-tip','66,950')
     assert page.locator('.donut-key > div').evaluate_all('(rows)=>rows.map(r=>r.dataset.token)') == ['cache_creation','cached_input','uncached_input','output']
     original_input_color=page.locator('[data-token="uncached_input"] circle').get_attribute('fill')
     # Period changes can change the ordering; token colors remain tied to the token type.
@@ -96,7 +105,7 @@ with sync_playwright() as playwright:
     expect(page.locator('#donut-nocache')).to_have_attribute('aria-pressed','true')
     assert '차트 제외' in page.locator('.donut-key').inner_text()
     assert 'excluded' in page.locator('.donut-key [data-token="cached_input"]').get_attribute('class')
-    expect(page.locator('#composition .donut')).to_contain_text('캐시 읽기 제외')
+    expect(page.locator('#composition .donut-center')).to_contain_text('캐시 읽기 제외')
     page.locator('#donut-nocache').click()
     expect(page.locator('#donut-nocache')).to_have_attribute('aria-pressed','false')
     assert page.locator('.donut-key > div').evaluate_all('(rows)=>rows.map(r=>r.dataset.token)') == ['cache_creation','cached_input','uncached_input','output']
@@ -110,9 +119,12 @@ with sync_playwright() as playwright:
     expect(tip.locator('.tooltip-heading')).to_contain_text('2026-09-07')
     expect(tip.locator('.tooltip-row:not(.tooltip-missing)')).to_have_count(5)
     expect(tip.locator('.tooltip-missing strong')).to_have_text('—')
-    for i,label in enumerate(labels):
+    # Rows follow the legend, which runs in color-slot order rather than the API's.
+    order=page.locator('#legend [data-label]').evaluate_all('els=>els.map(e=>e.dataset.label)')
+    assert sorted(order)==sorted(labels) and order!=labels,order
+    for i,label in enumerate(order):
         row=tip.locator('.tooltip-row:not(.tooltip-missing)').nth(i);expect(row).to_contain_text(label)
-        expect(row.locator('strong')).to_have_text(f'{1339*i:,}')
+        expect(row.locator('strong')).to_have_text(f'{1339*labels.index(label):,}')
     hover_date(page,1);expect(tip.locator('.tooltip-heading')).to_contain_text('2026-09-08')
     expect(tip.locator('.tooltip-total strong')).to_have_text('20,085')
     hover_date(page,2)
@@ -132,9 +144,13 @@ with sync_playwright() as playwright:
     # Default Total descending with consecutive row numbers; every data column toggles.
     def numeric_values(key):
         index={'uncached_input':5,'cached_input':6,'output':7,'total':8,'cache_creation':10,'reasoning':11}[key]
-        return page.locator('#rows tr').evaluate_all('(rows,index)=>rows.map(r=>Number(r.children[index].textContent.replaceAll(",","")))',index)
+        # Exact values: a short number keeps its own in the tooltip.
+        return page.locator('#rows tr').evaluate_all('(rows,index)=>rows.map(r=>{const c=r.children[index],tip=c.querySelector(":scope>[data-tip]:not(.na-text)");return Number((tip?tip.dataset.tip:c.textContent).replaceAll(",",""))})',index)
     assert numeric_values('total') == sorted(numeric_values('total'),reverse=True)
     assert page.locator('#rows .row-rank').all_text_contents()==['1','2','3','4','5']
+    # The token breakdown starts folded; 상세 열 reveals its sortable headers.
+    expect(page.locator('[data-sort="output"]')).to_be_hidden()
+    page.locator('#cols-toggle').click()
     for key in ('uncached_input','cached_input','output','cache_creation','reasoning','total'):
         button=page.locator('[data-sort="'+key+'"]');button.click()
         values=numeric_values(key)
@@ -187,7 +203,8 @@ with sync_playwright() as playwright:
     assert quota.locator('.quota-window-title').all_text_contents()==['5시간','주간']
     assert quota.locator('.bucket-label').all_text_contents()==['Gemini','3rd party','Gemini','3rd party']
     assert all('42%' in value for value in quota.locator('.remaining').all_text_contents())
-    # Themes affect chart palettes and all surfaces, not only the page background.
+    # Themes change every surface. Series and token colors only differ between the light
+    # themes and the two dark ones, so a service keeps its color when the theme changes.
     themes=['forest','paper','charcoal','midnight','blue','violet','rose','amber','ocean']
     backgrounds=set();palettes=set()
     page.locator('#settings-open').click()  # the theme picker is the first block of the settings view
@@ -195,10 +212,11 @@ with sync_playwright() as playwright:
         page.locator('#theme').select_option(theme)
         expect(page.locator('html')).to_have_attribute('data-theme',theme)
         backgrounds.add(page.evaluate('getComputedStyle(document.documentElement).backgroundColor'))
-        palettes.add(page.locator('[data-token="uncached_input"] circle').get_attribute('fill'))
+        palettes.add((theme in ('charcoal','midnight'),page.locator('[data-token="uncached_input"] circle').get_attribute('fill'),
+                      page.locator('#legend [data-label]').first.evaluate('e=>e.style.getPropertyValue("--color")')))
         assert page.evaluate("localStorage.getItem('llm-usage-theme')") == theme
         assert not page.locator('#error').is_visible()
-    assert len(backgrounds)==9 and len(palettes)==9
+    assert len(backgrounds)==9 and len(palettes)==2 and {dark for dark,*_ in palettes}=={False,True},palettes
     # The browser theme-color follows the active theme, on change and at load (T4).
     page.locator('#theme').select_option('midnight')
     assert page.evaluate("document.querySelector('meta[name=theme-color]').content")=='#10182d'

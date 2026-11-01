@@ -70,18 +70,23 @@ function renderScope(data){
  if(scope)chip.textContent=scopeText(scope)+' ×';
 }
 // Earlier releases used other tab names; saved views and bookmarked URLs still resolve.
-const VIEW_ALIASES={plan:'quota',overview:'quota',analysis:'usage',insights:'reports',sources:'status'};
+const VIEW_ALIASES={plan:'quota',analysis:'usage',insights:'reports',sources:'status'};
 // Panels fed by the lazily fetched insights section.
 const INSIGHT_VIEWS=['usage','reports','status'];
-let currentView='quota',previousView='quota';
+let currentView='overview',lastTab='overview';
 const viewEls=[...document.querySelectorAll('main>[data-view]')];
-function setView(name,sync=true){
+// Settings and 진단 (view 'status', opened from the header's data status) are pages, not
+// tabs. A page returns to the view it was opened from (settings opened from 진단 returns
+// to 진단), and the last tab stays reachable by Tab.
+const PAGE_VIEWS=['settings','status'],openedFrom={};
+function setView(name,sync=true,back=false){
  name=VIEW_ALIASES[name]||name;
- const next=viewEls.some(e=>e.dataset.view===name)?name:'quota';
- // Settings is not a tab: remember where to return, and keep the last tab reachable by Tab.
- if(next==='settings'&&currentView!=='settings')previousView=currentView;
+ const next=viewEls.some(e=>e.dataset.view===name)?name:'overview';
+ // Reopening a page from the page it opened does not make the two return to each other.
+ if(PAGE_VIEWS.includes(next)&&next!==currentView&&!back&&openedFrom[currentView]!==next)openedFrom[next]=currentView;
  currentView=next;
- const focusable=currentView==='settings'?previousView:currentView;
+ if(!PAGE_VIEWS.includes(next))lastTab=next;
+ const focusable=lastTab;
  viewEls.forEach(e=>{e.hidden=e.dataset.view!==currentView;});
  document.querySelectorAll('#tabs [data-view]').forEach(b=>{const on=b.dataset.view===currentView;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=b.dataset.view===focusable?0:-1;});
  document.body.dataset.view=currentView;
@@ -90,6 +95,7 @@ function setView(name,sync=true){
  if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))loadInsights();
  if(currentView==='usage')setUsageView(usageView,false);
  if(currentView==='reports')loadReports();
+ if(currentView==='overview')loadOverview();
  // A hidden chart skipped its draw; render synchronously on tab switch so the
  // ResizeObserver sees the same width and does not queue a duplicate redraw.
  if(chartData&&$('chart').clientWidth)chart(chartData);
@@ -101,8 +107,12 @@ $('tabs').addEventListener('click',event=>{
  const button=event.target.closest('button[data-view]');if(button)setView(button.dataset.view);
 });
 $('settings-open').addEventListener('click',()=>{setView('settings');$('settings-back').focus({preventScroll:true});});
-$('settings-back').addEventListener('click',()=>{setView(previousView);$('settings-open').focus({preventScroll:true});});
-$('first-use-sources').addEventListener('click',()=>{setView('status');$('tab-status').focus();});
+const leavePage=page=>setView(openedFrom[page]||lastTab,true,true);
+$('settings-back').addEventListener('click',()=>{leavePage('settings');$('settings-open').focus({preventScroll:true});});
+const openDiagnosis=()=>{setView('status');$('status-back').focus({preventScroll:true});};
+$('data-status').addEventListener('click',openDiagnosis);
+$('first-use-sources').addEventListener('click',openDiagnosis);
+$('status-back').addEventListener('click',()=>{leavePage('status');$('data-status').focus({preventScroll:true});});
 $('tabs').addEventListener('keydown',event=>{
  const tabs=[...$('tabs').querySelectorAll('button[data-view]')],i=tabs.indexOf(document.activeElement);
  if(i<0)return;
@@ -117,7 +127,7 @@ function syncUrl(push){
   const v=$(id).value;
   if(FILTER_DEFAULTS[id]===undefined||v!==FILTER_DEFAULTS[id])q.set(id,v);
  }
- if(currentView!=='quota')q.set('view',currentView);
+ if(currentView!=='overview')q.set('view',currentView);
  if(currentView==='usage'&&usageView!=='tokens')q.set('usage_view',usageView);
  const s=q.toString();
  history[push?'pushState':'replaceState'](null,'',location.pathname+(s?'?'+s:''));
@@ -149,13 +159,15 @@ window.addEventListener('popstate',()=>{
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  setUsageView(params.get('usage_view')||'tokens',false,false);
- setView(params.get('view')||'quota');saveDefaults();filterSummary();refresh();
+ setView(params.get('view')||'overview');saveDefaults();filterSummary();refresh();
 });
+// A row listed for a fixed span (개요's 30 days) opens over that span, so the number matches.
+const drillSpan=el=>el.dataset.period?{period:el.dataset.period,granularity:'day'}:{};
 document.addEventListener('click',event=>{
  const scope=event.target.closest('[data-scope]');
  // A button inside a drillable row (project 상세) acts on its own.
  if(scope&&event.target.closest('button')&&!event.target.closest('button[data-scope]'))return;
- if(scope){applyDrill({scope:scope.dataset.scope});return;}
+ if(scope){applyDrill({scope:scope.dataset.scope,...drillSpan(scope)});return;}
  const day=event.target.closest('[data-day]');
  if(day)applyDrill({period:'custom',start:day.dataset.day,end:day.dataset.day,granularity:'hour'});
 });
@@ -175,7 +187,7 @@ document.addEventListener('keydown',event=>{
  if(event.key!=='Enter'&&event.key!==' ')return;
  if(event.target.closest('button,input,select,textarea,a'))return;
  const scope=event.target.closest?.('[data-scope]');
- if(scope){event.preventDefault();applyDrill({scope:scope.dataset.scope});}
+ if(scope){event.preventDefault();applyDrill({scope:scope.dataset.scope,...drillSpan(scope)});}
 });
 const compactMedia=matchMedia('(max-width:600px)');
 const foldedPanels=[...document.querySelectorAll('details.mobile-fold')];
@@ -198,7 +210,16 @@ function filterSummary(){
  if($('compare').value)parts.push(short('compare')+' 비교');
  if($('cumulative').value!=='0')parts.push(short('cumulative'));
  el.textContent=parts.join(' · ');
+ // 세부 설정 counts what it holds away from the defaults, as the summary above names it.
+ const changed=['compare','cumulative','scope'].filter(id=>$(id).value!==FILTER_DEFAULTS[id]).length,count=$('filter-more-count');
+ count.hidden=!changed;count.textContent=changed||'';
+ $('filter-more').setAttribute('aria-label',changed?`세부 설정 · 기본값과 다른 설정 ${changed}개`:'세부 설정');
 }
+// 세부 설정: interval, comparison, chart form, scope and the quick picks, under the main row
+// and left open or closed as the owner last did on this device.
+function showFilterMore(open){$('filter-adv').hidden=!open;$('filter-more').setAttribute('aria-expanded',String(open));}
+showFilterMore(storage.get('llmFilterMore')==='1');
+$('filter-more').addEventListener('click',()=>{const open=$('filter-adv').hidden;showFilterMore(open);storage.set('llmFilterMore',open?'1':'0');});
 function compactPanels(){
  foldedPanels.forEach(panel=>{panel.open=compactMedia.matches?mobileOpen.get(panel):true;});
  filterOptions.forEach(({option,label})=>{if(!option.parentElement)return;option.textContent=compactMedia.matches?(shortOptions[option.parentElement.id]?.[option.value]||label):label;});
@@ -236,9 +257,11 @@ function renderUsage(data){
  const cost=data.cost&&(data.cost.period!=null||data.cost.lifetime!=null)?data.cost:null;
  $('cards').innerHTML=card('전체 토큰',compact(tokens),fmt(tokens),
    change(prior?.current_tokens??tokens,prior?total(prior):null)+`<small>선택 기간 · 전체 누계 ${compact(total(data.lifetime))}</small><small>${callText(data.totals)}</small>`)
-  +(cost?card('비용 추정',usd(cost.period),usd(cost.period),
+  // How much of the cost is priced is a note on the label; the card itself says only when
+  // part of the period could not be priced (as the 개요 tiles do).
+  +(cost?card('비용 추정'+infoTip(`공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.cache_estimated_tokens?` · 캐시 ${compact(cost.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}`),usd(cost.period),usd(cost.period),
    change(cost.period,prior?prior.cost??(total(prior)?null:0):null)
-   +`<small>공개 단가 환산 · 단가 확정 ${percent(cost.coverage)}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}${cost.cache_savings?` · 캐시 읽기 절감 ${usd(cost.cache_savings)}`:''}${cost.cache_estimated_tokens?` · 캐시 ${compact(cost.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</small>`):'')
+   +`<small>공개 단가 환산${cost.coverage!=null&&cost.coverage<99.5?' · 일부 미산정':''}${cost.lifetime!=null?' · 전체 누계 '+usd(cost.lifetime):''}</small>${cost.cache_savings?`<small>캐시 읽기 절감 ${usd(cost.cache_savings)}</small>`:''}`):'')
   +[['일반 입력','uncached_input'],['캐시 읽기','cached_input'],['출력','output']].map(([label,k])=>
    card(label,compact(data.totals[k]),fmt(data.totals[k]),`<small>선택 기간 · 전체 누계 ${compact(data.lifetime[k])}</small>`)).join('');
  renderModelTable(data);renderHeatmap(data.heatmap);
@@ -287,47 +310,60 @@ function renderReconciliation(r){
   +'<p>요청 수·평균·비용은 확인된 세부 기록 기준입니다. 계정 차이는 dot 확정 사용량이 아닙니다.</p></div></details>';
  if(focused)box.querySelector('summary').focus({preventScroll:true});
 }
-// Collection status, problems first: failures and values to check as cards; what is not
-// collected now (미제공·미사용) stays listed in a neutral color, never folded away; the
-// normal sources fold by provider. Fold states survive the periodic refresh.
-const SOURCE_BUCKETS={error:'bad',partial:'warn',stale:'warn',unavailable:'na',idle:'idle',ended:'idle'};
+// 진단 lists the sources by what they ask of the owner, with the rule the header badge uses
+// (sourceProblems): 조치 필요 and 일시 실패 as cards with their detail first. Sources only partly
+// confirmed or observed long ago, and those not collected now (미제공·미사용·구독 없음), are
+// one-line rows that stay listed: a state that is not received is never hidden. Normal
+// sources fold by provider. A group explains each status once, not once per source.
+// Fold states survive the periodic refresh.
+const ACTION_HINTS={error:'수집하지 못했습니다. 상세 문구의 원인을 확인하세요.',stale:'수집 주기가 지나도 갱신되지 않았습니다. 수집기와 경로를 확인하세요.',
+ unavailable:'실행 기록이 없습니다. 수집기를 시작하세요.'};
+const RETRY_HINTS={error:'다음 수집 주기에 다시 시도합니다. 30분 동안 성공하지 못하면 조치 필요로 옮깁니다.',stale:'수집기가 멈춰 갱신되지 않았습니다. 수집기가 다시 돌면 함께 갱신됩니다.'};
+const PARTLY_HINTS={partial:'일부 기록을 읽지 못했거나 확인하지 못했습니다. 개수는 각 줄에 있습니다.'};
 function renderSources(list){
  const box=$('sources'),opened=new Set([...box.querySelectorAll('details[open]')].map(el=>el.dataset.fold));
- const bucket=s=>SOURCE_BUCKETS[s.status]||'ok';
  const order=(a,b)=>(SOURCE_RANK[a.status]??4)-(SOURCE_RANK[b.status]??4)||a.name.localeCompare(b.name);
- const counts={bad:0,warn:0,na:0,idle:0,ok:0};list.forEach(s=>counts[bucket(s)]++);
- const action=list.filter(s=>['bad','warn'].includes(bucket(s))).sort(order);
- const quiet=list.filter(s=>['na','idle'].includes(bucket(s))).sort(order);
+ const {action,retry}=sourceProblems(list,Date.now()/1000),flagged=new Set([...action,...retry]);
+ const rest=list.filter(s=>!flagged.has(s));
+ const partly=rest.filter(s=>s.status==='partial'||s.status==='stale').sort(order);
+ const off=rest.filter(s=>['unavailable','idle','ended'].includes(s.status)).sort(order);
+ const normal=rest.filter(s=>!partly.includes(s)&&!off.includes(s));
  const groups=new Map();
- for(const s of list.filter(s=>bucket(s)==='ok').sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
+ for(const s of normal.sort(order))(groups.get(sourceGroup(s.name))||groups.set(sourceGroup(s.name),[]).get(sourceGroup(s.name))).push(s);
  const ordered=[...groups.entries()].sort((a,b)=>(a[0]==='내부 작업')-(b[0]==='내부 작업'));
  const time=s=>`<small>${s.checked?when(s.checked):'확인 기록 없음'}</small>`;
- const card=s=>`<div class="source src-${bucket(s)}"><p class="source-line"><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}${bucket(s)!=='ok'&&SOURCE_HINTS[s.status]?`<small class="source-hint">${esc(SOURCE_HINTS[s.status])}</small>`:''}</div>`;
+ const label=s=>`<strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}`;
+ const card=(s,kind)=>`<div class="source src-${kind}"><p class="source-line"><span>${label(s)}</span>${time(s)}</p>${s.detail?`<small class="source-detail">${esc(s.detail)}</small>`:''}</div>`;
+ const row=s=>`<li><span>${label(s)}</span><span class="source-detail">${esc(s.detail||'')}</span>${time(s)}</li>`;
+ const hints=(items,texts)=>`<p class="source-hint">${[...new Set(items.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${texts[st]||SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`;
+ const section=(cls,title,items,body)=>`<section class="source-group ${cls}"><h4>${title} <small>${items.length}개</small></h4>${body}</section>`;
  const fold=(key,summary,body)=>`<details class="source-group" data-fold="${key}"${opened.has(key)?' open':''}><summary>${summary}</summary>${body}</details>`;
- const tally=(name,key)=>`<span class="${counts[key]?key:''}">${name} <strong>${counts[key]}</strong></span>`;
- box.innerHTML=`<div class="source-summary">${tally('실패','bad')}${tally('확인 필요','warn')}${tally('미제공','na')}${tally('미사용','idle')}${tally('정상','ok')}</div>`
-  +(action.length?`<section class="source-group source-action"><h4>조치 필요 <small>${action.length}개</small></h4><div class="source-list">${action.map(card).join('')}</div></section>`
+ const tally=(name,n,cls)=>`<span class="${n?cls:''}">${name} <strong>${n}</strong></span>`;
+ box.innerHTML=`<div class="source-summary">${tally('조치 필요',action.length,'bad')}${tally('일시 실패',retry.length,'warn')}${tally('일부만 확인',partly.length,'na')}${tally('수집하지 않음',off.length,'idle')}${tally('정상',normal.length,'ok')}</div>`
+  +(action.length?section('source-action','조치 필요',action,hints(action,ACTION_HINTS)+`<div class="source-list">${action.sort(order).map(s=>card(s,'bad')).join('')}</div>`)
    :'<p class="source-clear">조치가 필요한 수집원이 없습니다.</p>')
-  +(quiet.length?`<section class="source-group source-quiet"><h4>지금 수집하지 않는 경로 <small>${quiet.length}개</small></h4>`
-   +`<p class="source-hint">${[...new Set(quiet.map(s=>s.status))].map(st=>esc(`${statuses[st]||st}: ${SOURCE_HINTS[st]||''}`)).join('<br>')}</p>`
-   +`<ul class="source-rows">${quiet.map(s=>`<li><span><strong>${esc(sourceName(s.name))}</strong> · ${esc(statuses[s.status]||s.status)}</span>${s.detail?`<span class="source-detail">${esc(s.detail)}</span>`:''}${time(s)}</li>`).join('')}</ul></section>`:'')
-  +(counts.ok?fold('ok',`정상 ${counts.ok}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
+  +(retry.length?section('source-retry','일시 실패',retry,hints(retry,RETRY_HINTS)+`<div class="source-list">${retry.sort(order).map(s=>card(s,'warn')).join('')}</div>`):'')
+  +(partly.length?section('source-partly','일부만 확인',partly,hints(partly,PARTLY_HINTS)+`<ul class="source-rows">${partly.map(row).join('')}</ul>`):'')
+  +(off.length?section('source-quiet','지금 수집하지 않는 경로',off,hints(off,{})+`<ul class="source-rows">${off.map(row).join('')}</ul>`):'')
+  +(normal.length?fold('ok',`정상 ${normal.length}개 <small>${ordered.map(([name,items])=>esc(name)+' '+items.length).join(' · ')}</small>`,
    ordered.map(([name,items])=>name==='내부 작업'
-    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(card).join('')}</div>`)
-    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(card).join('')}</div></section>`).join('')):'');
+    ?fold('internal',`${esc(name)} <small>${items.length}개 · 보정·백필 작업</small>`,`<div class="source-list">${items.map(s=>card(s,'ok')).join('')}</div>`)
+    :`<section class="source-group"><h4>${esc(name)}</h4><div class="source-list">${items.map(s=>card(s,'ok')).join('')}</div></section>`).join('')):'');
 }
 let modelFilter='';
 $('model-search').addEventListener('input',event=>{modelFilter=event.target.value.trim().toLowerCase();if(lastUsage)renderModelTable(lastUsage);});
 // 상세 열 toggles share one behaviour across the model, project and session
-// tables: flip .show-detail on the table and mirror it to aria-pressed.
-function bindColsToggle(button,table){
+// tables: flip .show-detail on the table and mirror it to aria-pressed. The model
+// table's choice is kept on this device, as its breakdown is hidden on every width.
+function bindColsToggle(button,table,key){
+ const apply=on=>{table.classList.toggle('show-detail',on);button.setAttribute('aria-pressed',String(on));button.classList.toggle('on',on);};
+ if(key)apply(storage.get(key)==='1');
  button.addEventListener('click',()=>{
-  const on=table.classList.toggle('show-detail');
-  button.setAttribute('aria-pressed',String(on));
-  button.classList.toggle('on',on);
+  const on=!table.classList.contains('show-detail');
+  apply(on);if(key)storage.set(key,on?'1':'0');
  });
 }
-bindColsToggle($('cols-toggle'),$('model-table'));
+bindColsToggle($('cols-toggle'),$('model-table'),'llmModelDetail');
 bindColsToggle($('proj-cols'),document.querySelector('[data-panel="projects"] table'));
 bindColsToggle($('sess-cols'),document.querySelector('[data-panel="sessions"] table'));
 function renderModelTable(data){
@@ -398,37 +434,42 @@ function chartSeries(data){
 // Stable label→palette index so a model keeps its color across period changes.
 // Active labels always get distinct indices; inactive owners are evicted. `fixed`
 // (groupSlots) gives services their own index; other labels take those indices only
-// when no other one is free.
+// when no other one is free. A chart with other kinds of labels keeps its own `store`.
+// `.order(list)` sorts labels by index with 기타 last: stacks, legends and tooltips
+// follow it, so neighboring series are the palette's checked adjacent pairs.
 const labelColorIndex=new Map();
-function paletteFor(labels,fixed={}){
+function paletteFor(labels,fixed={},store=labelColorIndex){
  const actives=[...new Set(labels.filter(l=>l!=='기타'))];
  const seen=new Map();
- for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){labelColorIndex.set(l,fixed[l]);seen.set(fixed[l],l);}
+ for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){store.set(l,fixed[l]);seen.set(fixed[l],l);}
  for(const l of actives){
-  if(seen.get(labelColorIndex.get(l))===l)continue;
-  const idx=labelColorIndex.get(l);
+  if(seen.get(store.get(l))===l)continue;
+  const idx=store.get(l);
   if(idx!=null&&!seen.has(idx)){seen.set(idx,l);continue;}
-  labelColorIndex.delete(l);
+  store.delete(l);
  }
  const reserved=new Set(Object.values(fixed)),free=[];
  for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i)&&!reserved.has(i))free.push(i);
  for(const i of [...reserved].sort((a,b)=>a-b))if(!seen.has(i))free.push(i);
  for(const l of actives){
-  if(labelColorIndex.has(l))continue;
+  if(store.has(l))continue;
   let idx;
   if(free.length)idx=free.shift();
   else{
-   const inactive=[...labelColorIndex.entries()].find(([k])=>!actives.includes(k));
+   const inactive=[...store.entries()].find(([k])=>!actives.includes(k));
    idx=inactive?inactive[1]:0;
-   if(inactive)labelColorIndex.delete(inactive[0]);
+   if(inactive)store.delete(inactive[0]);
   }
-  labelColorIndex.set(l,idx);seen.set(idx,l);
+  store.set(l,idx);seen.set(idx,l);
  }
- return label=>{
+ const color=label=>{
   if(label==='기타')return mutedColor;
-  const i=labelColorIndex.get(label)??0;
+  const i=store.get(label)??0;
   return colors[i]||`hsl(${(i*137.508)%360} 60% 48%)`;
  };
+ const slot=label=>label==='기타'?Infinity:store.get(label)??Infinity;
+ color.order=list=>[...list].sort((a,b)=>(slot(a)-slot(b))||0);
+ return color;
 }
 $('chart-by-model').addEventListener('click',()=>applyDrill({group:'model'}));
 // What-if: the period's tokens at another model's current list rate (rates load once).

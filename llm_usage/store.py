@@ -24,6 +24,9 @@ SERIES_KEYS = (*METRICS, 'requests', 'cost', 'unpriced')
 HISTORY_FIELDS = ('checked', 'remaining', 'resets', 'break_before', 'break_reason')
 # Sources fed by a terminal status line rather than by polling.
 STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
+# A month's end is extrapolated from its days so far only from this day of the month on:
+# a few days scaled to a whole month are noise. Before it there is no estimate at all.
+PROJECTION_FROM_DAY = 7
 ONE_TIME_SOURCES = {'session-backfill'}
 # Source detail written while a subscription is marked ended in the settings.
 USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
@@ -676,8 +679,9 @@ class Store:
                 if by_route:
                     month_total=sum(by_route.values());elapsed=max(1,midnight.day)
                     month=dict(days_elapsed=elapsed,days_in_month=days_in_month,
-                               cost_by_route={r:round(v,4) for r,v in sorted(by_route.items())},
-                               total=round(month_total,4),projected=round(month_total/elapsed*days_in_month,4))
+                               cost_by_route={r:round(v,4) for r,v in sorted(by_route.items())},total=round(month_total,4),
+                               projected=round(month_total/elapsed*days_in_month,4) if elapsed>=PROJECTION_FROM_DAY else None,
+                               projected_from_day=PROJECTION_FROM_DAY)
             cal={}
             for r in c.execute("SELECT date(ts,'unixepoch','+9 hours') AS day,model,"+sums+','+self.rcount+
                                ' FROM '+self.table+' WHERE ts>=?'+scope_sql+' GROUP BY day,model',
@@ -751,7 +755,7 @@ class Store:
             cache=self._usage_cache;cache[key]=body
             while len(cache)>12:cache.popitem(last=False)
 
-    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None, price_history=None):
+    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None, price_history=None, origins=True):
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all','core','insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql,scope_args='',()
@@ -769,7 +773,10 @@ class Store:
         midnight = now.replace(hour=0,minute=0,second=0,microsecond=0)
         sums=','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
         count='COALESCE(SUM(requests),0) AS requests'
-        with self.connect() as c:
+        from .reconciliation import held
+        # One read snapshot: the body, the overlay and the month all take the supplements
+        # worked out once in it (or in an enclosing block's).
+        with held(),self.connect() as c:
             c.execute('BEGIN')
             lifetime=dict(c.execute('SELECT '+sums+','+self.rcount+' FROM '+self.table+' WHERE 1=1'+scope_sql,scope_args).fetchone())
             collected_at=self.state(c,'last_local')
@@ -790,7 +797,10 @@ class Store:
                 if len(body['series'])<=5000:self._usage_put(key,body)
             body={**body,'prior':self._prior(c,body,period,compare,now,pricing,scope_sql,scope_args,sums,count) if sections!='insights' else None}
             from .reconciliation import apply as reconcile_usage
-            body=reconcile_usage(c,body,group,cumulative,scope,pricing=pricing,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
+            # `origins`: the usage tab's split of the records by origin. A caller that only
+            # takes figures from the response (the overview, reports) leaves it out.
+            body=reconcile_usage(c,body,group,cumulative,scope,pricing=pricing,calendar_start=(midnight-timedelta(days=181)).date().isoformat(),
+                                 origins=origins)
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .claude_accounts import describe
             claude=describe(c,names)
@@ -893,16 +903,17 @@ class Store:
                 session['last_ts']=max(session['last_ts'],e['end'])
         sessions=sorted(sessions,key=lambda r:(-r['tokens'],r['session']))[:10]
         elapsed=now.day;days_in_month=((month_start.replace(day=28)+timedelta(days=4)).replace(day=1)-month_start).days
-        cost=month['cost'] if month['priced'] else None
+        cost=month['cost'] if month['priced'] else None;early=elapsed<PROJECTION_FROM_DAY
         projection=dict(month=month_start.strftime('%Y-%m'),days_elapsed=elapsed,days_in_month=days_in_month,
                         tokens=month['tokens'],cost=round(cost,4) if cost is not None else None,
-                        projected_tokens=month['tokens']/elapsed*days_in_month,
-                        projected_cost=round(cost/elapsed*days_in_month,4) if cost is not None else None,
+                        projected_tokens=None if early else month['tokens']/elapsed*days_in_month,
+                        projected_cost=round(cost/elapsed*days_in_month,4) if cost is not None and not early else None,
+                        projected_from_day=PROJECTION_FROM_DAY,
                         priced_share=month['priced']/month['tokens']*100 if month['tokens'] else None)
         if budget:
             from .notify import budget_level
             _,projection['budget_ratio']=budget_level(dict(tokens=month['tokens'],cost=cost),budget)
-            _,projection['projected_budget_ratio']=budget_level(dict(tokens=projection['projected_tokens'],cost=projection['projected_cost']),budget)
+            projection['projected_budget_ratio']=None if early else budget_level(dict(tokens=projection['projected_tokens'],cost=projection['projected_cost']),budget)[1]
             projection['budget']=budget
         for m in models.values():m['cost']=round(m['cost'],4) if m['cost'] is not None else None
         return dict(project=project,days=days,start=start.strftime('%Y-%m-%d'),unallocated_intervals=unallocated,
