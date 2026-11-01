@@ -73,15 +73,20 @@ function renderScope(data){
 const VIEW_ALIASES={plan:'quota',analysis:'usage',insights:'reports',sources:'status'};
 // Panels fed by the lazily fetched insights section.
 const INSIGHT_VIEWS=['usage','reports','status'];
-let currentView='overview',previousView='overview';
+let currentView='overview',lastTab='overview';
 const viewEls=[...document.querySelectorAll('main>[data-view]')];
-function setView(name,sync=true){
+// Settings and 진단 (view 'status', opened from the header's data status) are pages, not
+// tabs. A page returns to the view it was opened from (settings opened from 진단 returns
+// to 진단), and the last tab stays reachable by Tab.
+const PAGE_VIEWS=['settings','status'],openedFrom={};
+function setView(name,sync=true,back=false){
  name=VIEW_ALIASES[name]||name;
  const next=viewEls.some(e=>e.dataset.view===name)?name:'overview';
- // Settings is not a tab: remember where to return, and keep the last tab reachable by Tab.
- if(next==='settings'&&currentView!=='settings')previousView=currentView;
+ // Reopening a page from the page it opened does not make the two return to each other.
+ if(PAGE_VIEWS.includes(next)&&next!==currentView&&!back&&openedFrom[currentView]!==next)openedFrom[next]=currentView;
  currentView=next;
- const focusable=currentView==='settings'?previousView:currentView;
+ if(!PAGE_VIEWS.includes(next))lastTab=next;
+ const focusable=lastTab;
  viewEls.forEach(e=>{e.hidden=e.dataset.view!==currentView;});
  document.querySelectorAll('#tabs [data-view]').forEach(b=>{const on=b.dataset.view===currentView;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=b.dataset.view===focusable?0:-1;});
  document.body.dataset.view=currentView;
@@ -102,8 +107,12 @@ $('tabs').addEventListener('click',event=>{
  const button=event.target.closest('button[data-view]');if(button)setView(button.dataset.view);
 });
 $('settings-open').addEventListener('click',()=>{setView('settings');$('settings-back').focus({preventScroll:true});});
-$('settings-back').addEventListener('click',()=>{setView(previousView);$('settings-open').focus({preventScroll:true});});
-$('first-use-sources').addEventListener('click',()=>{setView('status');$('tab-status').focus();});
+const leavePage=page=>setView(openedFrom[page]||lastTab,true,true);
+$('settings-back').addEventListener('click',()=>{leavePage('settings');$('settings-open').focus({preventScroll:true});});
+const openDiagnosis=()=>{setView('status');$('status-back').focus({preventScroll:true});};
+$('data-status').addEventListener('click',openDiagnosis);
+$('first-use-sources').addEventListener('click',openDiagnosis);
+$('status-back').addEventListener('click',()=>{leavePage('status');$('data-status').focus({preventScroll:true});});
 $('tabs').addEventListener('keydown',event=>{
  const tabs=[...$('tabs').querySelectorAll('button[data-view]')],i=tabs.indexOf(document.activeElement);
  if(i<0)return;

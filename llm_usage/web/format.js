@@ -206,6 +206,25 @@ const SOURCE_HINTS={error:'수집에 실패했습니다. 다음 주기에 다시
  stale:'최근 관측이 없습니다. 해당 도구를 쓰거나 다음 수집 주기에 갱신됩니다.',
  idle:'이 경로는 지금 쓰이지 않습니다. 다른 경로가 값을 대신 채웁니다.',ended:'구독이 없어 수집을 멈췄습니다.'};
 const sourceGroup=name=>(SOURCE_GROUPS.find(([,re])=>re.test(name))||['기타'])[0];
+// What the collection sources ask of the owner. The header badge and the 진단 groups both
+// read this, so they never disagree (external notifications use the same 30 minutes):
+// - action: an operations job (collector, backup, verification) stale or failing, a source
+//   with no success for 30 minutes, an actively collected source left behind.
+// - retry: a failed poll the next cycle usually repairs; while the collector is down, the
+//   actively collected sources that age with it (the collector row says why).
+// Partial, unavailable, unused and passively observed sources are states, not problems.
+const OPS_SOURCES=['수집기','일일 백업','원본 대조'];
+const activeSource=s=>{const base=sourceBase(s.name);return base.endsWith('-records')||base.endsWith('-oauth')||base.startsWith('WSL ')||base.startsWith('Windows ');};
+function sourceProblems(sources,now){
+ const list=sources||[],collector=list.find(s=>s.name==='수집기');
+ const collectorDown=!!collector&&collector.status!=='ok',action=[],retry=[];
+ for(const s of list){
+  if(OPS_SOURCES.includes(s.name)){if(s.status==='stale'||s.status==='error'||s===collector&&collectorDown)action.push(s);}
+  else if(s.status==='error')(!s.last_success||now-s.last_success>=1800?action:retry).push(s);
+  else if(s.status==='stale'&&activeSource(s))(collectorDown?retry:action).push(s);
+ }
+ return {action,retry,collectorDown};
+}
 // Round tick step (1/2/2.5/5×10^n) so y labels stay readable numbers.
 function niceStep(max){
  const rough=Math.max(max,1)/4,mag=Math.pow(10,Math.floor(Math.log10(rough)));

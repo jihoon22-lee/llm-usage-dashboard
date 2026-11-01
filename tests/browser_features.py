@@ -137,7 +137,7 @@ with sync_playwright() as p:
     expect(alerts).to_contain_text('fixture-project 월 예산 90%')
     # Sources: failures and values to check first with a hint, what is not collected
     # listed in a neutral color, normal sources (internal work inside) folded.
-    page.locator('#tabs [data-view="status"]').click()
+    page.locator('#data-status').click()
     expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
     assert page.locator('.source-summary > span').all_text_contents()==['실패 1','확인 필요 1','미제공 0','미사용 1','정상 3']
     action = page.locator('#sources .source-action')

@@ -167,7 +167,7 @@ with sync_playwright() as p:
     expect(page.locator('#reports')).to_contain_text('Codex 자동 리뷰')
     expect(page.locator('#reports')).to_contain_text('계정 일별 합계가 주 안에 온전히 든 6일 기준')
     expect(page.locator('#reports .report-head').first).to_be_visible()
-    page.locator('#tab-status').click()
+    page.locator('#data-status').click()
     expect(page.locator('#account-gap summary')).to_contain_text('Codex 계정 합계 대비 자동 리뷰')
     expect(page.locator('#account-gap th').last).to_have_text('자동 리뷰')
     # Mobile: the residual rows and line fit without page overflow.

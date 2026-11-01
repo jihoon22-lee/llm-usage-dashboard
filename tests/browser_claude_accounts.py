@@ -102,8 +102,12 @@ with sync_playwright() as p:
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')
     expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0% · 다른 계정 Claude(Max 5x) 5시간 92.0%')
-    expect(page.locator('#alerts')).to_contain_text('claude-credits · Max 5x 수집 실패')
-    expect(page.locator('#alerts')).to_contain_text('claude-oauth · Max 5x 수집 지연')
+    # Collection problems are counted by the header's data status, not added as chips: the
+    # lasting credits failure and the late Max OAuth read need a look; the resets failure,
+    # 100 seconds after a success, waits for the next cycle.
+    expect(page.locator('#data-status')).to_have_attribute('data-level','critical')
+    expect(page.locator('#data-status')).to_have_text('조치 필요 2')
+    expect(page.locator('#alerts')).not_to_contain_text('claude-credits')
     expect(page.locator('#alerts')).not_to_contain_text('claude-resets')
     # The ended Devin subscription folds with its reason and leaves the reset timeline.
     expect(page.locator('#reset-timeline')).not_to_contain_text('Devin')
@@ -133,8 +137,8 @@ with sync_playwright() as p:
     expect(subvalue).to_contain_text('Anthropic / Claude Code · Pro')
     expect(subvalue.locator('.sub-row', has_text='Max 5x')).to_contain_text('월 구독료 미설정')
     expect(subvalue).not_to_contain_text('Cognition / Devin')
-    # Status sources name their account.
-    page.locator('#tab-status').click()
+    # 진단 sources name their account.
+    page.locator('#data-status').click()
     expect(page.locator('#sources')).to_contain_text('claude-oauth · Max 5x')
     expect(page.locator('#sources')).to_contain_text('claude-resets · Max 5x')
     expect(page.locator('#sources')).to_contain_text('claude-accounts')

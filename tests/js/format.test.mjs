@@ -12,7 +12,7 @@ const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,tota
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
   familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange,
-  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups})`,
+  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -445,4 +445,28 @@ test('period cards name the compared window and refuse an incomplete one',()=>{
   // The reports tab names the earlier window itself (this week against last week).
   assert.equal(f.priorChange(prior,'',150,100,'지난주'),'지난주 같은 시점 대비 +50.0%');
   assert.equal(f.priorChange({...prior,complete:false},'',150,100,'지난주'),'지난주 같은 시점 기록 부족');
+});
+
+test('collection problems: what needs the owner, what retries, what is only a state',()=>{
+  const now=1e6,src=(name,status,extra={})=>({name,status,checked:now-60,...extra});
+  // Plain values: the helper's arrays come from the script's own realm.
+  const names=list=>[...list].map(s=>s.name),plain=p=>({action:names(p.action),retry:names(p.retry),collectorDown:p.collectorDown});
+  const healthy=[src('수집기','ok'),src('일일 백업','ok'),src('원본 대조','partial'),src('claude-details','partial'),
+    src('claude-code','unavailable'),src('antigravity-tokens','stale'),src('devin','ended'),src('claude-code:0123abcd4567','idle')];
+  // Permanently partial, unavailable, unused and passively observed sources are states, not problems.
+  assert.deepEqual(plain(f.sourceProblems(healthy,now)),{action:[],retry:[],collectorDown:false});
+  assert.deepEqual(plain(f.sourceProblems(undefined,now)),{action:[],retry:[],collectorDown:false});
+  // A failure turns into an action after 30 minutes without success (or with none ever).
+  const failing=[...healthy,src('codex','error',{last_success:now-600}),src('claude-oauth:0123abcd4567','error',{last_success:now-1800}),
+    src('claude-credits','error',{last_success:null}),src('WSL .claude/projects','stale'),src('일일 백업','error')];
+  const p=f.sourceProblems(failing,now);
+  assert.deepEqual(names(p.retry),['codex']);
+  assert.deepEqual(names(p.action),['claude-oauth:0123abcd4567','claude-credits','WSL .claude/projects','일일 백업']);
+  // A stopped collector is the action; the sources it left behind wait with the retries.
+  const down=f.sourceProblems([src('수집기','stale'),src('WSL .codex/sessions','stale'),src('devin-records','stale'),src('codex-responses','stale')],now);
+  assert.equal(down.collectorDown,true);
+  assert.deepEqual(names(down.action),['수집기']);
+  assert.deepEqual(names(down.retry),['WSL .codex/sessions','devin-records']);
+  // A collector that never ran is not a verdict of health either.
+  assert.deepEqual(names(f.sourceProblems([src('수집기','unavailable')],now).action),['수집기']);
 });

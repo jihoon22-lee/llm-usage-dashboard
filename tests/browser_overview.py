@@ -187,13 +187,13 @@ with sync_playwright() as p:
     page.close()
     context.close()
 
-    # Phones: rows stack, five tabs fit the bottom bar and nothing scrolls sideways.
+    # Phones: rows stack, four tabs fit the bottom bar and nothing scrolls sideways.
     context = browser.new_context(service_workers='block', viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
     page = open_page(context)
     page.goto(origin+'/'); loaded(page)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     tabs = page.locator('#tabs [role=tab]')
-    expect(tabs).to_have_count(5)
+    expect(tabs).to_have_count(4)
     assert page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].every(t=>t.scrollWidth<=t.clientWidth+1)")
     assert page.locator('#ov-chart svg').evaluate('s=>s.getBoundingClientRect().right<=innerWidth')
     page.screenshot(path=str(output/'overview-mobile.png'), full_page=True)

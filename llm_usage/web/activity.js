@@ -111,7 +111,7 @@ function renderConsumptionChart(data){
  const box=$('consumption-chart');if(!box.clientWidth)return;
  consumptionChartWidth=box.clientWidth;
  const rows=data.days||[],dimension=$('consumption-group').value;
- if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 상태 탭에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
+ if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 진단에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
  const palette=consumptionColors(rows,dimension);
  const swatch=fill=>`<svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2" fill="${fill}"/></svg>`;
  $('consumption-legend').innerHTML=palette.legend.map(label=>`<span class="consumption-key">${swatch(label==='기타'&&palette.folded?mutedColor:palette.color(label))}${esc(label)}</span>`).join('');
@@ -226,7 +226,7 @@ function renderActivity(data){
  const names={all:'일반 작업',archived:'보관 작업',code_review:'코드 리뷰',security_review:'보안 검토'};
  $('activity-coverage').innerHTML=Object.entries(data.coverage||{}).map(([key,c])=>`<p><strong>${esc(names[key]||key)}</strong> · ${c.complete?'전체 탐색 이력 있음':'페이지 수집 중 / 미수집'}${c.completed_at?' · 끝 페이지 확인 '+esc(when(c.completed_at))+' KST':''}${c.continuing?' · 추가 페이지 탐색 중':''}${c.oldest?' · 수집된 최초 생성 '+esc(when(c.oldest))+' KST':''}${c.checked?' · 목록 조회 '+esc(when(c.checked))+' KST':''}${c.error?' · 조회 실패 '+esc(c.error):''}</p>`).join('');
  for(const c of taskReads.values())c.abort();taskReads.clear();
- $('activity-rows').innerHTML=(data.items||[]).map(task=>`<tr><td class="activity-identity" data-label="작업">${taskIdentity(task)}</td><td data-label="종류">${esc(ACTIVITY_KINDS[task.kind]||'미분류')}</td><td data-label="생성 KST">${task.created?esc(when(task.created)):'시각 미확인'}</td><td data-label="실행 상태"><span class="execution-state ${esc(task.status)}">${esc(EXECUTION_NAMES[task.status]||'미확인')}</span></td><td data-label="소비 데이터">${taskConsumption(task)}</td><td class="activity-action"><button type="button" class="mini-btn" data-task-id="${task.id}" aria-expanded="false" aria-controls="task-detail-${task.id}">상세</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">선택 조건에서 수집된 작업이 없습니다. 수집 범위와 상태를 확인하세요.</td></tr>';
+ $('activity-rows').innerHTML=(data.items||[]).map(task=>`<tr><td class="activity-identity" data-label="작업">${taskIdentity(task)}</td><td data-label="종류">${esc(ACTIVITY_KINDS[task.kind]||'미분류')}</td><td data-label="생성 KST">${task.created?esc(when(task.created)):'시각 미확인'}</td><td data-label="실행 상태"><span class="execution-state ${esc(task.status)}">${esc(EXECUTION_NAMES[task.status]||'미확인')}</span></td><td data-label="소비 데이터">${taskConsumption(task)}</td><td class="activity-action"><button type="button" class="mini-btn" data-task-id="${task.id}" aria-expanded="false" aria-controls="task-detail-${task.id}">상세</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">선택 조건에서 수집된 작업이 없습니다. 진단에서 수집 상태를 확인하세요.</td></tr>';
  $('activity-page').textContent=`${data.page} / ${Math.max(1,Math.ceil(data.total/data.page_size))} · ${fmt(data.total)}개`;
  $('activity-prev').disabled=data.page<=1;$('activity-next').disabled=data.page*data.page_size>=data.total;
  for(const key of opened)$('activity-rows').querySelector(`[data-task-id="${CSS.escape(key)}"]`)?.click();

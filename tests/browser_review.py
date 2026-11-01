@@ -118,7 +118,7 @@ async def main():
             # The lazy insights answer redraws the panel; wait for the bar to carry its width.
             await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
 
-            # Status: the notification history lists the failed send waiting for retry.
+            # 진단 (key 5): the notification history lists the failed send waiting for retry.
             await page.evaluate('document.activeElement.blur()')
             await page.keyboard.press('5')
             await expect(page.locator('#notify-log')).to_contain_text('전송 실패 · 재시도')

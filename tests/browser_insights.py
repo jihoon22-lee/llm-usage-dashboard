@@ -106,8 +106,9 @@ async def main():
             assert not await page.evaluate("document.body.classList.contains('busy')")
             # Auto refresh moved to the settings tab; switch it off without leaving the overview.
             await page.evaluate("$('auto').checked=false;$('auto').dispatchEvent(new Event('change'))")
-            # Quotas, usage (filters and filter-dependent panels), reports and status are separate tabs.
-            async def view(name):await page.locator(f'#tabs [data-view="{name}"]').first.click()
+            # Quotas, usage (filters and filter-dependent panels) and reports are separate tabs;
+            # the header's data status opens 진단 (view 'status').
+            async def view(name):await (page.locator('#data-status') if name=='status' else page.locator(f'#tabs [data-view="{name}"]').first).click()
             await view('usage')
             await page.locator('#period').select_option('today')
             await expect(page.locator('#comparison')).to_contain_text('+100.0%')
@@ -244,10 +245,10 @@ async def main():
             await expect(page.locator('.limit-card:visible')).to_have_count(0)
             overview=await page.locator('#quota-overview').bounding_box()
             assert overview['height']<350
-            order=await page.locator('main h3, #sources-panel h2').all_text_contents()
+            order=await page.locator('main h3').all_text_contents()
             assert order==['다음 초기화','필터','사용 추이','토큰 구성','모델별 사용량 순위','시간대별 사용 패턴','모델별 사용량 상세',
                            '프로젝트별 사용량','세션별 사용량','모델별 증감','캐시 활용률 분석','일별 한도 소비','소비 분해 상세','주간 리포트','일별 활동','구독 가치 분석','월간 구독 결산',
-                           '수집 범위와 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','구독','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
+                           '수집 상태','데이터 신뢰도','알림 발송 이력','이 기기의 오프라인 통계','구독','모델 단가','임계값','알림 · 자동 갱신','프로젝트 예산','외부 알림'],order
             await view('usage')
             # Filters fold behind a one-line summary on mobile; opening reveals them.
             fold=page.locator('#filter-fold')
@@ -621,7 +622,7 @@ async def main():
             previous_save=await page.locator('#cfg-subs-save').element_handle()
             assert previous_save is not None
             await page.keyboard.press('End')
-            await expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+            await expect(page.locator('#tab-reports')).to_have_attribute('aria-selected','true')
             await page.locator('#settings-open').click()
             await expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
             await page.wait_for_function('previous=>!previous.isConnected',arg=previous_save)
@@ -715,9 +716,9 @@ async def main():
             assert (await pending.value).suggested_filename.startswith('llm-usage-sessions-')
             await touch.locator('#tabs [data-view="reports"]').click()
             assert await touch.evaluate("document.querySelector('[data-panel=subvalue]').open")
-            # The status tab leads with its summary and what needs action, visible
+            # 진단 leads with its summary and what needs action, visible
             # without unfolding anything (M4); normal sources fold.
-            await touch.locator('#tabs [data-view="status"]').click()
+            await touch.locator('#data-status').click()
             await expect(touch.locator('#sources .source-summary')).to_be_visible()
             await expect(touch.locator('#sources .source-clear, #sources .source-action .source').first).to_be_visible()
             assert not touch_errors,touch_errors
