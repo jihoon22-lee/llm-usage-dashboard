@@ -97,16 +97,28 @@ function renderConsumption(data){
  $('consumption-day').value=rows.some(d=>d.day===old)?old:rows.at(-1)?.day||'';
  renderConsumptionChart(data);renderConsumptionDetail(data);
 }
+// Up to seven categories keep a series color, largest over the period first; the rest share
+// the muted 기타 color in the bars and legend. The tooltip still lists every category.
+function consumptionColors(rows,dimension){
+ const sums=new Map();
+ for(const d of rows)for(const g of consumptionGroups(d,dimension))sums.set(g.label,(sums.get(g.label)||0)+g.value);
+ const order=[...sums.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([label])=>label);
+ const kept=order.length>8?order.slice(0,7):order,folded=order.length>kept.length;
+ const color=label=>{const i=kept.indexOf(label);return i<0?mutedColor:colors[i]||mutedColor;};
+ return {color,legend:folded?[...kept,'기타']:kept,folded};
+}
 function renderConsumptionChart(data){
  const box=$('consumption-chart');if(!box.clientWidth)return;
  consumptionChartWidth=box.clientWidth;
  const rows=data.days||[],dimension=$('consumption-group').value;
  if(!rows.length){box.innerHTML='<p class="empty">이 기간의 한도 소비 데이터가 아직 없습니다. 상태 탭에서 수집 상태를 확인하세요.</p>';$('consumption-legend').replaceChildren();return;}
- const labels=[...new Set(rows.flatMap(d=>consumptionGroups(d,dimension).map(g=>g.label)))];
- $('consumption-legend').innerHTML=labels.map((label,i)=>`<span class="consumption-key"><i class="consumption-color color-${i%8}"></i>${esc(label)}</span>`).join('');
+ const palette=consumptionColors(rows,dimension);
+ const swatch=fill=>`<svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2" fill="${fill}"/></svg>`;
+ $('consumption-legend').innerHTML=palette.legend.map(label=>`<span class="consumption-key">${swatch(label==='기타'&&palette.folded?mutedColor:palette.color(label))}${esc(label)}</span>`).join('');
  const byDay=new Map(rows.map(d=>[d.day,d])),dates=[];
  for(let day=Date.parse(data.start+'T00:00:00Z'),end=Date.parse(data.end+'T00:00:00Z');day<=end;day+=86400000)dates.push(new Date(day).toISOString().slice(0,10));
- const maximum=Math.max(1,...rows.map(d=>consumptionGroups(d,dimension).reduce((sum,g)=>sum+g.value,0)));
+ const peak=Math.max(0,...rows.map(d=>consumptionGroups(d,dimension).reduce((sum,g)=>sum+g.value,0)));
+ const tick=niceStep(peak),maximum=Math.max(tick,Math.ceil(peak/tick)*tick);
  const width=Math.max(280,box.clientWidth),height=220,left=45,top=22,bottom=32,plot=height-top-bottom,step=(width-left-8)/dates.length;
  const tickEvery=Math.max(1,Math.ceil(dates.length/Math.max(3,Math.floor(width/65))));
  let svg=`<svg tabindex="0" aria-describedby="consumption-keyboard-hint" viewBox="0 0 ${width} ${height}" role="img" aria-label="일별 한도 소비율 · 제공사 기준일 · 단위 퍼센트"><text x="0" y="${top+5}" class="consumption-axis">${esc(consumptionPercent(maximum))}</text><text x="17" y="${height-bottom}" class="consumption-axis">0%</text><line x1="${left}" x2="${width-5}" y1="${height-bottom}" y2="${height-bottom}" stroke="var(--border)"/>`;
@@ -115,15 +127,15 @@ function renderConsumptionChart(data){
   let offset=0;
   svg+=`<g data-consumption-day="${date}"><rect x="${x}" y="${top}" width="${w}" height="${plot}" fill="transparent"/>`;
   if(d&&groups.length){
-   for(const group of groups){const h=group.value/maximum*plot;svg+=`<rect x="${x}" y="${height-bottom-offset-h}" width="${w}" height="${h}" fill="var(--chart-${labels.indexOf(group.label)%8})"/>`;offset+=h;}
+   for(const group of groups){const h=group.value/maximum*plot;svg+=`<rect x="${x}" y="${height-bottom-offset-h}" width="${w}" height="${h}" fill="${palette.color(group.label)}"/>`;offset+=h;}
   }else svg+=`<text x="${x+w/2}" y="${height-bottom-8}" text-anchor="middle" class="consumption-axis">—</text>`;
   svg+='</g>';
   if(index%tickEvery===0||index===dates.length-1)svg+=`<text x="${Math.min(width-20,x+w/2)}" y="${height-9}" text-anchor="middle" class="consumption-axis">${date.slice(5)}</text>`;
  });
  box.innerHTML=svg+`<line class="chart-cursor" x1="0" x2="0" y1="${top}" y2="${height-bottom}" visibility="hidden"/></svg><span id="consumption-keyboard-hint" class="sr-only">좌우 방향키로 날짜를 선택하고 Enter로 분해 내역을 표시하며 Escape로 툴팁을 닫습니다.</span><div id="consumption-tooltip" class="chart-tooltip" role="status" aria-live="polite" tabindex="0" hidden></div>`;
- bindConsumptionTooltip(data,dates,byDay,labels,{width,height,left,top,bottom,step,dimension});
+ bindConsumptionTooltip(data,dates,byDay,palette,{width,height,left,top,bottom,step,dimension});
 }
-function bindConsumptionTooltip(data,dates,byDay,labels,geometry){
+function bindConsumptionTooltip(data,dates,byDay,palette,geometry){
  const root=$('consumption-chart'),svg=root.querySelector('svg'),tooltip=$('consumption-tooltip'),cursor=root.querySelector('.chart-cursor');
  let selected=-1,scrollable=false;
  function hide(){tooltip.hidden=true;cursor.setAttribute('visibility','hidden');selected=-1;}
@@ -137,7 +149,7 @@ function bindConsumptionTooltip(data,dates,byDay,labels,geometry){
    data.plan?.approximate===true?'제공사 근사값':null,data.plan?.coverage_complete!==true?'제공 범위 일부 또는 미확인':null].filter(Boolean);
   scrollable=groups.length>8;tooltip.classList.toggle('scrollable',scrollable);
   tooltip.innerHTML=`<div class="tooltip-heading"><strong>${esc(date)}</strong><small>제공사 기준일 · ${geometry.dimension==='model'?'모델별':'기능별'} 한도 소비율</small></div>`
-   +groups.map(g=>`<div class="tooltip-row"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="var(--chart-${labels.indexOf(g.label)%8})"/></svg> ${esc(g.label)}</span><strong>${esc(consumptionPercent(g.value))}</strong></div>`).join('')
+   +groups.map(g=>`<div class="tooltip-row"><span><svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${palette.color(g.label)}"/></svg> ${esc(g.label)}</span><strong>${esc(consumptionPercent(g.value))}</strong></div>`).join('')
    +(!groups.length?`<div class="tooltip-row tooltip-missing"><span>${day?'이 분류의 값 미제공':'미수신'}</span><strong>—</strong></div>`:'')
    +`<div class="tooltip-total"><span>표시 항목 합계</span><strong>${total==null?'—':esc(consumptionPercent(total))}</strong></div>`
    +(notices.length?`<div class="tooltip-hint">${notices.map(esc).join(' · ')}</div>`:'');

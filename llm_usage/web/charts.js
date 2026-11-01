@@ -185,9 +185,9 @@ function composition(data){
  const keyRows=all.slice().sort((a,b)=>(parts[b[1]]||0)-(parts[a[1]]||0)).map(([name,key,color])=>{
   if(out(key)){
    const value=parts[key],pct=grand?(value/grand*100).toFixed(1):'0.0';
-   return `<div class="excluded" data-token="${key}" data-tip="${esc(name)}: ${fmt(value)} (${pct}%) · 차트 제외"><strong>${dot(color)} ${esc(name)}</strong><span>${fmt(value)} · ${pct}% (차트 제외)</span></div>`;
+   return `<div class="excluded" data-token="${key}" data-tip="${esc(name)}: ${fmt(value)} · 전체의 ${pct}% · 차트 제외"><strong>${dot(color)} ${esc(name)}</strong><span>${compact(value)} · 전체의 ${pct}% · 차트 제외</span></div>`;
   }
-  return `<div data-token="${key}" data-tip="${esc(name)}: ${fmt(parts[key])} (${(parts[key]/sum*100).toFixed(1)}%)"><strong>${dot(color)} ${esc(name)}</strong><span>${fmt(parts[key])} · ${(parts[key]/sum*100).toFixed(1)}%</span></div>`;
+  return `<div data-token="${key}" data-tip="${esc(name)}: ${fmt(parts[key])} (${(parts[key]/sum*100).toFixed(1)}%)"><strong>${dot(color)} ${esc(name)}</strong><span>${compact(parts[key])} · ${(parts[key]/sum*100).toFixed(1)}%</span></div>`;
  });
  const names=excluded.map(([name])=>name),cut=names.length?(names.length>1?`${names.length}개 항목`:names[0])+' 제외':'';
  $('composition').innerHTML=`<div class="donut-wrap"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}<text x="110" y="${cut?103:109}" text-anchor="middle" font-size="26" font-weight="600">${compact(sum)}</text><text x="110" y="${cut?123:130}" text-anchor="middle" font-size="11">${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</text>${cut?`<text x="110" y="140" text-anchor="middle" font-size="11" class="donut-sub">전체 ${compact(grand)}</text>`:''}</svg><div class="donut-key">${keyRows.join('')}</div></div>`;
@@ -202,7 +202,9 @@ function ranking(data){
  $('ranking-caption').textContent=`전체 ${rows.length}개 · 구독 경로 구분${residual.length?' · 비중은 모델이 기록된 사용량 기준':''}`;
  const denom=rows.reduce((s,r)=>s+rowValue(r),0);
  const share=r=>denom?percent(rowValue(r)/denom*100):'—';
- const colorOf=paletteFor(rows.map(r=>r.model));
+ // Bars wear their service's series color (the trend chart's by-service slot), so one color
+ // never names one service there and another service's model here.
+ const colorOf=route=>colors[ROUTE_SLOTS[familyOf(route)]]??mutedColor;
  const extra=residual.map(r=>{
   const v=metric==='tokens'?modelTotal(r):null,label=routeNames[r.route]||r.route,all=denom+(v||0);
   const note=v==null?`${metricName()} 없음`:`전체의 ${all?percent(v/all*100):'—'} · 순위 제외`;
@@ -211,6 +213,6 @@ function ranking(data){
    +(v?`<span class="rank-bar rank-hatch" role="img" aria-label="${esc(residualName)} ${metricFmt(v)} · ${note}"><i data-w="${(Math.min(1,v/max)*100).toFixed(2)}" data-tip="${esc(residualName)} · ${esc(label)} · ${metricFmt(v)} · ${note}"></i></span>`:'')+'</div>';
  }).join('');
  $('ranking').innerHTML=(rows.map(r=>{const v=rowValue(r),label=routeNames[r.route]||r.route;
-  return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.model)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
+  return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.route)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
  applyGeometry($('ranking'));
 }

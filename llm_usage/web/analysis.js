@@ -319,15 +319,17 @@ function renderSources(list){
 let modelFilter='';
 $('model-search').addEventListener('input',event=>{modelFilter=event.target.value.trim().toLowerCase();if(lastUsage)renderModelTable(lastUsage);});
 // 상세 열 toggles share one behaviour across the model, project and session
-// tables: flip .show-detail on the table and mirror it to aria-pressed.
-function bindColsToggle(button,table){
+// tables: flip .show-detail on the table and mirror it to aria-pressed. The model
+// table's choice is kept on this device, as its breakdown is hidden on every width.
+function bindColsToggle(button,table,key){
+ const apply=on=>{table.classList.toggle('show-detail',on);button.setAttribute('aria-pressed',String(on));button.classList.toggle('on',on);};
+ if(key)apply(storage.get(key)==='1');
  button.addEventListener('click',()=>{
-  const on=table.classList.toggle('show-detail');
-  button.setAttribute('aria-pressed',String(on));
-  button.classList.toggle('on',on);
+  const on=!table.classList.contains('show-detail');
+  apply(on);if(key)storage.set(key,on?'1':'0');
  });
 }
-bindColsToggle($('cols-toggle'),$('model-table'));
+bindColsToggle($('cols-toggle'),$('model-table'),'llmModelDetail');
 bindColsToggle($('proj-cols'),document.querySelector('[data-panel="projects"] table'));
 bindColsToggle($('sess-cols'),document.querySelector('[data-panel="sessions"] table'));
 function renderModelTable(data){
