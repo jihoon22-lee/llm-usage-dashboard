@@ -105,7 +105,7 @@ with sync_playwright() as playwright:
     expect(page.locator('#donut-nocache')).to_have_attribute('aria-pressed','true')
     assert '차트 제외' in page.locator('.donut-key').inner_text()
     assert 'excluded' in page.locator('.donut-key [data-token="cached_input"]').get_attribute('class')
-    expect(page.locator('#composition .donut')).to_contain_text('캐시 읽기 제외')
+    expect(page.locator('#composition .donut-center')).to_contain_text('캐시 읽기 제외')
     page.locator('#donut-nocache').click()
     expect(page.locator('#donut-nocache')).to_have_attribute('aria-pressed','false')
     assert page.locator('.donut-key > div').evaluate_all('(rows)=>rows.map(r=>r.dataset.token)') == ['cache_creation','cached_input','uncached_input','output']
@@ -119,9 +119,12 @@ with sync_playwright() as playwright:
     expect(tip.locator('.tooltip-heading')).to_contain_text('2026-09-07')
     expect(tip.locator('.tooltip-row:not(.tooltip-missing)')).to_have_count(5)
     expect(tip.locator('.tooltip-missing strong')).to_have_text('—')
-    for i,label in enumerate(labels):
+    # Rows follow the legend, which runs in color-slot order rather than the API's.
+    order=page.locator('#legend [data-label]').evaluate_all('els=>els.map(e=>e.dataset.label)')
+    assert sorted(order)==sorted(labels) and order!=labels,order
+    for i,label in enumerate(order):
         row=tip.locator('.tooltip-row:not(.tooltip-missing)').nth(i);expect(row).to_contain_text(label)
-        expect(row.locator('strong')).to_have_text(f'{1339*i:,}')
+        expect(row.locator('strong')).to_have_text(f'{1339*labels.index(label):,}')
     hover_date(page,1);expect(tip.locator('.tooltip-heading')).to_contain_text('2026-09-08')
     expect(tip.locator('.tooltip-total strong')).to_have_text('20,085')
     hover_date(page,2)
@@ -200,7 +203,8 @@ with sync_playwright() as playwright:
     assert quota.locator('.quota-window-title').all_text_contents()==['5시간','주간']
     assert quota.locator('.bucket-label').all_text_contents()==['Gemini','3rd party','Gemini','3rd party']
     assert all('42%' in value for value in quota.locator('.remaining').all_text_contents())
-    # Themes affect chart palettes and all surfaces, not only the page background.
+    # Themes change every surface. Series and token colors only differ between the light
+    # themes and the two dark ones, so a service keeps its color when the theme changes.
     themes=['forest','paper','charcoal','midnight','blue','violet','rose','amber','ocean']
     backgrounds=set();palettes=set()
     page.locator('#settings-open').click()  # the theme picker is the first block of the settings view
@@ -208,10 +212,11 @@ with sync_playwright() as playwright:
         page.locator('#theme').select_option(theme)
         expect(page.locator('html')).to_have_attribute('data-theme',theme)
         backgrounds.add(page.evaluate('getComputedStyle(document.documentElement).backgroundColor'))
-        palettes.add(page.locator('[data-token="uncached_input"] circle').get_attribute('fill'))
+        palettes.add((theme in ('charcoal','midnight'),page.locator('[data-token="uncached_input"] circle').get_attribute('fill'),
+                      page.locator('#legend [data-label]').first.evaluate('e=>e.style.getPropertyValue("--color")')))
         assert page.evaluate("localStorage.getItem('llm-usage-theme')") == theme
         assert not page.locator('#error').is_visible()
-    assert len(backgrounds)==9 and len(palettes)==9
+    assert len(backgrounds)==9 and len(palettes)==2 and {dark for dark,*_ in palettes}=={False,True},palettes
     # The browser theme-color follows the active theme, on change and at load (T4).
     page.locator('#theme').select_option('midnight')
     assert page.evaluate("document.querySelector('meta[name=theme-color]').content")=='#10182d'

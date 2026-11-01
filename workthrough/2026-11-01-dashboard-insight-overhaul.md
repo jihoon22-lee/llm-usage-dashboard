@@ -214,3 +214,60 @@
 
 - [PR #96](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/96)은 gitleaks 오탐을 처리한 뒤 `ci-required`를 포함한 모든 CI를 통과했다. merge commit `ec0e76d`로 main에 병합했다.
 - 리뷰 코멘트는 없었고, Codex에는 다시 요청하지 않았다. 병합 후 GitHub가 원격 작업 브랜치를 자동으로 지웠다.
+
+## 4단계: 차트 색 체계
+
+### 변경
+
+- **서비스 색 고정**
+  - 테마마다 따로 있던 계열 색(`--chart-2`~`--chart-7`)과 테마별 순서표(`CHART_ORDER`)를 없앴다. 밝은 테마 일곱 개와 어두운 테마 두 개(차콜·미드나이트)가 각각 한 팔레트(`--series-0`~`--series-7`)를 쓴다. 테마를 바꿔도 서비스 색은 그대로다.
+  - 팔레트는 dataviz 스킬의 기준 팔레트(파랑·주황·청록·노랑·분홍·초록·보라·빨강)를 값과 순서 그대로 쓴다. 어두운 쪽은 같은 색상을 어두운 배경에 맞춘 단계다.
+  - 서비스 슬롯은 실제 사용 빈도 순서로 다시 정했다. 운영 DB 읽기 전용 사본의 최근 90일 시간 단위 기록 수는 codex 2385, claude-code 1285, devin 728, antigravity 35, opencode 18, opencode-go 9였다.
+    - 서비스: Codex 0(파랑), Claude 1(주황), Devin 2(청록), Antigravity 3(노랑), OpenCode 4(분홍), OpenCode Go 5(초록). 다른 Claude 계정은 6(보라)·7(빨강)부터.
+    - 제작사: OpenAI 0, Anthropic 1, Cognition 2, Google 3.
+    - 앞 세 슬롯(파랑·주황·청록)은 모든 쌍이 구분 기준을 통과한다. Antigravity 없이 Devin만 쓴 기간에도 붙는 색이 안전하다.
+  - 진행 막대·달력·한도 추이선 같은 단일 계열 표시는 계속 테마 강조색(`--chart-0`, `--chart-1`)을 쓴다. 쓰이지 않던 `.color-0`~`.color-7` 클래스는 지웠다.
+- **쌓는 순서**
+  - API는 계열 이름을 알파벳순으로 보낸다. 이 순서로 쌓으면 기간·분류마다 붙는 색이 달라진다. 실제 데이터에서는 서비스 5개, 제작사 7개, 계정 7개가 함께 나온다. 반면 기준 팔레트에서 모든 쌍이 기준을 통과하는 조합은 세 색까지였다. 그래서 색 배치만으로는 맞출 수 없었다.
+  - 사용 추이의 막대·비율 면적·누적 선, 범례, 툴팁 줄을 모두 색 슬롯 순서로 맞췄다(기타는 마지막). 붙는 색은 팔레트가 검증한 인접 쌍이 된다. 개요 차트도 같은 순서다.
+  - 한도 소비 차트는 순위가 아니라 항목마다 색을 고정한다(차트 전용 저장소). 처음에는 큰 항목부터 슬롯을 받고, 기간을 바꿔도 같은 항목은 같은 색이다. 묶인 항목은 날마다 기타 한 칸으로 쌓는다.
+  - 쌓인 막대 사이에는 2px 배경색 틈을 둔다(사용 추이·개요·한도 소비). 비율 면적은 2px 배경색 테두리로 나눈다.
+- **토큰 유형 색**
+  - 토큰 구성 도넛은 서비스 색 대신 보라 한 계열의 다섯 단계(`--token-0`~`--token-4`)를 쓴다. 단계는 유형마다 고정이다. 일반 입력이 가장 눈에 띄고 내역 미분류가 가장 약하다. 어두운 테마에서는 밝은 쪽이 강조다.
+  - 유형이 없는 로컬 미기록은 테마의 흐린 글자색 대신 중립 회색(`--token-none`)을 쓴다. 보라 테마의 흐린 글자색은 보라 단계와 정상 시각 ΔE 5.8로 너무 가까웠다.
+  - 고리 조각 사이에 2px 틈을 둔다. 가운데 합계는 SVG 속성 크기 대신 HTML로 겹쳐 글자 단계를 따른다. 합계 20px, 550px 이하에서는 16px이고 보조 글자는 12px이다.
+- 모델별 보기는 기존 결정대로 모든 모델을 남긴다. 아홉 번째 모델부터 팔레트 밖의 생성 색을 쓰는 것은 예외로 문서화했다.
+
+### 검증: 색
+
+- dataviz 스킬의 `validate_palette.js`로 실제 차트 표면 일곱 개를 검사했다.
+  - 밝은 표면: forest·paper·blue `#ffffff`, violet `#fefcff`, rose `#fffdfd`, amber `#fffdf8`, ocean `#fbffff`
+  - 어두운 표면: charcoal `#20262c`, midnight `#19233b`
+
+```
+$ node validate_palette.js "#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300,#6250d6,#e34948" --mode light --surface #ffffff
+  [PASS] Lightness band         all 8 inside L 0.43–0.77
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #eda100↔#1baf7a ΔE 9.1 (protan) · tritan 5.8
+  [PASS] Normal-vision floor    worst adjacent #e87ba4↔#eda100 ΔE 19.6 (normal)
+  [WARN] Contrast vs surface    below 3:1 — relief required (visible labels or table view): [["#1baf7a",2.82],["#eda100",2.17],["#e87ba4",2.69]]
+$ node validate_palette.js "#3987e5,#d95926,#199e70,#c98500,#d55181,#008300,#9085e9,#e66767" --mode dark --surface #20262c
+  [PASS] Lightness band         all 8 inside L 0.48–0.67
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #c98500↔#199e70 ΔE 8.4 (protan) · tritan 8.7
+  [PASS] Normal-vision floor    worst adjacent #d55181↔#c98500 ΔE 19.3 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+```
+
+- 나머지 밝은 표면 네 개도 같은 PASS였다. 대비 WARN 값만 조금 달랐다(청록 2.76~2.80, 노랑 2.12~2.15, 분홍 2.64~2.67). midnight도 dark와 같은 PASS다.
+- 대비 WARN은 범례의 서비스 이름, 툴팁의 값, 모델 표로 보완한다. 차트 색만으로 값을 읽게 하지 않는다.
+- 실제 데이터의 이웃 쌍을 확인했다.
+  - 서비스별 30일(슬롯 0~4)과 제작사별 30일(0~6)은 빈 슬롯이 없다.
+  - 계정별 30일(0~4, 6, 7)에서는 분홍–보라가 새로 붙는다. 계정별 7일(0, 1, 6, 7)에서는 주황–보라와 보라–빨강이 붙는다. 모두 모든 쌍 기준을 통과한다.
+- 남은 약한 쌍은 서비스가 하나 빠져 두 슬롯이 붙을 때만 생긴다.
+  - Devin 없이 Antigravity만 있으면 주황–노랑이 붙는다. 정상 시각 ΔE는 밝은 쪽 13.7, CVD는 어두운 쪽 4.8이다.
+  - Antigravity 없이 OpenCode만 있으면 청록–분홍이 붙는다. 어두운 쪽 CVD가 1.6이다.
+  - OpenCode 없이 OpenCode Go만 있으면 노랑–초록이 붙는다. 어두운 쪽 CVD 6.9로 경고 구간이다.
+  - 세 경우 모두 2px 틈, 같은 순서의 범례, 툴팁 줄로 구분한다.
+- 토큰 단계는 `validateOrdinal`을 일곱 표면 모두 통과했다. 밝기는 단조롭고, 인접 ΔL은 0.06 이상, 색상 폭은 1° 이하다. 가장 옅은 단계의 대비는 밝은 쪽 `#ca9bfe` 2.14~2.18:1, 어두운 쪽 `#8244ba` 2.53~2.59:1이다.
+- 중립 회색과 보라 단계의 가장 가까운 거리를 확인했다. 밝은 `#909090`은 정상 시각 ΔE 18.4·CVD 14.6, 어두운 `#787878`은 18.4·14.8이다.

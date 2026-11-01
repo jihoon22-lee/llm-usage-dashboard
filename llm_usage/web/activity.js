@@ -97,15 +97,22 @@ function renderConsumption(data){
  $('consumption-day').value=rows.some(d=>d.day===old)?old:rows.at(-1)?.day||'';
  renderConsumptionChart(data);renderConsumptionDetail(data);
 }
-// Up to seven categories keep a series color, largest over the period first; the rest share
-// the muted 기타 color in the bars and legend. The tooltip still lists every category.
+// The seven largest categories of the period keep a series color, one per category while the
+// page is open (this chart's own palette store); the rest share the muted 기타 color in the
+// bars and legend. Bars stack and the legend runs in color-slot order, 기타 on top and last.
+// The tooltip still lists every category.
+const consumptionColorIndex=new Map();
 function consumptionColors(rows,dimension){
  const sums=new Map();
  for(const d of rows)for(const g of consumptionGroups(d,dimension))sums.set(g.label,(sums.get(g.label)||0)+g.value);
  const order=[...sums.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([label])=>label);
  const kept=order.length>8?order.slice(0,7):order,folded=order.length>kept.length;
- const color=label=>{const i=kept.indexOf(label);return i<0?mutedColor:colors[i]||mutedColor;};
- return {color,legend:folded?[...kept,'기타']:kept,folded};
+ const colorOf=paletteFor(kept,{},consumptionColorIndex),legend=colorOf.order(kept);
+ const color=label=>kept.includes(label)?colorOf(label):mutedColor;
+ // A day's stack: kept categories in legend order, then one 기타 segment for the rest.
+ const stack=groups=>[...legend.map(label=>[color(label),groups.filter(g=>g.label===label).reduce((n,g)=>n+g.value,0)]),
+  [mutedColor,groups.filter(g=>!kept.includes(g.label)).reduce((n,g)=>n+g.value,0)]];
+ return {color,stack,legend:folded?[...legend,'기타']:legend,folded};
 }
 function renderConsumptionChart(data){
  const box=$('consumption-chart');if(!box.clientWidth)return;
@@ -124,10 +131,9 @@ function renderConsumptionChart(data){
  let svg=`<svg tabindex="0" aria-describedby="consumption-keyboard-hint" viewBox="0 0 ${width} ${height}" role="img" aria-label="일별 한도 소비율 · 제공사 기준일 · 단위 퍼센트"><text x="0" y="${top+5}" class="consumption-axis">${esc(consumptionPercent(maximum))}</text><text x="17" y="${height-bottom}" class="consumption-axis">0%</text><line x1="${left}" x2="${width-5}" y1="${height-bottom}" y2="${height-bottom}" stroke="var(--border)"/>`;
  dates.forEach((date,index)=>{
   const d=byDay.get(date),groups=d?consumptionGroups(d,dimension):[],x=left+index*step+step*.12,w=step*.76;
-  let offset=0;
   svg+=`<g data-consumption-day="${date}"><rect x="${x}" y="${top}" width="${w}" height="${plot}" fill="transparent"/>`;
   if(d&&groups.length){
-   for(const group of groups){const h=group.value/maximum*plot;svg+=`<rect x="${x}" y="${height-bottom-offset-h}" width="${w}" height="${h}" fill="${palette.color(group.label)}"/>`;offset+=h;}
+   svg+=stackRects(x,w,v=>height-bottom-v/maximum*plot,palette.stack(groups));
   }else svg+=`<text x="${x+w/2}" y="${height-bottom-8}" text-anchor="middle" class="consumption-axis">—</text>`;
   svg+='</g>';
   if(index%tickEvery===0||index===dates.length-1)svg+=`<text x="${Math.min(width-20,x+w/2)}" y="${height-9}" text-anchor="middle" class="consumption-axis">${date.slice(5)}</text>`;

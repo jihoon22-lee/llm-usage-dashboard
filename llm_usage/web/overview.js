@@ -155,11 +155,7 @@ function overviewChart(recent){
  let svg=`<svg class="ov-bars" width="${width}" height="${H}" viewBox="0 0 ${width} ${H}" role="img" aria-label="최근 30일 서비스별 사용량 · 합계 ${compact(recent.tokens)}">`;
  for(let v=0;v<=top;v+=tick)svg+=`<line x1="${L}" x2="${width-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text x="${L-6}" y="${(y(v)+4).toFixed(1)}" text-anchor="end">${compact(v)}</text>`;
  days.forEach((day,i)=>{
-  const x=L+i*step+(step-bar)/2;let base=0;
-  for(const s of services){
-   const v=s.values[i];if(!v)continue;
-   svg+=`<rect x="${x.toFixed(1)}" y="${y(base+v).toFixed(1)}" width="${bar.toFixed(1)}" height="${(y(base)-y(base+v)).toFixed(1)}" fill="${serviceColor(s.route)}"/>`;base+=v;
-  }
+  svg+=stackRects(L+i*step+(step-bar)/2,bar,y,services.map(s=>[serviceColor(s.route),s.values[i]]));
   const parts=services.filter(s=>s.values[i]).map(s=>`${serviceName(s.route)} ${compact(s.values[i])}`);
   svg+=`<rect class="ov-hit" x="${(L+i*step).toFixed(1)}" y="${T}" width="${step.toFixed(1)}" height="${h}" data-day="${esc(day)}" data-tip="${esc([dayLabel(day)+' 합계 '+compact(totals[i]),...parts].join(' · '))}"/>`;
   // Weekly ticks counted back from today, so the last day is always named.

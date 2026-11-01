@@ -434,37 +434,42 @@ function chartSeries(data){
 // Stable label→palette index so a model keeps its color across period changes.
 // Active labels always get distinct indices; inactive owners are evicted. `fixed`
 // (groupSlots) gives services their own index; other labels take those indices only
-// when no other one is free.
+// when no other one is free. A chart with other kinds of labels keeps its own `store`.
+// `.order(list)` sorts labels by index with 기타 last: stacks, legends and tooltips
+// follow it, so neighboring series are the palette's checked adjacent pairs.
 const labelColorIndex=new Map();
-function paletteFor(labels,fixed={}){
+function paletteFor(labels,fixed={},store=labelColorIndex){
  const actives=[...new Set(labels.filter(l=>l!=='기타'))];
  const seen=new Map();
- for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){labelColorIndex.set(l,fixed[l]);seen.set(fixed[l],l);}
+ for(const l of actives)if(fixed[l]!=null&&!seen.has(fixed[l])){store.set(l,fixed[l]);seen.set(fixed[l],l);}
  for(const l of actives){
-  if(seen.get(labelColorIndex.get(l))===l)continue;
-  const idx=labelColorIndex.get(l);
+  if(seen.get(store.get(l))===l)continue;
+  const idx=store.get(l);
   if(idx!=null&&!seen.has(idx)){seen.set(idx,l);continue;}
-  labelColorIndex.delete(l);
+  store.delete(l);
  }
  const reserved=new Set(Object.values(fixed)),free=[];
  for(let i=0;i<Math.max(colors.length,actives.length);i++)if(!seen.has(i)&&!reserved.has(i))free.push(i);
  for(const i of [...reserved].sort((a,b)=>a-b))if(!seen.has(i))free.push(i);
  for(const l of actives){
-  if(labelColorIndex.has(l))continue;
+  if(store.has(l))continue;
   let idx;
   if(free.length)idx=free.shift();
   else{
-   const inactive=[...labelColorIndex.entries()].find(([k])=>!actives.includes(k));
+   const inactive=[...store.entries()].find(([k])=>!actives.includes(k));
    idx=inactive?inactive[1]:0;
-   if(inactive)labelColorIndex.delete(inactive[0]);
+   if(inactive)store.delete(inactive[0]);
   }
-  labelColorIndex.set(l,idx);seen.set(idx,l);
+  store.set(l,idx);seen.set(idx,l);
  }
- return label=>{
+ const color=label=>{
   if(label==='기타')return mutedColor;
-  const i=labelColorIndex.get(label)??0;
+  const i=store.get(label)??0;
   return colors[i]||`hsl(${(i*137.508)%360} 60% 48%)`;
  };
+ const slot=label=>label==='기타'?Infinity:store.get(label)??Infinity;
+ color.order=list=>[...list].sort((a,b)=>(slot(a)-slot(b))||0);
+ return color;
 }
 $('chart-by-model').addEventListener('click',()=>applyDrill({group:'model'}));
 // What-if: the period's tokens at another model's current list rate (rates load once).

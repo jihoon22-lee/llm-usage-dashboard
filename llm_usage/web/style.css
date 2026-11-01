@@ -1,12 +1,17 @@
-:root {color-scheme:light;--bg:#f6f8f6;--surface:#ffffff;--raised:#f2f5f1;--card:#edf3eb;--ink:#22342f;--muted:#5d7264;--subtle:#596e60;--border:#d7e1d7;--line:#e5ece3;--accent:#285d45;--on-accent:#ffffff;--soft:#e7f0e5;--warning-bg:#f7eedc;--warning-ink:#866419;--error-bg:#fcece7;--error-ink:#a24632;--chart-0:#497c60;--chart-1:#8eac82;--chart-2:#6a8daa;--chart-3:#ba9f69;--chart-4:#9d87ab;--chart-5:#ba8174;--chart-6:#508b93;--chart-7:#9e9e62;}
-:root[data-theme="paper"] {--bg:#f5f6f8;--surface:#ffffff;--raised:#f0f2f5;--card:#eef1f6;--ink:#252d3d;--muted:#5b6579;--subtle:#5b6579;--border:#d8dde6;--line:#e7eaf0;--accent:#465778;--soft:#e8edf5;--chart-0:#4e6790;--chart-1:#809cba;--chart-2:#6e948d;--chart-3:#bda172;--chart-4:#9b86b1;--chart-5:#bc8190;--chart-6:#6598aa;--chart-7:#9a9970;}
-:root[data-theme="charcoal"] {color-scheme:dark;--bg:#15191d;--surface:#20262c;--raised:#282f36;--card:#252f34;--ink:#edf3f3;--muted:#aabac2;--subtle:#aabac2;--border:#3c4850;--line:#354048;--accent:#80c7b5;--soft:#2a423e;--chart-0:#83cbb6;--chart-1:#b4c887;--chart-2:#86b3e0;--chart-3:#ddbb7b;--chart-4:#b9a2df;--chart-5:#e59ba1;--chart-6:#7cc9d5;--chart-7:#d0c27e;--on-accent:#102822;--warning-bg:#403720;--warning-ink:#e6c881;--error-bg:#432b29;--error-ink:#f2afa0;}
-:root[data-theme="midnight"] {color-scheme:dark;--bg:#10182d;--surface:#19233b;--raised:#23304b;--card:#1d2d48;--ink:#edf2ff;--muted:#a9b8d6;--subtle:#a9b8d6;--border:#354768;--line:#2d3d5b;--accent:#a4b8ff;--soft:#28385d;--chart-0:#9ab5ff;--chart-1:#7fd6d3;--chart-2:#c6a4ee;--chart-3:#efc786;--chart-4:#e4a0bd;--chart-5:#99c993;--chart-6:#80bde8;--chart-7:#d8b7a2;--on-accent:#172244;--warning-bg:#3d3540;--warning-ink:#f0cc91;--error-bg:#482d42;--error-ink:#f3acc3;}
-:root[data-theme="blue"] {--bg:#f0f5fc;--surface:#ffffff;--raised:#edf3fb;--card:#e7effc;--ink:#233650;--muted:#536982;--subtle:#536982;--border:#d2deef;--line:#e3ebf6;--accent:#305eaa;--soft:#e3edfc;--chart-0:#437abb;--chart-1:#83a4d0;--chart-2:#619f9c;--chart-3:#c3a571;--chart-4:#a088bd;--chart-5:#c58b99;--chart-6:#579ab2;--chart-7:#929e6b;}
-:root[data-theme="violet"] {--bg:#f5f2fb;--surface:#fefcff;--raised:#f1ecf8;--card:#ece5f7;--ink:#382c50;--muted:#715984;--subtle:#715984;--border:#e0d6ec;--line:#eee6f6;--accent:#7750a4;--soft:#ede3f8;--chart-0:#8b68b4;--chart-1:#b69acb;--chart-2:#719fc0;--chart-3:#c4a176;--chart-4:#79a697;--chart-5:#c687a8;--chart-6:#8782bd;--chart-7:#a6a071;}
-:root[data-theme="rose"] {--bg:#fcf2f4;--surface:#fffdfd;--raised:#faedf1;--card:#f9e7ed;--ink:#522d3a;--muted:#825966;--subtle:#825966;--border:#efd5de;--line:#f7e5eb;--accent:#a14d68;--soft:#f8e2ea;--chart-0:#b76181;--chart-1:#d797ac;--chart-2:#8496c0;--chart-3:#bea274;--chart-4:#78a99d;--chart-5:#a886b8;--chart-6:#c37f70;--chart-7:#809faf;}
-:root[data-theme="amber"] {--bg:#fbf5ea;--surface:#fffdf8;--raised:#f8efdf;--card:#f5e9d3;--ink:#493923;--muted:#746143;--subtle:#746143;--border:#e7dac2;--line:#f1e7d5;--accent:#8c601c;--soft:#f5e7cb;--chart-0:#b08842;--chart-1:#c6ad71;--chart-2:#6e9c94;--chart-3:#8c97b8;--chart-4:#b68589;--chart-5:#9b86ac;--chart-6:#78a5b3;--chart-7:#979f68;}
-:root[data-theme="ocean"] {--bg:#edf8f8;--surface:#fbffff;--raised:#e7f4f4;--card:#e0f1f0;--ink:#224143;--muted:#466b6d;--subtle:#466b6d;--border:#cbe1e0;--line:#dceeed;--accent:#24757a;--soft:#dbf0ef;--chart-0:#3c939a;--chart-1:#78b6b3;--chart-2:#789cd0;--chart-3:#bea576;--chart-4:#a38fbd;--chart-5:#c48c9a;--chart-6:#759e7e;--chart-7:#a6ac72;}
+:root {color-scheme:light;--bg:#f6f8f6;--surface:#ffffff;--raised:#f2f5f1;--card:#edf3eb;--ink:#22342f;--muted:#5d7264;--subtle:#596e60;--border:#d7e1d7;--line:#e5ece3;--accent:#285d45;--on-accent:#ffffff;--soft:#e7f0e5;--warning-bg:#f7eedc;--warning-ink:#866419;--error-bg:#fcece7;--error-ink:#a24632;--chart-0:#497c60;--chart-1:#8eac82;}
+:root[data-theme="paper"] {--bg:#f5f6f8;--surface:#ffffff;--raised:#f0f2f5;--card:#eef1f6;--ink:#252d3d;--muted:#5b6579;--subtle:#5b6579;--border:#d8dde6;--line:#e7eaf0;--accent:#465778;--soft:#e8edf5;--chart-0:#4e6790;--chart-1:#809cba;}
+:root[data-theme="charcoal"] {color-scheme:dark;--bg:#15191d;--surface:#20262c;--raised:#282f36;--card:#252f34;--ink:#edf3f3;--muted:#aabac2;--subtle:#aabac2;--border:#3c4850;--line:#354048;--accent:#80c7b5;--soft:#2a423e;--chart-0:#83cbb6;--chart-1:#b4c887;--on-accent:#102822;--warning-bg:#403720;--warning-ink:#e6c881;--error-bg:#432b29;--error-ink:#f2afa0;}
+:root[data-theme="midnight"] {color-scheme:dark;--bg:#10182d;--surface:#19233b;--raised:#23304b;--card:#1d2d48;--ink:#edf2ff;--muted:#a9b8d6;--subtle:#a9b8d6;--border:#354768;--line:#2d3d5b;--accent:#a4b8ff;--soft:#28385d;--chart-0:#9ab5ff;--chart-1:#7fd6d3;--on-accent:#172244;--warning-bg:#3d3540;--warning-ink:#f0cc91;--error-bg:#482d42;--error-ink:#f3acc3;}
+:root[data-theme="blue"] {--bg:#f0f5fc;--surface:#ffffff;--raised:#edf3fb;--card:#e7effc;--ink:#233650;--muted:#536982;--subtle:#536982;--border:#d2deef;--line:#e3ebf6;--accent:#305eaa;--soft:#e3edfc;--chart-0:#437abb;--chart-1:#83a4d0;}
+:root[data-theme="violet"] {--bg:#f5f2fb;--surface:#fefcff;--raised:#f1ecf8;--card:#ece5f7;--ink:#382c50;--muted:#715984;--subtle:#715984;--border:#e0d6ec;--line:#eee6f6;--accent:#7750a4;--soft:#ede3f8;--chart-0:#8b68b4;--chart-1:#b69acb;}
+:root[data-theme="rose"] {--bg:#fcf2f4;--surface:#fffdfd;--raised:#faedf1;--card:#f9e7ed;--ink:#522d3a;--muted:#825966;--subtle:#825966;--border:#efd5de;--line:#f7e5eb;--accent:#a14d68;--soft:#f8e2ea;--chart-0:#b76181;--chart-1:#d797ac;}
+:root[data-theme="amber"] {--bg:#fbf5ea;--surface:#fffdf8;--raised:#f8efdf;--card:#f5e9d3;--ink:#493923;--muted:#746143;--subtle:#746143;--border:#e7dac2;--line:#f1e7d5;--accent:#8c601c;--soft:#f5e7cb;--chart-0:#b08842;--chart-1:#c6ad71;}
+:root[data-theme="ocean"] {--bg:#edf8f8;--surface:#fbffff;--raised:#e7f4f4;--card:#e0f1f0;--ink:#224143;--muted:#466b6d;--subtle:#466b6d;--border:#cbe1e0;--line:#dceeed;--accent:#24757a;--soft:#dbf0ef;--chart-0:#3c939a;--chart-1:#78b6b3;}
+/* Series, token-type and no-type colors are shared by every light theme and by both dark ones,
+   so a service keeps its color when the theme changes. --series-N follows the slots in
+   format.js (ROUTE_SLOTS); --token-N runs from the most to the least prominent step. */
+:root{--series-0:#2a78d6;--series-1:#eb6834;--series-2:#1baf7a;--series-3:#eda100;--series-4:#e87ba4;--series-5:#008300;--series-6:#6250d6;--series-7:#e34948;--token-0:#5f1c93;--token-1:#7c3eb3;--token-2:#9a5dd5;--token-3:#b679f3;--token-4:#ca9bfe;--token-none:#909090}
+:root:is([data-theme="charcoal"],[data-theme="midnight"]){--series-0:#3987e5;--series-1:#d95926;--series-2:#199e70;--series-3:#c98500;--series-4:#d55181;--series-5:#008300;--series-6:#9085e9;--series-7:#e66767;--token-0:#e2ccfe;--token-1:#cea4fe;--token-2:#b97df7;--token-3:#9d60d8;--token-4:#8244ba;--token-none:#787878}
 
 :root{--fs-xs:12px;--fs-sm:14px;--fs-md:16px;--fs-lg:20px;--fs-xl:32px;font-family:Inter,Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);font-synthesis:none;font-size:var(--fs-sm)}
 *{box-sizing:border-box}
@@ -108,8 +113,13 @@ footer{border-top:1px solid var(--border);padding:24px 0 30px;color:var(--subtle
 .chart-grid{display:grid;grid-template-columns:1fr 1.4fr;gap:20px}
 .chart-grid .panel{min-width:0}
 .donut-wrap{display:flex;align-items:center;gap:18px;min-height:240px}
-.donut{width:48%;max-width:240px;flex-shrink:0}
-.donut text{fill:var(--ink)}
+.donut-figure{position:relative;width:48%;max-width:240px;flex-shrink:0}
+.donut{display:block;width:100%}
+/* The total sits over the ring's hole as page text, so it keeps the type scale at any width. */
+.donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;text-align:center;pointer-events:none}
+.donut-center strong{font-size:var(--fs-lg);font-weight:600;font-variant-numeric:tabular-nums}
+.donut-center span{font-size:var(--fs-xs);color:var(--subtle)}
+.donut-center .donut-sub{color:var(--muted)}
 .donut-key{display:flex;flex-direction:column;gap:14px;font-size:var(--fs-xs)}
 .donut-key span{color:var(--subtle);display:block;margin-top:4px}
 .donut-key .excluded{opacity:.55}
@@ -178,6 +188,7 @@ header{height:auto;min-height:85px;display:flex;align-items:center;justify-conte
  .section-heading>span{font-size:var(--fs-xs)}
  .donut-wrap{gap:10px}
  .donut-key{font-size:var(--fs-xs)}
+ .donut-center strong{font-size:var(--fs-md)}
  header{gap:8px}
  .header-tools{gap:8px}
  .chart-tooltip{font-size:var(--fs-xs);width:265px;padding:12px}
@@ -652,7 +663,6 @@ details.source-group[open]>summary{margin-bottom:-8px}
 #filter-adv .presets{margin:0 0 16px}
 /* A phone's quarter-width cell has room for the name and count; the pressed style shows it is open. */
 @media(max-width:600px){.filter-more{min-height:36px;padding:4px}.filter-more:is([aria-expanded])::after{content:none}#filter-adv .filters{margin-top:-4px}}
-.donut .donut-sub{fill:var(--muted)}
 .value-bar{margin-bottom:16px}
 .value-bar em{position:absolute;top:9px;transform:translateX(-50%);font-style:normal;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
 kbd{font:inherit;font-size:var(--fs-xs);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--surface)}
@@ -819,7 +829,6 @@ body:has(dialog[open]){overflow:hidden}
 .consumption-key{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--muted)}
 .consumption-key svg{flex:none}
 .consumption-color{display:inline-block;width:9px;height:9px;border-radius:2px;flex-shrink:0}
-.color-0{background:var(--chart-0)}.color-1{background:var(--chart-1)}.color-2{background:var(--chart-2)}.color-3{background:var(--chart-3)}.color-4{background:var(--chart-4)}.color-5{background:var(--chart-5)}.color-6{background:var(--chart-6)}.color-7{background:var(--chart-7)}
 #consumption-legend{gap:8px 16px;flex-wrap:wrap}
 #consumption-chart{position:relative}
 #consumption-chart>svg{display:block;width:100%;height:auto;overflow:visible;-webkit-tap-highlight-color:transparent}

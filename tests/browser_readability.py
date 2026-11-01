@@ -126,6 +126,10 @@ with sync_playwright() as p:
     assert ranked, ranked
     for route, fill in ranked:
         assert legend.get(route) == fill, (route, fill, legend)
+    # Services stack and list in their slot order, so the same neighbors meet in every period.
+    order = list(legend)
+    slots = page.evaluate('ROUTE_SLOTS')
+    assert len(order) > 1 and order == sorted(order, key=lambda r: slots[r]), (order, slots)
 
     # The model table fits without its token breakdown; 상세 열 is kept on this device.
     panel = page.locator('[data-panel="models"]')
