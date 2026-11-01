@@ -87,7 +87,7 @@ with sync_playwright() as p:
     page = browser.new_page(service_workers='block', viewport={'width': 1440, 'height': 1000})
     page.route('**/*', serve)
     errors = []; page.on('pageerror', lambda e: errors.append(str(e))); watch_csp(page, errors)
-    page.goto(ORIGIN+'/')
+    page.goto(ORIGIN+'/?view=quota')
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     # One Claude Code card, one section per account; no second Anthropic service.
     cards = page.locator('#limits > .limit-card')
@@ -205,7 +205,7 @@ with sync_playwright() as p:
         editor = context.new_page()
         editor.clock.install()
         editor.route('**/*', serve)
-        editor.goto(ORIGIN+'/')
+        editor.goto(ORIGIN+'/?view=quota')
         expect(editor.locator('#updated')).to_contain_text('마지막 갱신')
         editor.evaluate("$('auto').checked=false;schedule()")
         editor.locator('#resource-add').click()

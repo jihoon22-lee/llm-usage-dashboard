@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='codex-browser-') as temporary:
         browser=p.chromium.launch();page=browser.new_page(viewport={'width':1440,'height':1000},service_workers='block')
         fixture_page(page);page.route('**/api/codex/**',handle)
         errors=[];page.on('pageerror',lambda e:errors.append(str(e)));watch_csp(page,errors)
-        page.goto('https://dashboard.test/')
+        page.goto('https://dashboard.test/?view=quota')
         expect(page.locator('#updated')).to_contain_text('마지막 갱신')
         assert not calls,'Quota tab fetched historical consumption'
         page.locator('[data-open-consumption]').click()

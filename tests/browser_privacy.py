@@ -18,7 +18,7 @@ with sync_playwright() as p:
         }""")
         page.reload();expect(page.locator('#updated')).to_contain_text('마지막 갱신')
         keys=page.evaluate("async()=> (await (await caches.open('llm-usage-data-v1')).keys()).map(r=>new URL(r.url).pathname)")
-        assert keys and set(keys)<= {'/api/usage','/api/limits','/api/reports','/api/session','/api/project'},keys
+        assert keys and set(keys)<= {'/api/usage','/api/overview','/api/limits','/api/reports','/api/session','/api/project'},keys
         page.locator('#settings-open').click()
         expect(page.locator('#cfg-subs-save')).to_be_enabled()
         page.locator('#ntfy-url').fill('https://synthetic.invalid/unsaved-secret') if width==1440 else page.evaluate("$('ntfy-url').value='https://synthetic.invalid/unsaved-secret'")
