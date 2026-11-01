@@ -135,6 +135,9 @@ with sync_playwright() as playwright:
         return page.locator('#rows tr').evaluate_all('(rows,index)=>rows.map(r=>Number(r.children[index].textContent.replaceAll(",","")))',index)
     assert numeric_values('total') == sorted(numeric_values('total'),reverse=True)
     assert page.locator('#rows .row-rank').all_text_contents()==['1','2','3','4','5']
+    # The token breakdown starts folded; 상세 열 reveals its sortable headers.
+    expect(page.locator('[data-sort="output"]')).to_be_hidden()
+    page.locator('#cols-toggle').click()
     for key in ('uncached_input','cached_input','output','cache_creation','reasoning','total'):
         button=page.locator('[data-sort="'+key+'"]');button.click()
         values=numeric_values(key)

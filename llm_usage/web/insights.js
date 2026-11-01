@@ -82,10 +82,13 @@ function renderInsights(data){
  else{
   const absolute=c.status==='observed'&&c.percent==null;
   const change=absolute?`${signed(c.delta)} 토큰`:c.percent==null?'증감률 계산 불가':`${c.percent>0?'+':''}${c.percent.toFixed(1)}%`;
-  $('comparison').innerHTML=`<div class="comparison-value">${esc(change)}<small>${absolute?'이전 구간 대비 기록된 토큰 차이':'관측 토큰 차이 '+signed(c.delta)}</small></div><p class="hint">현재 ${esc(c.start.slice(0,16).replace('T',' '))} → ${esc(c.end_exclusive.slice(0,16).replace('T',' '))}<br>이전 ${esc(c.previous_start.slice(0,16).replace('T',' '))} → ${esc(c.previous_end_exclusive.slice(0,16).replace('T',' '))} KST · 종료 미포함</p><p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong>${signed(r.delta)}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div><p class="hint">캐시 생성 포함 · 변화량 절댓값 상위 6개</p>`;
+  const span=`현재 ${c.start.slice(0,16).replace('T',' ')} → ${c.end_exclusive.slice(0,16).replace('T',' ')} · 이전 ${c.previous_start.slice(0,16).replace('T',' ')} → ${c.previous_end_exclusive.slice(0,16).replace('T',' ')} KST · 종료 미포함`;
+  $('comparison').innerHTML=`<div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong data-tip="${esc(signed(r.delta))} 토큰">${r.delta>0?'+':'−'}${compact(Math.abs(r.delta))}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div>`
+   +`<p class="comparison-total" data-tip="${esc(span)}">세부 요청 기록 합계 <span class="comparison-value">${esc(change)}</span>${absolute?'':` <small>${esc(signed(c.delta))} 토큰</small>`}</p>`
+   +`<p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''} 변화량이 큰 모델 6개까지 · 캐시 생성 포함.</p>`;
  }
  const cache=insights.cache;
- if(data.reconciliation)$('comparison').insertAdjacentHTML('beforeend','<p class="hint">이 분석은 세부 요청 기록 기준이며 서버 누계 보완분은 상단 합계에서 확인할 수 있습니다.</p>');
+ if(data.reconciliation)$('comparison').insertAdjacentHTML('beforeend','<p class="hint">서버 누계 보완분을 더한 기간 전체의 변화는 위 기간 요약 카드에 있습니다.</p>');
  const saved=data.cost&&data.cost.cache_savings;
  $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>세부 요청 기록의 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
  const selected=$('cache-series').value;
@@ -126,6 +129,8 @@ let openSession=null;const sessionDetails=new Map();
 let reportsLoaded=0;
 async function loadReports(){
  if(Date.now()-reportsLoaded<300000)return;
+ if(!lastReports)$('reports').innerHTML='<p class="hint">주간 리포트를 불러오는 중…</p>';
+ if(!lastMonths)$('monthly').innerHTML='<p class="hint">월간 결산을 불러오는 중…</p>';
  try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[],d.this_week||null);renderMonths(d.months||[]);}
  catch(e){$('reports').innerHTML=`<p class="hint">주간 리포트를 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
