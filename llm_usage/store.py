@@ -755,7 +755,7 @@ class Store:
             cache=self._usage_cache;cache[key]=body
             while len(cache)>12:cache.popitem(last=False)
 
-    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None, price_history=None):
+    def usage(self, period='7d', start=None, end=None, granularity='day', group='provider', cumulative=False, now=None, pricing=None, subscriptions=None, compare=None, scope=None, value_alert_usd=None, sections='all', as_of=None, names=None, ended=None, price_history=None, origins=True):
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all','core','insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql,scope_args='',()
@@ -797,7 +797,10 @@ class Store:
                 if len(body['series'])<=5000:self._usage_put(key,body)
             body={**body,'prior':self._prior(c,body,period,compare,now,pricing,scope_sql,scope_args,sums,count) if sections!='insights' else None}
             from .reconciliation import apply as reconcile_usage
-            body=reconcile_usage(c,body,group,cumulative,scope,pricing=pricing,calendar_start=(midnight-timedelta(days=181)).date().isoformat())
+            # `origins`: the usage tab's split of the records by origin. A caller that only
+            # takes figures from the response (the overview, reports) leaves it out.
+            body=reconcile_usage(c,body,group,cumulative,scope,pricing=pricing,calendar_start=(midnight-timedelta(days=181)).date().isoformat(),
+                                 origins=origins)
             sources,unavailable_routes=self._usage_live(c,body['rows'],now)
             from .claude_accounts import describe
             claude=describe(c,names)

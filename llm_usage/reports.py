@@ -242,7 +242,7 @@ def build(store,now,pricing=None):
 def _build(store,now,pricing=None):
     monday,next_monday=last_week(now)
     day=lambda d:d.strftime('%Y-%m-%d')
-    span=dict(period='custom',granularity='day',pricing=pricing,sections='core')
+    span=dict(period='custom',granularity='day',pricing=pricing,sections='core',origins=False)
     current=store.usage(start=day(monday),end=day(next_monday-timedelta(days=1)),group='route',**span)
     previous=store.usage(start=day(monday-timedelta(days=7)),end=day(monday-timedelta(days=1)),group='route',**span)
     models=store.usage(start=day(monday),end=day(next_monday-timedelta(days=1)),group='model',**span)
@@ -371,7 +371,7 @@ def this_week(store,now,pricing=None):
     monday,_=last_week(now);monday+=timedelta(days=7)
     day=lambda d:d.strftime('%Y-%m-%d')
     with held():
-        usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now)
+        usage=store.usage(period='custom',start=day(monday),end=day(monday+timedelta(days=6)),group='route',pricing=pricing,sections='core',now=now,origins=False)
     routes={}
     for row in usage['rows']:routes[row['route']]=routes.get(row['route'],0)+token_total(row)
     with store.connect() as c:

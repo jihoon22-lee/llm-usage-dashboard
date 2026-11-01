@@ -187,6 +187,17 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(sorted((e['scope_id'],e['end'],e['tokens']) for e in entries),
                          [('claude:s',at('10:00'),80),('claude:s',at('11:00'),30),('claude:t',at('10:00'),25)])
 
+    def test_origin_split_is_left_out_only_when_asked(self):
+        # A record a cloud aggregate holds is 'cloud' even when telemetry reported it too.
+        with self.store.connect() as c:
+            for key,sources,output in (('l',('local',),1),('c',('claude-cloud:a',),20),('t',('telemetry',),300),('ct',('claude-cloud:a','telemetry'),4000)):
+                self.store.event(c,key,stamp('2026-10-12T09:30:00Z'),'Anthropic','claude-code','claude-test',dict(output=output),session='s',project='p')
+                for source in sources:link(c,'claude:s',key,source)
+        self.evidence(5000)
+        full,bare=self.usage(period='today'),self.usage(period='today',origins=False)
+        self.assertEqual(full['reconciliation'].pop('origin_tokens'),dict(cloud=4020,local=1,telemetry=300))
+        self.assertEqual(full,bare)
+
     def test_account_intervals_remain_unallocated_at_kst_midnight(self):
         with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)
         today=self.usage(period='today')

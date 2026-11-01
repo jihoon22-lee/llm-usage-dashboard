@@ -270,8 +270,9 @@ def series_label(e, group):
     return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
 
 
-def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None):
-    """Overlay a COPY of the cached request-only response; never mutate the cache."""
+def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None, origins=True):
+    """Overlay a COPY of the cached request-only response; never mutate the cache.
+    `origins`: also split the period's records by where they came from (`origin_tokens`)."""
     data=copy.deepcopy(body)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
     # reach back as far as the local records (whose first record is taken in the scope too).
@@ -397,17 +398,19 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         overlapping_intervals=overlapping,conflicts=conflicts,
         cost_basis='세부 요청 기록 중 단가가 확인된 부분',requests_basis='수집한 고유 요청',
         sources=sorted({e['source'] for e in accepted}))
-    where='e.ts>=? AND e.ts<?';args=[a,b]
-    if scope:
-        kind,_,value=scope.partition(':')
-        if kind in ('route','provider','model','project','account'):
-            column=("COALESCE(e.project,'미분류')" if kind=='project' else
-                    "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
-            where+=' AND '+column+'=?';args.append(value)
-    origins=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
-                      "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
-                      'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
-    data['reconciliation']['origin_tokens']={r['origin']:r['tokens'] for r in origins}
+    # The split looks up every record of the period, so callers that do not show it skip it.
+    if origins:
+        where='e.ts>=? AND e.ts<?';args=[a,b]
+        if scope:
+            kind,_,value=scope.partition(':')
+            if kind in ('route','provider','model','project','account'):
+                column=("COALESCE(e.project,'미분류')" if kind=='project' else
+                        "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
+                where+=' AND '+column+'=?';args.append(value)
+        rows=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
+                       "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
+                       'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
+        data['reconciliation']['origin_tokens']={r['origin']:r['tokens'] for r in rows}
     comparison=data.get('compare')
     if comparison:
         ca,cb=stamp(comparison['start']),stamp(comparison['end_exclusive'])
