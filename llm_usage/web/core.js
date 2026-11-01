@@ -6,8 +6,9 @@ const motion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'
 const seriesLabel=label=>label===RESIDUAL?residualName:$('group').value==='route'?(routeNames[label]||label):$('group').value==='account'?serviceFull(label):$('group').value==='agent'?(KIND_NAMES[label]||label):(['Unknown','Other'].includes(label)?'제작사 미확인':label);
 const missingRoutes=data=>$('group').value==='route'?(data.unavailable_routes||[]).filter(r=>!data.labels.includes(r.route)):[];
 const gapLabel=row=>row.observed?(row.observation_stale?'토큰 관측 있음 · 합계 검증 대기':'토큰 수신 중 · 합계 검증 대기'):'토큰 상세 미수집';
-// Short numbers (1.2M) are a per-browser reading preference; exact values stay in the tooltip.
-const compactNumbers=()=>storage.get('llmCompactNumbers')==='1';
+// Short numbers (1.2M) read first, the exact value in the tooltip; a browser can keep exact
+// numbers instead.
+const compactNumbers=()=>storage.get('llmCompactNumbers')!=='0';
 const tableNumber=v=>compactNumbers()?`<span data-tip="${fmt(v)}">${compact(v)}</span>`:fmt(v);
 const tableCells=(row,denom)=>fields.map(k=>{
  const cls=k==='total'?'total-cell':DETAIL_COLS.has(k)?'col-detail':'';
@@ -150,7 +151,7 @@ function applyGeometry(root){
 }
 // Fixed-viewBox charts scale their geometry with the panel, which used to
 // shrink or grow the axis text with it. Scale each <text> back so it renders
-// at ~11px (13px for the end-of-line badge) on screen at any width.
+// at 12px (14px for the end-of-line badge) on screen at any width.
 function fitSvgText(root){
  const svgs=root.querySelectorAll?root.querySelectorAll('svg.percent-chart,svg.quota-line,svg.quota-bars'):[];
  svgs.forEach(svg=>{
@@ -158,7 +159,7 @@ function fitSvgText(root){
   if(!vb||!vb.width||!w)return;
   const ratio=vb.width/w;
   svg.querySelectorAll('text').forEach(t=>{
-   t.style.fontSize=(t.classList.contains('quota-end')?13:11)*ratio+'px';
+   t.style.fontSize=(t.classList.contains('quota-end')?14:12)*ratio+'px';
   });
  });
 }

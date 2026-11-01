@@ -3,7 +3,7 @@
 A disposable synthetic store and Flask app serve every request: no provider, account
 file, collector, private origin or production database is consulted.
 """
-from browser_support import Sock, watch_csp, artifact_directory
+from browser_support import Sock, watch_csp, artifact_directory, show_filter_details
 import argparse
 import json
 import sys
@@ -80,6 +80,7 @@ with sync_playwright() as p:
     page.locator('#tab-usage').click()
     page.select_option('#period', '30d')
     page.select_option('#group', 'model')
+    show_filter_details(page)
     page.select_option('#granularity', 'week')
     # Model table: the residual is the last row, unranked and not a model to narrow to.
     residual_row = page.locator('#rows tr.residual-row')
@@ -167,7 +168,7 @@ with sync_playwright() as p:
     expect(page.locator('#reports')).to_contain_text('Codex 자동 리뷰')
     expect(page.locator('#reports')).to_contain_text('계정 일별 합계가 주 안에 온전히 든 6일 기준')
     expect(page.locator('#reports .report-head').first).to_be_visible()
-    page.locator('#tab-status').click()
+    page.locator('#data-status').click()
     expect(page.locator('#account-gap summary')).to_contain_text('Codex 계정 합계 대비 자동 리뷰')
     expect(page.locator('#account-gap th').last).to_have_text('자동 리뷰')
     # Mobile: the residual rows and line fit without page overflow.

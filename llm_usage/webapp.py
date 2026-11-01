@@ -147,9 +147,11 @@ def create_app(config=None):
     @app.get('/api/reports')
     def reports():
         from .monthly import recent as months
+        from .overview import week_facts
         from .pricing import load_pricing
         from .reports import recent,this_week
-        return jsonify(reports=recent(store),this_week=this_week(store,time.time(),load_pricing(config)),months=months(store))
+        return jsonify(reports=[{**r,'facts':week_facts(r)} for r in recent(store)],
+                       this_week=this_week(store,time.time(),load_pricing(config)),months=months(store))
 
     @app.get('/api/limits')
     def limits():

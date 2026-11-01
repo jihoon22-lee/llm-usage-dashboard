@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from browser_support import ORIGIN, Sock, artifact_directory, watch_csp
+from browser_support import ORIGIN, Sock, artifact_directory, watch_csp, show_filter_details
 from playwright.sync_api import sync_playwright, expect
 from llm_usage.store import Store
 from llm_usage.webapp import create_app
@@ -86,8 +86,7 @@ with tempfile.TemporaryDirectory(prefix='llm-recent-browser-') as root:
             page.keyboard.press('Escape')
             # A coarser selected granularity drills back to the rolling hour,
             # not to an inverted date range ending on the previous calendar day.
-            if page.locator('#filter-fold').get_attribute('open') is None:
-                page.locator('#filter-fold > summary').click()
+            show_filter_details(page)
             page.locator('#granularity').select_option('day')
             page.wait_for_function("()=>lastUsage?.granularity==='day'&&!pending")
             page.locator('#chart > svg').focus();page.keyboard.press('Enter')

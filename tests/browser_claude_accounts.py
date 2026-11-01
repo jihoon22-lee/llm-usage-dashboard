@@ -3,7 +3,7 @@
 A disposable synthetic store and Flask app serve every request: no provider, account
 file, collector, private origin or production database is consulted.
 """
-from browser_support import Sock, watch_csp, artifact_directory
+from browser_support import Sock, watch_csp, artifact_directory, show_filter_details
 import argparse
 from datetime import datetime
 import json
@@ -46,8 +46,8 @@ with store.connect() as c:
         store.limit(c, 'devin', bucket, 100, now+86400, now-60, 'devin')
     store.source(c, 'devin', 'ok', 'Free · 계정 사용량 조회', now-60)
     store.source(c, 'claude-accounts', 'ok', 'Claude 계정 2개 · 훅 기록 12건 · 계정 미확인 요청 3건', now-60)
-    # A source that never succeeded is a chip at once; one that failed five minutes after a
-    # success is not yet (the status tab shows both).
+    # A source that never succeeded needs a look at once; one that failed five minutes after
+    # a success waits for the next cycle (진단 shows both, in different groups).
     store.source(c, 'claude-credits:abababababab', 'error', 'HTTP 500', now-120)
     store.source(c, 'claude-resets:abababababab', 'ok', '', now-400)
     store.source(c, 'claude-resets:abababababab', 'error', 'HTTP 503', now-100)
@@ -95,15 +95,28 @@ with sync_playwright() as p:
     claude = page.locator('#quota-claude-code')
     expect(claude.locator('.quota-account')).to_have_count(2)
     expect(claude.locator('.quota-account-title').nth(0)).to_contain_text('Pro')
-    expect(claude.locator('.quota-account-title').nth(0)).to_contain_text('기본 Claude 홈')
+    # Where each login lives is a note beside the account name (hover, focus or tap), with
+    # the same text as its accessible name.
+    expect(claude.locator('.quota-account-head').nth(0).locator('.info')).to_have_attribute('data-tip','기본 Claude 홈')
     expect(claude.locator('.quota-account-title').nth(1)).to_contain_text('Max 5x')
-    expect(claude.locator('.quota-account-title').nth(1)).to_contain_text('zerosub 관리 홈 claude-0123abcd4567')
+    home=claude.locator('.quota-account-head').nth(1).locator('.info')
+    expect(home).to_have_attribute('data-tip','zerosub 관리 홈 claude-0123abcd4567')
+    expect(home).to_have_attribute('aria-label','로그인 위치: zerosub 관리 홈 claude-0123abcd4567')
+    home.hover();expect(page.locator('#tip')).to_have_text('zerosub 관리 홈 claude-0123abcd4567')
+    # The read path is a note too: the card line keeps only when it was checked.
+    meta=claude.locator('.quota-account').nth(1).locator('.card-meta')
+    expect(meta).not_to_contain_text('OAuth')
+    expect(meta.locator('.info')).to_have_attribute('data-tip','계정 사용량 조회 · 내부 OAuth 경로')
     expect(claude.locator('.quota-account').nth(1).locator('.remaining').first).to_contain_text('92%')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')
     expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0% · 다른 계정 Claude(Max 5x) 5시간 92.0%')
-    expect(page.locator('#alerts')).to_contain_text('claude-credits · Max 5x 수집 실패')
-    expect(page.locator('#alerts')).to_contain_text('claude-oauth · Max 5x 수집 지연')
+    # Collection problems are counted by the header's data status, not added as chips: the
+    # lasting credits failure and the late Max OAuth read need a look; the resets failure,
+    # 100 seconds after a success, waits for the next cycle.
+    expect(page.locator('#data-status')).to_have_attribute('data-level','critical')
+    expect(page.locator('#data-status')).to_have_text('조치 필요 2')
+    expect(page.locator('#alerts')).not_to_contain_text('claude-credits')
     expect(page.locator('#alerts')).not_to_contain_text('claude-resets')
     # The ended Devin subscription folds with its reason and leaves the reset timeline.
     expect(page.locator('#reset-timeline')).not_to_contain_text('Devin')
@@ -122,6 +135,7 @@ with sync_playwright() as p:
     expect(page.locator('#legend')).to_contain_text('Anthropic / Claude Code · Max 5x')
     expect(page.locator('#legend')).to_contain_text('Anthropic / Claude Code · 계정 미확인')
     expect(page.locator('#scope optgroup[label="Claude 계정"] option')).to_have_count(3)
+    show_filter_details(page)
     page.select_option('#scope', 'account:'+SECOND)
     expect(page.locator('#scope-chip')).to_contain_text('Claude 계정: Max 5x')
     expect(page.locator('#cards')).to_contain_text('45K')
@@ -133,10 +147,10 @@ with sync_playwright() as p:
     expect(subvalue).to_contain_text('Anthropic / Claude Code · Pro')
     expect(subvalue.locator('.sub-row', has_text='Max 5x')).to_contain_text('월 구독료 미설정')
     expect(subvalue).not_to_contain_text('Cognition / Devin')
-    # Status sources name their account.
-    page.locator('#tab-status').click()
-    expect(page.locator('#sources')).to_contain_text('claude-oauth · Max 5x')
-    expect(page.locator('#sources')).to_contain_text('claude-resets · Max 5x')
+    # 진단 sources name their account, in the groups the header badge counted.
+    page.locator('#data-status').click()
+    assert page.locator('#sources .source-action .source strong').all_text_contents()==['claude-credits · Max 5x','claude-oauth · Max 5x']
+    assert page.locator('#sources .source-retry .source strong').all_text_contents()==['claude-resets · Max 5x']
     expect(page.locator('#sources')).to_contain_text('claude-accounts')
     # Settings: a row per Claude account with a display name; the ended toggle is kept.
     page.locator('#settings-open').click()

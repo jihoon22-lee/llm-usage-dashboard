@@ -6,6 +6,7 @@ import argparse
 import sys
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -20,9 +21,12 @@ args = parser.parse_args()
 origin = 'https://dashboard.test'
 output = artifact_directory(args.artifacts)
 
-FACTS = [dict(kind='exhausted', week='2026-10-26', route='codex', bucket='codex · 10080분', display_name='주간', count=2, streak=3),
-         dict(kind='zero_hours', week='2026-10-26', route='codex', bucket='codex · 10080분', display_name='주간', hours=12.5),
-         dict(kind='service_change', week='2026-10-26', route='claude-code', change_pct=150.0, tokens=10),
+# The last full KST week, which 개요 calls 지난주; an older stored week goes by its date.
+_today = datetime.now(timezone(timedelta(hours=9))).date()
+LAST_WEEK = (_today - timedelta(days=_today.weekday() + 7)).isoformat()
+FACTS = [dict(kind='exhausted', week=LAST_WEEK, route='codex', bucket='codex · 10080분', display_name='주간', count=2, streak=3),
+         dict(kind='zero_hours', week=LAST_WEEK, route='codex', bucket='codex · 10080분', display_name='주간', hours=12.5),
+         dict(kind='service_change', week=LAST_WEEK, route='claude-code', change_pct=150.0, tokens=10),
          dict(kind='idle_subscription', route='devin', monthly_usd=20, collected=False),
          dict(kind='value_below_price', month='2026-10', route='opencode-go', ratio=0.4, value=4, monthly_usd=10),
          dict(kind='peak_hours', start_hour=14, end_hour=17, share=31.2)]
@@ -126,6 +130,9 @@ with sync_playwright() as p:
     expect(facts.nth(3)).to_contain_text('Devin 최근 30일 수집된 기록 없음 · 월 $20')
     expect(facts.nth(4)).to_contain_text('10월 OpenCode Go 공개 단가 환산 $4 · 구독료 $10의 0.4배')
     expect(facts.nth(5)).to_contain_text('사용이 가장 많은 시간대 14–17시 · 최근 30일의 31%')
+    # A week before last (its report not built yet) names its Monday instead of 지난주.
+    older = page.evaluate("factText({kind:'zero_hours',week:'2026-01-05',route:'codex',bucket:'codex · 10080분',display_name:'주간',hours:2})")
+    assert older == '1월 5일 주 Codex 주간 한도가 0%로 머문 시간 2시간', older
     text = page.locator('#view-overview').inner_text()
     for word in ('예상', '전망', '추천', '전환하', '권장'):
         assert word not in text, word
@@ -187,13 +194,13 @@ with sync_playwright() as p:
     page.close()
     context.close()
 
-    # Phones: rows stack, five tabs fit the bottom bar and nothing scrolls sideways.
+    # Phones: rows stack, four tabs fit the bottom bar and nothing scrolls sideways.
     context = browser.new_context(service_workers='block', viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
     page = open_page(context)
     page.goto(origin+'/'); loaded(page)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     tabs = page.locator('#tabs [role=tab]')
-    expect(tabs).to_have_count(5)
+    expect(tabs).to_have_count(4)
     assert page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].every(t=>t.scrollWidth<=t.clientWidth+1)")
     assert page.locator('#ov-chart svg').evaluate('s=>s.getBoundingClientRect().right<=innerWidth')
     page.screenshot(path=str(output/'overview-mobile.png'), full_page=True)

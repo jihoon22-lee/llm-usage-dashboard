@@ -18,6 +18,7 @@ output.mkdir(parents=True, exist_ok=True)
 now = time.time()
 SOURCES = [dict(name='수집기', status='ok', checked=now-20, detail='idle'),
            dict(name='codex', status='error', checked=now-60, detail='HTTP 500'),
+           dict(name='claude-oauth', status='error', checked=now-60, last_success=now-300, detail='HTTP 503'),
            dict(name='WSL .claude/projects', status='partial', checked=now-60, detail='12개 기록 파일 확인 · 해석 실패 1건'),
            dict(name='claude-code', status='idle', checked=now-3*86400, detail='최근 24시간 상태줄 수신 없음'),
            dict(name='normalization', status='ok', checked=now-60, detail='카운터 초기화 구간을 구분한 집계'),
@@ -33,6 +34,8 @@ REPORT = dict(week='2026-09-21', start='2026-09-21', end='2026-09-27', built=now
               routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
               models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
               exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24',
+              facts=[dict(kind='exhausted', week='2026-09-21', route='claude-code', bucket='five_hour', count=2, streak=3),
+                     dict(kind='zero_hours', week='2026-09-21', route='claude-code', bucket='five_hour', hours=3.5)],
               accounts=[dict(account='claude-code', label='Pro', tokens=4e8, cost=None),
                         dict(account='claude-code:unknown', label='계정 미확인', tokens=1e8, cost=None)],
               projects=[dict(project='fixture-project', tokens=2e9, cost=500.0), dict(project='미분류', tokens=1e9, cost=None)],
@@ -135,16 +138,25 @@ with sync_playwright() as p:
     expect(alerts).to_contain_text('사용량 급증')
     expect(alerts).to_contain_text('단가 미등록 모델 1개 · brand-new-model')
     expect(alerts).to_contain_text('fixture-project 월 예산 90%')
-    # Sources: failures and values to check first with a hint, what is not collected
-    # listed in a neutral color, normal sources (internal work inside) folded.
-    page.locator('#tabs [data-view="status"]').click()
+    # 진단 groups sources by what they ask of the owner, with the header badge's rule: a
+    # failure with no success yet needs a look, one 5 minutes after a success retries; a
+    # partly read source and an unused status line stay listed as rows; normal sources fold.
+    expect(page.locator('#data-status')).to_have_text('조치 필요 1')
+    page.locator('#data-status').click()
     expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
-    assert page.locator('.source-summary > span').all_text_contents()==['실패 1','확인 필요 1','미제공 0','미사용 1','정상 3']
+    assert page.locator('.source-summary > span').all_text_contents()==['조치 필요 1','일시 실패 1','일부만 확인 1','수집하지 않음 1','정상 3']
     action = page.locator('#sources .source-action')
-    expect(action.locator('h4')).to_have_text('조치 필요 2개')
-    assert action.locator('.source strong').all_text_contents()==['codex','WSL .claude/projects']
+    expect(action.locator('h4')).to_have_text('조치 필요 1개')
+    assert action.locator('.source strong').all_text_contents()==['codex']
     expect(action.locator('.source').first).to_be_visible()
-    expect(action).to_contain_text('다음 주기에 다시 시도')
+    expect(action).to_contain_text('원인을 확인')
+    retry = page.locator('#sources .source-retry')
+    assert retry.locator('.source strong').all_text_contents()==['claude-oauth']
+    expect(retry).to_contain_text('다음 수집 주기에 다시 시도')
+    partly = page.locator('#sources .source-partly')
+    expect(partly.locator('li').first).to_contain_text('WSL .claude/projects · 일부 미수집')
+    expect(partly.locator('li').first).to_contain_text('해석 실패 1건')
+    assert partly.locator('.src-bad,.src-warn').count()==0
     quiet = page.locator('#sources .source-quiet')
     expect(quiet.locator('li').first).to_be_visible()
     expect(quiet.locator('li').first).to_contain_text('claude-code · 미사용')
@@ -162,16 +174,19 @@ with sync_playwright() as p:
     assert page.locator('#sources details[data-fold="ok"]').get_attribute('open') is not None
     expect(page.locator('#sources-panel .coverage-fold')).to_contain_text('수집 범위 설명')
     assert page.locator('#sources-panel .coverage-fold').get_attribute('open') is None
-    # Usage: the bucket containing now is marked, and numbers can be shortened.
+    # Usage: the bucket containing now is marked; numbers start short, exact ones a click away.
     page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#chart .chart-current-label')).to_have_text('진행 중')
     first_total = page.locator('#rows tr').first.locator('.total-cell')
-    exact = first_total.inner_text()
-    page.locator('#num-compact').click()
     expect(page.locator('#num-compact')).to_have_attribute('aria-pressed', 'true')
-    assert first_total.inner_text() != exact and first_total.locator('[data-tip]').count() == 1
+    short = first_total.inner_text()
+    exact = first_total.locator('[data-tip]').get_attribute('data-tip')
     page.locator('#num-compact').click()
+    expect(page.locator('#num-compact')).to_have_attribute('aria-pressed', 'false')
     expect(first_total).to_have_text(exact)
+    assert short != exact and first_total.locator('[data-tip]').count() == 0
+    page.locator('#num-compact').click()
+    expect(first_total).to_have_text(short)
     # Long session IDs keep their last characters so neighbours stay distinguishable.
     expect(page.locator('#sessions code').first).to_have_text('fixture-…sion')
     expect(page.locator('#sessions code').first).to_have_attribute('data-tip', 'fixture-session')
@@ -193,11 +208,16 @@ with sync_playwright() as p:
     week = reports.locator('.this-week')
     expect(week).to_contain_text('이번 주 2026-09-28 ~ 2026-10-04 · 진행 중 · 09. 30. 12:00 기준')
     expect(week).to_contain_text('지난주 같은 시점 대비 +25.0%')
-    expect(week).to_contain_text('서비스별: Codex 1B · Claude 500M')
-    expect(week.locator('.hint')).to_have_count(1)
+    # Breakdowns are label and value lines; this week has no accounts or details to list.
+    lines = "el=>[...el.querySelectorAll(':scope>.report-lines>div')].map(d=>d.querySelector('dt').textContent+': '+d.querySelector('dd').textContent)"
+    assert week.evaluate(lines) == ['서비스별: Codex 1B · Claude 500M'], week.evaluate(lines)
+    expect(week.locator('.hint')).to_have_count(0)
     assert reports.locator(':scope > *').first.get_attribute('class') == 'this-week'
-    expect(reports).to_contain_text('Claude 계정별: Pro 400M · 계정 미확인 100M')
-    expect(reports).to_contain_text('상위 프로젝트: fixture-project 2B · 미분류 1B')
+    assert reports.evaluate(lines) == ['상위 모델: gpt-fixture 2.5B', 'Claude 계정별: Pro 400M · 계정 미확인 100M',
+                                       '상위 프로젝트: fixture-project 2B · 미분류 1B'], reports.evaluate(lines)
+    # The week's facts lead its report without repeating which week it is.
+    expect(reports.locator(':scope > .report-facts li > span:last-child')).to_have_text(
+        ['Claude 5시간 한도 2회 소진 · 3주 연속', 'Claude 5시간 한도가 0%로 머문 시간 3.5시간'])
     # Quota use: observed facts per window, the tightest first; nothing unobserved reads as 0.
     use = reports.locator('.quota-use tbody tr')
     expect(use).to_have_count(3)
@@ -209,6 +229,24 @@ with sync_playwright() as p:
     expect(use.nth(1)).to_contain_text('41.0% · 1회')
     expect(use.nth(2)).to_contain_text('미관측')
     expect(use.nth(2)).to_contain_text('30분')
+    # Windows with no exhaustion and no time at 0% stay in the table, folded under it.
+    shown = reports.locator(':scope > .table-wrap .quota-use tbody tr:visible')
+    expect(shown).to_have_count(1)
+    quiet = reports.locator(':scope > .quota-quiet-toggle > summary')
+    expect(quiet).to_have_text('소진·0% 시간 없는 한도 2개')
+    quiet.click()
+    expect(shown).to_have_count(3)
+    # A redraw (an account renamed) keeps it open.
+    page.evaluate('redrawReports()')
+    expect(shown).to_have_count(3)
+    # A Claude account goes by its name now in the table, as in the facts above it, over the
+    # plan label stored when the week was built.
+    page.evaluate("setClaudeAccounts([{route:'claude-code',label:'Ultra'},{route:'claude-code:abc',label:'Max'}])")
+    page.evaluate("renderReports([{...%s,quota_use:[{route:'claude-code',bucket:'five_hour',account_label:'Pro',observed_hours:10,"
+                  "zero_hours:1,exhausted:1,streak:0,resets_observed:0,before_reset:null}]}])" % json.dumps(REPORT))
+    expect(use.first.locator('td').first).to_have_text('Claude(Ultra) 5시간')
+    expect(reports.locator(':scope > .report-facts li').first).to_contain_text('Claude(Ultra) 5시간 한도 2회 소진 · 3주 연속')
+    page.evaluate('setClaudeAccounts([])')
     # Older reports without the field keep their exhaustion line; a week whose history was
     # pruned before it was built says so.
     page.evaluate("renderReports([{...%s,quota_use:undefined}])" % json.dumps(REPORT))

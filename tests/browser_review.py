@@ -7,7 +7,7 @@ what-if pricing, notification history and the offline copy served by the root wo
 
   PYTHONPATH=. .venv/bin/python tests/browser_review.py [--artifacts DIR]
 """
-from browser_support import watch_csp
+from browser_support import watch_csp, show_filter_details_async
 import argparse
 import asyncio
 from pathlib import Path
@@ -94,6 +94,7 @@ async def main():
             # Usage: presets, the unified total and what-if pricing.
             await page.keyboard.press('3')
             await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
+            await show_filter_details_async(page)
             await page.locator('[data-preset="models"]').click()
             await expect(page.locator('#group')).to_have_value('model')
             await expect(page.locator('#period')).to_have_value('30d')
@@ -118,7 +119,7 @@ async def main():
             # The lazy insights answer redraws the panel; wait for the bar to carry its width.
             await page.wait_for_function("(document.querySelector('#subvalue .value-bar i')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width>10")
 
-            # Status: the notification history lists the failed send waiting for retry.
+            # 진단 (key 5): the notification history lists the failed send waiting for retry.
             await page.evaluate('document.activeElement.blur()')
             await page.keyboard.press('5')
             await expect(page.locator('#notify-log')).to_contain_text('전송 실패 · 재시도')

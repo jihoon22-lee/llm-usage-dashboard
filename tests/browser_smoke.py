@@ -1,5 +1,5 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory, show_filter_details
 import argparse
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -67,11 +67,13 @@ with sync_playwright() as p:
     expect(page.locator('section[data-view="overview"]')).to_be_visible()
     expect(page.locator('#cards')).to_be_hidden()
     assert 'view=' not in page.url,page.url
-    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()]==['개요','한도','사용량','리포트','상태']
-    # Old view names in bookmarked URLs still land on the renamed tabs.
-    for old,new in (('plan','quota'),('analysis','usage'),('insights','reports'),('sources','status')):
+    assert [b.inner_text() for b in page.locator('#tabs [role=tab]').all()]==['개요','한도','사용량','리포트']
+    # Old view names in bookmarked URLs still land on the renamed views; the old status tab
+    # (?view=status, ?view=sources) opens 진단.
+    for old,new in (('plan','quota'),('analysis','usage'),('insights','reports'),('sources','status'),('status','status')):
         page.goto(url+'?view='+old)
-        expect(page.locator(f'#tab-{new}')).to_have_attribute('aria-selected','true')
+        if new=='status':expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
+        else:expect(page.locator(f'#tab-{new}')).to_have_attribute('aria-selected','true')
         expect(page.locator(f'#view-{new}')).to_be_visible()
         assert 'view='+new in page.url,page.url
     page.goto(url+'?view=quota');expect(page.locator('#updated')).to_contain_text('마지막 갱신')
@@ -101,7 +103,8 @@ with sync_playwright() as p:
     assert page.locator('#chart rect').count()>0
     # Check rendered arithmetic against the synthetic Flask response.
     expect(page.get_by_role('heading',name='모델별 사용량 상세',exact=True)).to_be_visible()
-    cells=page.locator('#rows tr').first.locator('td').all_text_contents()
+    # Short numbers by default: the exact value is each number cell's tooltip.
+    cells=page.locator('#rows tr').first.locator('td').evaluate_all("tds=>tds.map(td=>td.querySelector(':scope>[data-tip]:not(.na-text)')?.dataset.tip??td.textContent)")
     first=page.evaluate('sortedModelRows(lastUsage)[0]')
     assert int(cells[8].replace(',','')) == sum(first.get(k,0) for k in ('uncached_input','cached_input','output','cache_creation','unclassified_tokens'))
     if first.get('unclassified_tokens') and not first.get('recorded_tokens'):
@@ -118,6 +121,7 @@ with sync_playwright() as p:
     expect(delta).to_have_text('직전 7일 같은 시점 기록 부족')
     # Claude Code alone has local records a hundred days back: the change against the
     # seven days before, cut at the same time, as the response gives it.
+    show_filter_details(page)
     with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route%3Aclaude-code' in r.url and r.status==200):
         page.locator('#scope').select_option('route:claude-code')
     expect(page.locator('#refresh')).to_be_enabled()
@@ -171,24 +175,33 @@ with sync_playwright() as p:
     assert page.locator('#calendar .cal-cell[data-tip]').count()>90
     page.locator('#calendar .cal-cell[data-tip]').last.hover()
     expect(page.locator('#tip')).to_be_visible()
-    # Status view lists collectors.
-    page.locator('#tabs [data-view="status"]').click()
+    # The header's data status opens 진단, a page like settings, which lists collectors.
+    expect(page.locator('#data-status')).not_to_have_attribute('data-level','pending')
+    page.locator('#data-status').click()
+    expect(page.locator('#view-status')).to_be_visible()
+    expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
+    assert 'view=status' in page.url
     assert page.locator('#sources .source').count()>0
     # Codex account totals the local records do not explain are shown apart from the charts.
     expect(page.locator('#account-gap tbody tr')).to_have_count(3)
     expect(page.locator('#account-gap summary')).to_contain_text('로컬 미기록')
     # Settings is not a tab: the header gear opens it, no tab stays selected, and Back returns.
     expect(page.locator('#settings-open')).to_have_attribute('aria-label','설정')
-    assert page.locator('#tabs [role=tab]').count()==5 and page.locator('#tab-settings').count()==0
+    assert page.locator('#tabs [role=tab]').count()==4 and page.locator('#tab-settings').count()==0 and page.locator('#tab-status').count()==0
     page.locator('#settings-open').click()
     assert 'view=settings' in page.url
     expect(page.locator('#view-settings')).to_be_visible()
     expect(page.locator('#tabs [aria-selected="true"]')).to_have_count(0)
     expect(page.locator('#view-settings #theme')).to_be_visible()  # the theme picker is the first settings block
+    # Back returns to the page settings was opened from (진단), and 진단's back to the tab.
     page.locator('#settings-back').click()
-    expect(page.locator('#tab-status')).to_have_attribute('aria-selected','true')
+    expect(page.locator('#view-status')).to_be_visible()
     assert 'view=status' in page.url
-    # The ',' shortcut opens settings too (outside text fields); keys 1-5 leave it again.
+    page.locator('#status-back').click()
+    expect(page.locator('#tab-reports')).to_have_attribute('aria-selected','true')
+    expect(page.locator('#data-status')).to_be_focused()
+    page.keyboard.press('5');expect(page.locator('#view-status')).to_be_visible()
+    # The ',' shortcut opens settings too (outside text fields); number keys leave it again.
     page.locator('#settings-open').focus();page.keyboard.press(',')
     expect(page.locator('#view-settings')).to_be_visible()
     page.keyboard.press('3')
@@ -228,12 +241,12 @@ with sync_playwright() as p:
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(artifacts/'dashboard-mobile.png'),full_page=True)
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile overflow'
-    # Five short tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
+    # Four short tabs fit the bottom bar at 320px: one line each, no horizontal overflow.
     page.set_viewport_size({'width':320,'height':740})
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),'320px overflow'
     assert page.evaluate("(()=>{const t=document.querySelector('#tabs');return t.scrollWidth<=t.clientWidth})()"),'tab bar scrolls sideways'
     lines=page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].map(b=>{const r=document.createRange();r.selectNodeContents(b);return r.getClientRects().length})")
-    assert lines==[1]*5,lines
+    assert lines==[1]*4,lines
     boxes=page.locator('#tabs [role=tab]').evaluate_all('bs=>bs.map(b=>{const r=b.getBoundingClientRect();return[r.left,r.right,r.height]})')
     assert all(0<=l and r<=320 and h<=64 for l,r,h in boxes),boxes
     page.set_viewport_size({'width':390,'height':844})

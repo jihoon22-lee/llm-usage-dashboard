@@ -111,15 +111,17 @@ const FACT_KINDS={exhausted:'한도',zero_hours:'한도',service_change:'사용'
 // A Claude account goes by the name it has on this page now, as in the quota rows above; the
 // plan label stored with an older week or month is only a fallback.
 const accountName=(route,stored)=>accountLabel(route)||stored||undefined;
-function factText(f){
+// A week's facts name their week here; under a report's dates they go without it.
+function factText(f,withWeek=true){
  const quota=()=>quotaLabel({route:f.route,bucket:f.bucket,display_name:f.display_name,account_label:accountName(f.route,f.account_label)});
+ const week=withWeek&&f.week?weekName(f.week)+' ':'';
  switch(f.kind){
-  case 'exhausted':return `지난주 ${quota()} 한도 ${f.count}회 소진${f.streak>1?` · ${f.streak}주 연속`:''}`;
-  case 'zero_hours':return `지난주 ${quota()} 한도가 0%로 머문 시간 ${hoursText(f.hours)}`;
+  case 'exhausted':return `${week}${quota()} 한도 ${f.count}회 소진${f.streak>1?` · ${f.streak}주 연속`:''}`;
+  case 'zero_hours':return `${week}${quota()} 한도가 0%로 머문 시간 ${hoursText(f.hours)}`;
   case 'service_change':{
    const ratio=1+f.change_pct/100;
    // A service's change covers all of its accounts.
-   return `지난주 ${serviceName(f.route)} 사용량 ${ratio>=2?`그 전 주의 ${timesText(ratio)}배`:`그 전 주보다 ${f.change_pct>0?'+':'−'}${Math.abs(f.change_pct).toFixed(0)}%`}`;
+   return `${week}${serviceName(f.route)} 사용량 ${ratio>=2?`그 전 주의 ${timesText(ratio)}배`:`그 전 주보다 ${f.change_pct>0?'+':'−'}${Math.abs(f.change_pct).toFixed(0)}%`}`;
   }
   case 'peak_day':return `최근 30일 중 가장 많이 쓴 날 ${dayLabel(f.day)} · ${compact(f.tokens)} (사용한 날 평균의 ${timesText(f.ratio)}배)`;
   case 'peak_hours':return `사용이 가장 많은 시간대 ${f.start_hour}–${f.end_hour}시 · 최근 30일의 ${f.share.toFixed(0)}%`;

@@ -11,6 +11,19 @@ function showSource(name,source){
 function offlineText(){
  $('offline').hidden=!offlineSince;
  if(offlineSince)$('offline').textContent=`오프라인 · ${ago(offlineSince/1000)} 받은 데이터를 표시합니다. 연결되면 다음 갱신에서 최신 값으로 바뀝니다.`;
+ // A failure turns lasting with wall time, so the data status follows this 30-second tick too.
+ renderDataStatus();
+}
+// The header's data status: the collection problems sourceProblems finds, or why there is no
+// verdict (no answer yet, a failed refresh, an offline copy). It opens 진단.
+let refreshFailed=false;
+function renderDataStatus(){
+ const el=$('data-status');
+ const problems=lastUsage&&!refreshFailed&&!offlineSince?sourceProblems(lastUsage.sources,Date.now()/1000):null;
+ const [level,text]=refreshFailed?['warning','갱신 실패']:offlineSince?['offline','오프라인 사본']:!problems?['pending','확인 중']
+  :problems.action.length?['critical','조치 필요 '+problems.action.length]:problems.retry.length?['warning','일시 실패 '+problems.retry.length]:['ok','수집 정상'];
+ el.dataset.level=level;el.querySelector('.ds-text').textContent=text;
+ el.setAttribute('aria-label',`데이터 상태 ${text} · 진단 열기`);
 }
 window.addEventListener('llm-data-source-change',offlineText);
 function insightsState(state,message=''){
@@ -119,9 +132,10 @@ async function refresh(manual=false){
      if(currentView==='usage'&&usageView!=='tokens')void loadCodexView(true);
      if(currentView==='status')loadNotifyLog();
      if(currentView==='overview')void loadOverview(true);
+     refreshFailed=false;renderDataStatus();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
-     else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';}
+     else{$('error').textContent=e.message;$('error').hidden=false;$('updated').textContent='갱신 실패 · 기존 기록 표시';refreshFailed=true;renderDataStatus();}
     }
    }while(queued||queuedManual);
   }finally{coreController=null;$('refresh').disabled=false;setBusy(false);pending=null;updatedText();schedule();}
@@ -179,13 +193,13 @@ $('filter-reset').addEventListener('click',()=>{
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
-// Keyboard shortcuts outside text fields: r refreshes, 1–5 switch tabs, , opens settings,
-// / focuses the current view's search, ? lists them.
+// Keyboard shortcuts outside text fields: r refreshes, 1–4 switch tabs, 5 opens 진단,
+// , opens settings, / focuses the current view's search, ? lists them.
 const SHORTCUT_VIEWS=['overview','quota','usage','reports','status'];
 document.addEventListener('keydown',event=>{
  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,select,textarea,[contenteditable]')||document.querySelector('dialog[open]'))return;
  const view=SHORTCUT_VIEWS[Number(event.key)-1];
- if(view){event.preventDefault();setView(view);$('tab-'+view).focus();return;}
+ if(view){event.preventDefault();setView(view);(view==='status'?$('status-back'):$('tab-'+view)).focus({preventScroll:view==='status'});return;}
  if(event.key===','){event.preventDefault();setView('settings');$('settings-back').focus({preventScroll:true});return;}
  if(event.key==='r'){event.preventDefault();refresh(true);}
  else if(event.key==='/'){
@@ -199,5 +213,7 @@ if('serviceWorker' in navigator){
  navigator.serviceWorker.getRegistrations().then(list=>list.filter(r=>new URL(r.scope).pathname==='/assets/').forEach(r=>r.unregister())).catch(()=>{});
  notificationRegistration().catch(()=>{});
 }
+// Static ⓘ buttons carry their note once, in data-tip; the accessible name repeats it.
+document.querySelectorAll('.info[data-tip]:not([aria-label])').forEach(b=>b.setAttribute('aria-label','설명: '+b.dataset.tip));
 applyPanelOrder();
 refresh();

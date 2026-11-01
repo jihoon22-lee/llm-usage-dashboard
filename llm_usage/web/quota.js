@@ -1,6 +1,6 @@
 'use strict';
 // Heatmap, shared tooltip, quota cards, panel order, alert chips and browser notifications.
-function saveDefaults(){storage.set('llmDefaults',JSON.stringify({layout:2,view:currentView==='settings'?previousView:currentView,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
+function saveDefaults(){storage.set('llmDefaults',JSON.stringify({layout:2,view:lastTab,usage_view:typeof usageView==='string'?usageView:'tokens',...Object.fromEntries(FILTER_IDS.map(id=>[id,$(id).value]))}));}
 function renderHeatmap(cells){
  const grid=Array.from({length:7},()=>Array(24).fill(0));let max=0;
  (cells||[]).forEach(c=>{const v=cellMetric(c);grid[c.dow][c.hour]=v;if(v!=null)max=Math.max(max,v);});
@@ -196,7 +196,8 @@ function renderLimits(data){
   const primary=rows.filter(r=>!modelQuota(r)),secondary=rows.filter(modelQuota),key=prefix+':secondary';
   const checks=[...new Set(rows.map(r=>r.checked??null))],details=[...new Set(rows.map(r=>r.detail).filter(Boolean))];
   const shared=checks.length<=1&&details.length<=1;
-  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${details[0]?(checks[0]!=null?' · ':'')+esc(details[0]):''}</p>`:'';
+  // How the value was read (path, endpoint) is a note, not a line on the card.
+  const meta=shared&&(checks[0]!=null||details.length)?`<p class="card-meta">${checks[0]!=null?'마지막 확인 '+when(checks[0]):''}${infoTip(details[0],'조회 경로')}</p>`:'';
   // Beside a current value, older observations fold into one line so cards stay short.
   const current=primary.some(r=>r.status==='fresh')?primary.filter(r=>r.status==='fresh'||r.remaining==null):primary;
   const older=primary.filter(r=>!current.includes(r)),olderKey=prefix+':older';
@@ -219,8 +220,9 @@ function renderLimits(data){
  // Several Claude accounts stay one Claude Code card with a section per account.
  const accountSection=(route,account,rows)=>{
   const info=accountInfo(account),label=accountLabel(account)||info.label||'계정';
-  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',accountWhere(info),info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
-  const title=`<h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>`;
+  // The plan and a login to renew stay on the title; where the login lives is a note.
+  const sub=[info.custom_name&&info.plan_label?info.plan_label:'',info.token_valid===false&&!accountEnded(rows)?'로그인 갱신 필요':''].filter(Boolean).join(' · ');
+  const title=`<div class="quota-account-head"><h4 class="quota-account-title"><span>${esc(label)}</span>${sub?`<small>${esc(sub)}</small>`:''}</h4>${infoTip(accountWhere(info),'로그인 위치')}</div>`;
   return `<section class="quota-account${accountEnded(rows)?' ended':''}" aria-label="${esc('Claude '+label+' 계정')}">${title}${cardBody(route,rows,account)}</section>`;
  };
  const cardHtml=({route,name,rows})=>{
@@ -322,18 +324,9 @@ function renderAlerts(limits,usage){
  // A burst far above this account's usual hours, and models whose cost cannot be estimated.
  if(usage.spike)items.push({text:`사용량 급증 · ${when(usage.spike.hour_start)}부터 1시간 ${compact(usage.spike.tokens)} 토큰 (평소 상위 5%의 ${usage.spike.ratio.toFixed(1)}배)`,view:'usage',level:'info'});
  if((usage.unpriced_models||[]).length)items.push({text:`단가 미등록 모델 ${usage.unpriced_models.length}개 · ${usage.unpriced_models.slice(0,3).join(', ')}${usage.unpriced_models.length>3?' 외':''}`,view:'settings',level:'info'});
- // Only states the owner can act on become chips: an 'unavailable' source (an app that is
- // closed, a status line not in use, a path that does not exist) stays in 수집 상태.
- // A failed poll the next cycle usually repairs also stays there: the chip appears once the
- // source has not succeeded for 30 minutes, when the external notification is sent too.
- const ops=['수집기','일일 백업','원본 대조'],now=limits.now??Date.now()/1000;
- const lasting=s=>s.status==='error'&&!ops.includes(s.name)&&(!s.last_success||now-s.last_success>=1800);
- (usage.sources||[]).filter(lasting).forEach(s=>items.push({text:`${sourceName(s.name)} ${statuses[s.status]||s.status}`,sources:true,level:'warning'}));
- (usage.sources||[]).filter(s=>ops.includes(s.name)&&(s.status==='stale'||s.status==='error'))
-  .forEach(s=>items.push({text:`${s.name} ${statuses[s.status]||s.status}`,sources:true,level:s.status==='error'?'critical':'warning'}));
- const activeStale=s=>{const base=sourceBase(s.name);return s.status==='stale'&&(base.endsWith('-records')||base.endsWith('-oauth')||base.startsWith('WSL ')||base.startsWith('Windows '));};
- (usage.sources||[]).filter(activeStale).forEach(s=>items.push({text:`${sourceName(s.name)} 수집 지연`,sources:true,level:'warning'}));
- // Exhausted quotas, a failed operation and spent budgets lead; usage notes follow.
+ // Collection problems are not chips: the header's data status counts them (sourceProblems)
+ // and opens 진단, so a stopped collector no longer adds one chip per source it left behind.
+ // Exhausted quotas and spent budgets lead; usage notes follow.
  const rank={critical:0,warning:1,info:2};
  items.sort((a,b)=>rank[a.level]-rank[b.level]);
  // A stopped collector freezes every number on the page, so it is stated above all.
@@ -361,7 +354,6 @@ function renderAlerts(limits,usage){
    setView('quota');selectedQuota=it.route;syncQuotaSelection();
    document.getElementById('quota-'+it.route)?.scrollIntoView({behavior:motion(),block:'nearest'});
   }else if(it.view){setView(it.view);if(it.view==='settings'){priceFilter.unset=true;$('price-unset').setAttribute('aria-pressed','true');$('price-unset').classList.add('on');}}
-  else{setView('status');$('sources-panel').scrollIntoView({behavior:motion()});}
  });
 }
 const notifyEnabled=()=>'Notification' in window&&Notification.permission==='granted'&&storage.get('llmNotify')==='1';
@@ -397,7 +389,7 @@ async function sendNotification(title,options){
 }
 let opsBad=new Set();
 function checkOpsNotify(usage){
- const bad=new Set(((usage&&usage.sources)||[]).filter(s=>['수집기','일일 백업','원본 대조'].includes(s.name)&&(s.status==='stale'||s.status==='error'||s.status==='unavailable')).map(s=>s.name));
+ const bad=new Set(((usage&&usage.sources)||[]).filter(s=>OPS_SOURCES.includes(s.name)&&(s.status==='stale'||s.status==='error'||s.status==='unavailable')).map(s=>s.name));
  for(const name of bad)if(!opsBad.has(name)&&ntfEnabled('ops'))void sendNotification('수집 상태 경고',{body:name+' 확인이 필요합니다',tag:'ops-'+name});
  opsBad=bad;
 }
