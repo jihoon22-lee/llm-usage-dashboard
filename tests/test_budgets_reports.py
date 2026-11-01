@@ -174,6 +174,12 @@ class ReportTests(unittest.TestCase):
             self.store.event(c,'old',stamp('2026-09-14T01:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
         self.assertTrue(reports.this_week(self.store,NOW,PRICING)['prior']['complete'])
         self.assertIsNone(week['accounts'])
+        # Quota use so far, as a finished week shows it (the 09-30 readings: two exhaustions,
+        # ten minutes at 0%), with no streak while the week runs.
+        use=week['quota_use']
+        self.assertEqual([(q['route'],q['bucket'],q['exhausted'],q['zero_hours']) for q in use],[('codex','codex · 10080분',2,0.17)])
+        self.assertNotIn('streak',use[0])
+        self.assertIsNone(week['quota_from'])
 
     def test_this_week_cut_follows_the_clock_without_a_collection_pass(self):
         with self.store.connect() as c:

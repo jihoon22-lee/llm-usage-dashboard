@@ -189,7 +189,7 @@ def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, name
     now = now or time.time()
     midnight = datetime.fromtimestamp(now, KST).replace(hour=0, minute=0, second=0, microsecond=0)
     monday = midnight - timedelta(days=midnight.weekday())
-    span = dict(group='route', pricing=pricing, sections='core', now=now, ended=ended, names=names)
+    span = dict(group='route', pricing=pricing, sections='core', now=now, ended=ended, names=names, origins=False)
     # One reading of the server totals serves every period below.
     with held():
         today = store.usage(period='today', granularity='hour', **span)

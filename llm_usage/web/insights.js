@@ -4,7 +4,8 @@
 // of one list share a scale and line up; only the last one carries the scale's labels.
 function valueBar(ratio,top,labelled=false){
  const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
- const ticks=labelled?[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join(''):'';
+ // A tick at the end of the scale ends its label there, so the label stays inside the bar.
+ const ticks=labelled?[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}"${pos(v)>95?' class="end"':''}>${v}배</em>`).join(''):'';
  return `<span class="value-bar${ratio<1?' under':''}${labelled?' labelled':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
 }
 // A thin bar inside a table cell on a 0-100 scale. With no value it leaves an empty slot,
@@ -49,9 +50,12 @@ function renderInsights(data){
  // useful records with an unavailable comparison or a misleading subscription setup prompt.
  $('comparison').closest('[data-panel]').hidden=recent&&data.insights?.comparison?.status!=='observed';
  $('subvalue').closest('[data-panel]').hidden=recent&&!month;
- const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
- const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
-  ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';
+ // Early in the month there is no month-end estimate, and the value alert compares what
+ // has accrued so far instead.
+ const early=month&&month.projected==null;
+ const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치${early?` · 월말 예상은 ${month.projected_from_day}일째부터`:''}</span><strong>누적 ${usd(month.total)}${early?'':` · 월말 예상 ${usd(month.projected)}`}</strong></div>`:'';
+ const monthAlert=month&&month.alert_usd!=null&&(early?month.total:month.projected)>month.alert_usd
+  ?`<p class="hint warn-text">${early?`이번 달 누적 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 넘었습니다.`:`월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.`}</p>`:'';
  const valueRatio=s=>paidPrice(s)>0&&s.monthly_equiv!=null?s.monthly_equiv/paidPrice(s):null;
  const ratios=subs.map(valueRatio).filter(v=>v!=null);
  const top=Math.max(10,...ratios),ordered=subscriptionOrder(subs);
@@ -189,7 +193,8 @@ function thisWeekHtml(w){
  return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${callText(w)}${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
   +reportLines([['서비스별',w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')],
    ['Claude 계정별',w.accounts?accountParts(w.accounts):''],['세부',detailsLine(w)]])
-  +(w.routes.length?'':'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')+'</div>';
+  +(w.routes.length?'':'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
+  +quotaUseHtml(w,'주',w.quota_from!=null?` · ${esc(when(w.quota_from))}부터 보존된 이력`:'')+'</div>';
 }
 function reportHtml(r){
  const residual=r.residual?.tokens&&r.residual.account_tokens?`<span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)`:'';
@@ -293,9 +298,10 @@ let openProject=null;const projectDetails=new Map();
 function projectDetailHtml(d){
  const m=d.month,peak=Math.max(1,...d.daily.map(x=>x.tokens));
  const bars=d.daily.map((x,i)=>{const h=Math.max(1,x.tokens/peak*36);return `<rect x="${i*8}" y="${40-h}" width="6" height="${h}" data-tip="${esc(x.day)} · ${fmt(x.tokens)} 토큰 · ${fmt(x.requests)}회"></rect>`;}).join('');
- const budget=m.budget?` · 예산 ${Math.round(m.budget_ratio*100)}% 사용 → 월말 예상 <strong class="${m.projected_budget_ratio>=1?'warn-text':''}">${Math.round(m.projected_budget_ratio*100)}%</strong>`:'';
- return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''} → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}${budget}</p>`
-  +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽</p>`
+ const early=m.projected_tokens==null;
+ const budget=m.budget?` · 예산 ${Math.round(m.budget_ratio*100)}% 사용${early?'':` → 월말 예상 <strong class="${m.projected_budget_ratio>=1?'warn-text':''}">${Math.round(m.projected_budget_ratio*100)}%</strong>`}`:'';
+ return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''}${early?'':` → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}`}${budget}</p>`
+  +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽${early?`이며 ${m.projected_from_day}일째부터 표시`:''}</p>`
   +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(x=>`<tr><td>${esc(x.model)}</td><td>${esc(shortService[x.route]||x.route)}</td><td>${fmt(x.requests)}</td><td>${fmt(x.tokens)}</td><td>${usd(x.cost)}</td></tr>`).join('')}</tbody></table>`
   +(d.sessions.length?`<p class="hint">많이 쓴 세션: ${d.sessions.map(x=>`<code data-tip="${esc(String(x.session))}">${esc(shortId(x.session))}</code> ${compact(x.tokens)}`).join(' · ')}</p>`:'')+'</div></td></tr>';
 }

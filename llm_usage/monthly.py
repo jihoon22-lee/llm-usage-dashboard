@@ -63,7 +63,7 @@ def build(store,start,now,pricing=None,prices=None,ended=None,stored=None,histor
     else:prices,gone=active_prices(start,prices,ended)
     from .subscriptions import clean_history
     history={route:entries for route,entries in clean_history(history).items() if route in prices}
-    span=dict(period='custom',start=day(start),end=day(end-timedelta(days=1)),pricing=pricing,now=now)
+    span=dict(period='custom',start=day(start),end=day(end-timedelta(days=1)),pricing=pricing,now=now,origins=False)
     with held():
         usage=store.usage(group='route',sections='core',subscriptions=prices,ended=gone,price_history=history,**span)
         models=store.usage(group='model',sections='core',**span)

@@ -261,6 +261,11 @@ class FeatureTests(Base):
         self.assertEqual((month['tokens'],month['cost']),(2_000_000,20.0))
         self.assertAlmostEqual(month['projected_cost'],20/10*31)
         self.assertAlmostEqual(month['budget_ratio'],0.5);self.assertAlmostEqual(month['projected_budget_ratio'],62/40)
+        # Before the 7th (KST) the month so far stands alone: no extrapolated end or budget share.
+        early=self.store.project_detail('proj',stamp('2026-10-06T03:00:00Z'),PRICING,budget={'usd':40})['month']
+        self.assertEqual((early['days_elapsed'],early['projected_from_day']),(6,7))
+        self.assertEqual((early['projected_tokens'],early['projected_cost'],early['projected_budget_ratio']),(None,None,None))
+        self.assertAlmostEqual(early['budget_ratio'],early['cost']/40)
 
     def test_capacity_history_per_finished_window(self):
         now=stamp('2026-10-03T03:00:00Z');span=18000
