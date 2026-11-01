@@ -457,11 +457,11 @@ test('collection problems: what needs the owner, what retries, what is only a st
   assert.deepEqual(plain(f.sourceProblems(healthy,now)),{action:[],retry:[],collectorDown:false});
   assert.deepEqual(plain(f.sourceProblems(undefined,now)),{action:[],retry:[],collectorDown:false});
   // A failure turns into an action after 30 minutes without success (or with none ever).
-  const failing=[...healthy,src('codex','error',{last_success:now-600}),src('claude-oauth:0123abcd4567','error',{last_success:now-1800}),
+  const failing=[...healthy,src('codex','error',{last_success:now-600}),src('claude-oauth:second-account','error',{last_success:now-1800}),
     src('claude-credits','error',{last_success:null}),src('WSL .claude/projects','stale'),src('일일 백업','error')];
   const p=f.sourceProblems(failing,now);
   assert.deepEqual(names(p.retry),['codex']);
-  assert.deepEqual(names(p.action),['claude-oauth:0123abcd4567','claude-credits','WSL .claude/projects','일일 백업']);
+  assert.deepEqual(names(p.action),['claude-oauth:second-account','claude-credits','WSL .claude/projects','일일 백업']);
   // A stopped collector is the action; the sources it left behind wait with the retries.
   const down=f.sourceProblems([src('수집기','stale'),src('WSL .codex/sessions','stale'),src('devin-records','stale'),src('codex-responses','stale')],now);
   assert.equal(down.collectorDown,true);
