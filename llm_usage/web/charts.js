@@ -6,9 +6,11 @@ function chart(data){
  $('chart').onpointerleave=null;
  chartData=data;
  if(!$('chart').clientWidth)return;
- const grouped=chartSeries(data),allLabels=grouped.labels;
- const labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
- const colorOf=paletteFor(allLabels,groupSlots($('group').value,allLabels));
+ const grouped=chartSeries(data);
+ const colorOf=paletteFor(grouped.labels,groupSlots($('group').value,grouped.labels));
+ // Legend, stack and tooltip rows all run in color-slot order.
+ grouped.labels=colorOf.order(grouped.labels);
+ const allLabels=grouped.labels,labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
  $('legend').innerHTML=allLabels.map(label=>`<button data-label="${esc(label)}" aria-pressed="${!hiddenLabels.has(label)}">${esc(seriesLabel(label))}</button>`).join('');
  $('legend').insertAdjacentHTML('beforeend',missingRoutes(data).map(row=>`<span class="unavailable-series">${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span>`).join(''));
  $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);chart(data);};});
@@ -54,11 +56,12 @@ function chart(data){
   labels.forEach((label,li)=>{
    const edge=points.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(mode==='share-line'?stacks[i][li][1]-stacks[i][li][0]:stacks[i][li][1]).toFixed(1)}`).join(' ');
    if(mode==='share-line')svg+=`<path d="${edge}" fill="none" stroke="${colorOf(label)}" stroke-width="2.5"/>`;
-   else{const floor=points.map((p,i)=>`L${x(i).toFixed(1)},${y(stacks[i][li][0]).toFixed(1)}`).reverse().join(' ');svg+=`<path d="${edge}${floor}Z" fill="${colorOf(label)}" opacity=".78"/>`;}
+   else{const floor=points.map((p,i)=>`L${x(i).toFixed(1)},${y(stacks[i][li][0]).toFixed(1)}`).reverse().join(' ');svg+=`<path d="${edge}${floor}Z" fill="${colorOf(label)}" fill-opacity=".78" stroke="var(--surface)" stroke-width="2" stroke-linejoin="round"/>`;}
   });
  }else{
   const width=Math.max(.5,Math.min(65,plot/Math.max(1,points.length)*.68));
-  points.forEach((p,i)=>{const denom=labels.reduce((s,l)=>s+metricValue(p.values[l]),0);let sum=0;labels.forEach(label=>{const v=metricValue(p.values[label]),hv=share&&denom?v/denom*100:v;if(hv)svg+=`<rect x="${x(i)-width/2}" y="${y(sum+hv)}" width="${width}" height="${y(sum)-y(sum+hv)}" fill="${colorOf(label)}"></rect>`;sum+=hv;});});
+  points.forEach((p,i)=>{const denom=labels.reduce((s,l)=>s+metricValue(p.values[l]),0);
+   svg+=stackRects(x(i)-width/2,width,y,labels.map(label=>{const v=metricValue(p.values[label]);return [colorOf(label),share&&denom?v/denom*100:v];}));});
  }
  $('chart').innerHTML=`<svg tabindex="0" aria-describedby="chart-keyboard-hint" class="chart" viewBox="0 0 ${w} ${h}" data-l="${l}" data-r="${w-r}" role="img" aria-label="${modeAria[mode]} · ${metricName()} 사용 추이">${svg}<line class="chart-cursor" x1="0" x2="0" y1="${top}" y2="${h-b}" visibility="hidden"/></svg><span id="chart-keyboard-hint" class="sr-only">좌우 방향키로 날짜를 선택하고 Enter로 그 구간을 확대하며 Escape로 상세를 닫습니다.</span><div id="chart-tooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>`;
  bindChartTooltip(data,grouped,{w,h,l,r,top,b,x,plot},cmpTotals);
@@ -169,7 +172,7 @@ donutToggle('donut-noresidual','llmDonutNoResidual',()=>donutExcludeResidual,v=>
 function composition(data){
  const residual=data.totals.residual_tokens||0;
  const parts={...data.totals,unclassified_tokens:(data.totals.unclassified_tokens||0)-residual,residual_tokens:residual};
- const tint=i=>i<0?mutedColor:colors[i];
+ const tint=i=>i<0?noTypeColor:tokenColors[i];
  const all=[['일반 입력','uncached_input',0],['캐시 읽기','cached_input',1],['출력','output',2],['캐시 생성','cache_creation',3],['내역 미분류','unclassified_tokens',4],[residualName,'residual_tokens',-1]]
   .filter(([,key])=>!['unclassified_tokens','residual_tokens'].includes(key)||parts[key]);
  const out=key=>(donutExcludeCache&&key==='cached_input')||(donutExcludeResidual&&key==='residual_tokens'&&residual>0);
@@ -178,8 +181,9 @@ function composition(data){
  const sum=grand-excluded.reduce((n,[,key])=>n+(parts[key]||0),0);
  const segments=all.filter(([,key])=>!out(key)).sort((a,b)=>(parts[b[1]]||0)-(parts[a[1]]||0));
  if(!sum){$('composition').innerHTML='<div class="empty">'+(grand?'제외한 항목만 있습니다. 위의 제외 버튼으로 다시 표시할 수 있습니다.':'선택 기간에 사용 기록이 없습니다.')+'</div>';return;}
- const circumference=2*Math.PI*76;let offset=0;
- const rings=segments.map(([name,key,color])=>{const value=parts[key],length=value/sum*circumference;const circle=`<circle cx="110" cy="110" r="76" fill="none" stroke="${tint(color)}" stroke-width="24" stroke-dasharray="${length} ${circumference-length}" stroke-dashoffset="${-offset}" transform="rotate(-90 110 110)" data-tip="${esc(name)}: ${fmt(value)} (${(value/sum*100).toFixed(1)}%)"/>`;offset+=length;return circle;}).join('');
+ // Arcs keep a 2px surface gap (two viewBox units on the ring) once there are two or more.
+ const circumference=2*Math.PI*76,gap=segments.length>1?2:0;let offset=0;
+ const rings=segments.map(([name,key,color])=>{const value=parts[key],length=value/sum*circumference,arc=Math.max(0,length-gap);const circle=`<circle cx="110" cy="110" r="76" fill="none" stroke="${tint(color)}" stroke-width="24" stroke-dasharray="${arc} ${circumference-arc}" stroke-dashoffset="${-offset}" transform="rotate(-90 110 110)" data-tip="${esc(name)}: ${fmt(value)} (${(value/sum*100).toFixed(1)}%)"/>`;offset+=length;return circle;}).join('');
  // Excluded items stay in the key as muted rows so exclusion never hides data.
  const dot=color=>`<svg width="9" height="9" aria-hidden="true"><circle cx="4" cy="4" r="4" fill="${tint(color)}"/></svg>`;
  const keyRows=all.slice().sort((a,b)=>(parts[b[1]]||0)-(parts[a[1]]||0)).map(([name,key,color])=>{
@@ -190,7 +194,7 @@ function composition(data){
   return `<div data-token="${key}" data-tip="${esc(name)}: ${fmt(parts[key])} (${(parts[key]/sum*100).toFixed(1)}%)"><strong>${dot(color)} ${esc(name)}</strong><span>${compact(parts[key])} · ${(parts[key]/sum*100).toFixed(1)}%</span></div>`;
  });
  const names=excluded.map(([name])=>name),cut=names.length?(names.length>1?`${names.length}개 항목`:names[0])+' 제외':'';
- $('composition').innerHTML=`<div class="donut-wrap"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}<text x="110" y="${cut?103:109}" text-anchor="middle" font-size="26" font-weight="600">${compact(sum)}</text><text x="110" y="${cut?123:130}" text-anchor="middle" font-size="11">${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</text>${cut?`<text x="110" y="140" text-anchor="middle" font-size="11" class="donut-sub">전체 ${compact(grand)}</text>`:''}</svg><div class="donut-key">${keyRows.join('')}</div></div>`;
+ $('composition').innerHTML=`<div class="donut-wrap"><div class="donut-figure"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}</svg><div class="donut-center"><strong>${compact(sum)}</strong><span>${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</span>${cut?`<span class="donut-sub">전체 ${compact(grand)}</span>`:''}</div></div><div class="donut-key">${keyRows.join('')}</div></div>`;
 }
 function ranking(data){
  const metric=$('metric').value;

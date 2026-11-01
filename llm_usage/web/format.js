@@ -112,17 +112,14 @@ const RESIDUAL='/account-residual',RESIDUAL_DEFAULT='로컬 미기록';
 let residualName=RESIDUAL_DEFAULT;
 const setResidualName=name=>{residualName=typeof name==='string'&&name.trim()?name.trim():RESIDUAL_DEFAULT;};
 const residualText=v=>v===RESIDUAL?residualName:v;
-// Series colors. Light themes keep a pale tint of the accent in --chart-1, which beside
-// --chart-0 reads as one color, so series take it last; the dark themes' palettes are
-// already spread. In ocean, sand comes before blue (blue is close to the teal accent).
-const CHART_ORDER={charcoal:[0,1,2,3,4,5,6,7],midnight:[0,1,2,3,4,5,6,7],ocean:[0,3,2,4,5,6,7,1]};
-const chartOrder=theme=>CHART_ORDER[theme]||[0,2,3,4,5,6,7,1];
-// Each service keeps one series slot in every period, by service or by maker. Further
-// Claude accounts take the next free slots in name order: every known account first,
-// shown in the period or not, so one account keeps its color; then any other Claude
-// label of the period (계정 미확인). Other groupings have none.
-const ROUTE_SLOTS={codex:0,'claude-code':1,antigravity:2,devin:3,'opencode-go':4,opencode:5};
-const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Google:2,Cognition:3};
+// Each service keeps one series slot (--series-N) in every period and theme, by service or
+// by maker. Series stack in slot order, so neighbors are the palette's checked adjacent
+// pairs; the services used most often come first, so one that is missing rarely leaves a
+// gap between the others. Further Claude accounts take the next free slots in name order:
+// every known account first, shown in the period or not, so one account keeps its color;
+// then any other Claude label of the period (계정 미확인). Other groupings have none.
+const ROUTE_SLOTS={codex:0,'claude-code':1,devin:2,antigravity:3,opencode:4,'opencode-go':5};
+const PROVIDER_SLOTS={OpenAI:0,Anthropic:1,Cognition:2,Google:3};
 function groupSlots(group,labels){
  if(group==='provider')return {...PROVIDER_SLOTS};
  if(group!=='route'&&group!=='account')return {};
@@ -136,6 +133,15 @@ function groupSlots(group,labels){
   out[label]=next;used.add(next);
  }
  return out;
+}
+// Stacked bar segments, bottom to top, from [[fill,value],...] in stacking order. A 2px
+// surface gap separates neighbors, taken from the top of the lower one (at most half of
+// it), so two similar colors never touch; the top segment keeps its full height.
+function stackRects(x,width,y,parts){
+ const segs=[];let sum=0;
+ for(const [fill,value] of parts)if(value>0){segs.push([fill,sum,sum+value]);sum+=value;}
+ return segs.map(([fill,lo,hi],k)=>{const top=y(hi),height=y(lo)-top,gap=k<segs.length-1?Math.min(2,height/2):0;
+  return `<rect x="${x.toFixed(1)}" y="${(top+gap).toFixed(1)}" width="${width.toFixed(1)}" height="${(height-gap).toFixed(1)}" fill="${fill}"/>`;}).join('');
 }
 // Calendar steps 1-5 by rank among the shown days with use (five equal groups; ties share
 // a step), so one very large day does not leave every other day in the first step.

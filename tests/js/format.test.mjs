@@ -11,7 +11,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
-  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,chartOrder,groupSlots,rankLevels,priorChange,
+  familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,groupSlots,stackRects,rankLevels,priorChange,
   reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems,weekName})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
@@ -376,34 +376,34 @@ test('the Codex account residual shows under its configured name',()=>{
   }
 });
 
-test('series colors: the first five slots differ in hue in every theme',()=>{
+test('series and token colors are shared by the light themes and by the dark ones',()=>{
   const css=readFileSync(new URL('../../llm_usage/web/style.css',import.meta.url),'utf8');
-  const themes={};
-  for(const line of css.split('\n')){
-    const m=line.match(/^:root(?:\[data-theme="(\w+)"\])?\s*\{/);
-    if(!m||!line.includes('--chart-0'))continue;
-    themes[m[1]||'forest']=Array.from({length:8},(_,i)=>line.match(new RegExp(`--chart-${i}:(#[0-9a-f]{6})`))[1]);
-  }
-  assert.deepEqual(Object.keys(themes).sort(),['amber','blue','charcoal','forest','midnight','ocean','paper','rose','violet']);
+  const block=selector=>{const at=css.indexOf(selector+'{');assert.ok(at>=0,selector);return css.slice(at,css.indexOf('}',at));};
+  const read=(text,name,n)=>Array.from({length:n},(_,i)=>{const m=text.match(new RegExp(`--${name}-${i}:(#[0-9a-f]{6})`));assert.ok(m,`${name}-${i}`);return m[1];});
+  const light=block(':root'),dark=block(':root:is([data-theme="charcoal"],[data-theme="midnight"])');
+  // No theme sets its own series or token colors, so a service keeps its color across themes.
+  for(const line of css.split('\n').filter(l=>/^:root(\[data-theme="\w+"\])?\s+\{/.test(l)))
+    assert.ok(!/--(series|token)-/.test(line),line.slice(0,40));
   const hue=hex=>{const [r,g,b]=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255),max=Math.max(r,g,b),d=max-Math.min(r,g,b);
     return ((max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4)*60+360)%360;};
   const gap=(a,b)=>{const d=Math.abs(a-b);return Math.min(d,360-d);};
-  // Codex, Claude, Antigravity, Devin and OpenCode Go (slots 0-4) never share a hue family.
-  const closest=order=>palette=>{const hues=order.slice(0,5).map(i=>hue(palette[i]));
-    return Math.min(...hues.flatMap((a,i)=>hues.slice(i+1).map(b=>gap(a,b))));};
-  for(const [theme,palette] of Object.entries(themes)){
-    const order=f.chartOrder(theme);
-    assert.deepEqual([...order].sort(),[0,1,2,3,4,5,6,7],theme);
-    assert.ok(closest(order)(palette)>=25,`${theme}: ${closest(order)(palette)}`);
+  const lum=hex=>[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(c=>c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4).reduce((s,c,i)=>s+c*[0.2126,0.7152,0.0722][i],0);
+  for(const [mode,text] of [['light',light],['dark',dark]]){
+    const series=read(text,'series',8),tokens=read(text,'token',5);
+    assert.equal(new Set(series).size,8,mode);
+    // Neighboring slots stack next to each other: never the same hue family.
+    for(let i=1;i<8;i++)assert.ok(gap(hue(series[i-1]),hue(series[i]))>=25,`${mode} ${i-1}-${i}`);
+    // Token types are one ramp from the most to the least prominent step on the surface.
+    const steps=tokens.map(lum);
+    for(let i=1;i<5;i++)assert.ok(mode==='light'?steps[i]>steps[i-1]:steps[i]<steps[i-1],`${mode} token ${i}`);
+    assert.match(text,/--token-none:#[0-9a-f]{6}/);
   }
-  // The stored order alone puts an accent and its pale tint side by side in light themes.
-  assert.ok(closest([0,1,2,3,4,5,6,7])(themes.paper)<10);
 });
 
 test('services keep their series slot; further Claude accounts follow in name order',()=>{
   assert.deepEqual({...f.groupSlots('model',['codex','gpt-test'])},{});
   const routes=f.groupSlots('route',['claude-code','codex']);
-  assert.deepEqual([routes.codex,routes['claude-code'],routes.antigravity,routes.devin,routes['opencode-go']],[0,1,2,3,4]);
+  assert.deepEqual([routes.codex,routes['claude-code'],routes.devin,routes.antigravity,routes.opencode,routes['opencode-go']],[0,1,2,3,4,5]);
   const accounts=f.groupSlots('account',['claude-code:unknown','codex','claude-code:abababababab','claude-code']);
   assert.deepEqual([accounts.codex,accounts['claude-code'],accounts['claude-code:abababababab'],accounts['claude-code:unknown']],[0,1,6,7]);
   // The shown names decide the order, not the account IDs behind them.
@@ -415,7 +415,17 @@ test('services keep their series slot; further Claude accounts follow in name or
   const alone=f.groupSlots('account',['claude-code:abababababab','claude-code:unknown']);
   assert.deepEqual([alone['claude-code:abababababab'],alone['claude-code:unknown']],[7,8]);
   f.setClaudeAccounts([]);
-  assert.deepEqual({...f.groupSlots('provider',['Anthropic'])},{OpenAI:0,Anthropic:1,Google:2,Cognition:3});
+  assert.deepEqual({...f.groupSlots('provider',['Anthropic'])},{OpenAI:0,Anthropic:1,Cognition:2,Google:3});
+});
+
+test('stacked segments keep a 2px gap below each neighbor and skip empty parts',()=>{
+  const rects=html=>[...html.matchAll(/y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" fill="([^"]+)"/g)].map(m=>[+m[1],+m[3],m[4]]);
+  const y=v=>100-v;  // one unit per pixel, baseline at 100
+  // Bottom to top: 30 (gap at its top), 0 (skipped), 20 (gap), 10 (top keeps its height).
+  assert.deepEqual(rects(f.stackRects(4,8,y,[['a',30],['b',0],['c',20],['d',10]])),[[72,28,'a'],[52,18,'c'],[40,10,'d']]);
+  // A segment under 4px gives up half of itself, so it never disappears.
+  assert.deepEqual(rects(f.stackRects(0,1,y,[['a',1],['b',5]])),[[99.5,0.5,'a'],[94,5,'b']]);
+  assert.equal(f.stackRects(0,1,y,[['a',0]]),'');
 });
 
 test('calendar steps follow the rank among the shown days',()=>{

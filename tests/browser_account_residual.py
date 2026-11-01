@@ -115,11 +115,11 @@ with sync_playwright() as p:
     expect(key).to_contain_text('차트 제외')
     expect(page.locator('#composition [data-token="unclassified_tokens"]')).to_have_count(0)
     expect(page.locator('#composition svg.donut')).to_have_attribute('aria-label', '캐시 읽기·로컬 미기록 제외 비중순 토큰 구성 도넛 차트')
-    expect(page.locator('#composition svg.donut')).to_contain_text('2개 항목 제외')
+    expect(page.locator('#composition .donut-center')).to_contain_text('2개 항목 제외')
     toggle.click()
     expect(toggle).to_have_attribute('aria-pressed', 'false')
     expect(key).not_to_have_class('excluded')
-    expect(page.locator('#composition svg.donut')).to_contain_text('캐시 읽기 제외')
+    expect(page.locator('#composition .donut-center')).to_contain_text('캐시 읽기 제외')
     toggle.click()
     # Projects: below the projects, without drill-down or detail; '미분류' stays a project.
     projects = page.locator('#projects')

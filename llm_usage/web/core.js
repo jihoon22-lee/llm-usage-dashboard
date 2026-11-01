@@ -18,8 +18,12 @@ const tableCells=(row,denom)=>fields.map(k=>{
  const cell=`<td${cls?` class="${cls}"`:''}>${tableNumber(k==='total'?modelTotal(row):row[k])}${note?`<small>${esc(note)}</small>`:''}</td>`;
  return k==='total'?cell+`<td class="share-cell">${denom?percent(modelTotal(row)/denom*100):'—'}</td>`:cell;
 }).join('');
-let colors=[],mutedColor='#888';
-function updateColors(){const style=getComputedStyle(document.documentElement);colors=chartOrder(document.documentElement.dataset.theme).map(i=>style.getPropertyValue('--chart-'+i).trim());mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;}
+let colors=[],tokenColors=[],noTypeColor='#909090',mutedColor='#888';
+function updateColors(){
+ const style=getComputedStyle(document.documentElement),read=(name,n)=>Array.from({length:n},(_,i)=>style.getPropertyValue(`--${name}-${i}`).trim());
+ colors=read('series',8);tokenColors=read('token',5);
+ noTypeColor=style.getPropertyValue('--token-none').trim()||noTypeColor;mutedColor=style.getPropertyValue('--muted').trim()||mutedColor;
+}
 // The browser chrome color follows the active theme's page background.
 // theme.js fires llm-theme-change before this deferred script registers its
 // listener, so sync once at startup too.
