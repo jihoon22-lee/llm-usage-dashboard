@@ -78,9 +78,10 @@ Claude Code는 계정마다 설정 홈(`CLAUDE_CONFIG_DIR`, 기본 `~/.claude`)�
 |---|---|
 | GET /healthz | loopback TCP 상태 검사 |
 | GET /api/usage | 기간·간격·분류·scope 통계 |
+| GET /api/overview | 개요: 오늘·이번 주·최근 30일 합계(사용량 탭과 같은 계산), 상위 모델·프로젝트, 지난달 결산, 관측 사실 |
 | GET /api/limits, /api/collection | 한도·자원 관측 / 수집 상태 |
 | GET /api/session, /api/project | 세션·프로젝트 상세 |
-| GET /api/reports, /api/notify/log | 저장된 주간 리포트·월간 구독 결산과 이번 주 현황·비밀 제외 알림 결과 |
+| GET /api/reports, /api/notify/log | 저장된 주간 리포트(주마다 그 주의 관측 사실 `facts` 포함)·월간 구독 결산과 이번 주 현황·비밀 제외 알림 결과 |
 | GET /api/bootstrap, /api/config | CSRF 초기화·마스킹 설정 |
 | POST /api/refresh | 202 수집 요청, collection의 완료 ID 확인 |
 | POST /api/config/*, /api/notify/test | 허용 설정 저장·알림 시험 |
