@@ -174,16 +174,19 @@ with sync_playwright() as p:
     assert page.locator('#sources details[data-fold="ok"]').get_attribute('open') is not None
     expect(page.locator('#sources-panel .coverage-fold')).to_contain_text('수집 범위 설명')
     assert page.locator('#sources-panel .coverage-fold').get_attribute('open') is None
-    # Usage: the bucket containing now is marked, and numbers can be shortened.
+    # Usage: the bucket containing now is marked; numbers start short, exact ones a click away.
     page.locator('#tabs [data-view="usage"]').click()
     expect(page.locator('#chart .chart-current-label')).to_have_text('진행 중')
     first_total = page.locator('#rows tr').first.locator('.total-cell')
-    exact = first_total.inner_text()
-    page.locator('#num-compact').click()
     expect(page.locator('#num-compact')).to_have_attribute('aria-pressed', 'true')
-    assert first_total.inner_text() != exact and first_total.locator('[data-tip]').count() == 1
+    short = first_total.inner_text()
+    exact = first_total.locator('[data-tip]').get_attribute('data-tip')
     page.locator('#num-compact').click()
+    expect(page.locator('#num-compact')).to_have_attribute('aria-pressed', 'false')
     expect(first_total).to_have_text(exact)
+    assert short != exact and first_total.locator('[data-tip]').count() == 0
+    page.locator('#num-compact').click()
+    expect(first_total).to_have_text(short)
     # Long session IDs keep their last characters so neighbours stay distinguishable.
     expect(page.locator('#sessions code').first).to_have_text('fixture-…sion')
     expect(page.locator('#sessions code').first).to_have_attribute('data-tip', 'fixture-session')

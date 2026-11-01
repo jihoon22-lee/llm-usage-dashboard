@@ -1,5 +1,5 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory, show_filter_details
 import argparse
 from pathlib import Path
 from urllib.parse import parse_qs,urlsplit
@@ -46,6 +46,7 @@ with sync_playwright() as p:
     total=page.evaluate("lastUsage.rows.filter(r=>r.route==='antigravity').reduce((n,r)=>n+total(r),0)")
     assert total>0
     select('#group','route')
+    show_filter_details(page)
     for grain in ('day','week','month'):
         if page.locator('#granularity').input_value()!=grain:select('#granularity',grain)
         assert page.evaluate("lastUsage.series.reduce((n,p)=>n+total(p.values.antigravity||{}),0)")==total

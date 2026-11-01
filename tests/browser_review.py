@@ -7,7 +7,7 @@ what-if pricing, notification history and the offline copy served by the root wo
 
   PYTHONPATH=. .venv/bin/python tests/browser_review.py [--artifacts DIR]
 """
-from browser_support import watch_csp
+from browser_support import watch_csp, show_filter_details_async
 import argparse
 import asyncio
 from pathlib import Path
@@ -94,6 +94,7 @@ async def main():
             # Usage: presets, the unified total and what-if pricing.
             await page.keyboard.press('3')
             await expect(page.locator('#tab-usage')).to_have_attribute('aria-selected','true')
+            await show_filter_details_async(page)
             await page.locator('[data-preset="models"]').click()
             await expect(page.locator('#group')).to_have_value('model')
             await expect(page.locator('#period')).to_have_value('30d')

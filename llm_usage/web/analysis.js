@@ -210,7 +210,16 @@ function filterSummary(){
  if($('compare').value)parts.push(short('compare')+' 비교');
  if($('cumulative').value!=='0')parts.push(short('cumulative'));
  el.textContent=parts.join(' · ');
+ // 세부 설정 counts what it holds away from the defaults, as the summary above names it.
+ const changed=['compare','cumulative','scope'].filter(id=>$(id).value!==FILTER_DEFAULTS[id]).length,count=$('filter-more-count');
+ count.hidden=!changed;count.textContent=changed||'';
+ $('filter-more').setAttribute('aria-label',changed?`세부 설정 · 기본값과 다른 설정 ${changed}개`:'세부 설정');
 }
+// 세부 설정: interval, comparison, chart form, scope and the quick picks, under the main row
+// and left open or closed as the owner last did on this device.
+function showFilterMore(open){$('filter-adv').hidden=!open;$('filter-more').setAttribute('aria-expanded',String(open));}
+showFilterMore(storage.get('llmFilterMore')==='1');
+$('filter-more').addEventListener('click',()=>{const open=$('filter-adv').hidden;showFilterMore(open);storage.set('llmFilterMore',open?'1':'0');});
 function compactPanels(){
  foldedPanels.forEach(panel=>{panel.open=compactMedia.matches?mobileOpen.get(panel):true;});
  filterOptions.forEach(({option,label})=>{if(!option.parentElement)return;option.textContent=compactMedia.matches?(shortOptions[option.parentElement.id]?.[option.value]||label):label;});

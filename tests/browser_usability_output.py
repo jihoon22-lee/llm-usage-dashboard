@@ -5,7 +5,7 @@ import io
 import tempfile
 import time
 from pathlib import Path
-from browser_support import fixture_page, fixture_client, ORIGIN, watch_csp
+from browser_support import fixture_page, fixture_client, ORIGIN, watch_csp, show_filter_details
 import browser_support
 from llm_usage.store import Store
 from llm_usage.webapp import create_app
@@ -25,6 +25,7 @@ with sync_playwright() as p:
     page.goto(ORIGIN+'/?view=usage');expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     page.locator('#group').select_option('model');expect(page.locator('#refresh')).to_be_enabled()
     page.locator('#metric').select_option('cost');expect(page.locator('#refresh')).to_be_enabled()
+    show_filter_details(page)
     for mode in ('0','1'):
         page.locator('#cumulative').select_option(mode);expect(page.locator('#refresh')).to_be_enabled()
         with page.expect_download() as download:page.locator('#csv-series').click()

@@ -640,6 +640,17 @@ details.source-group[open]>summary{margin-bottom:-8px}
 /* Analysis presets and the subscription value scale. */
 .presets{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
 .presets>span{font-size:var(--fs-xs);color:var(--muted);margin-right:2px}
+/* 세부 설정: the less used filters open under the main row. */
+.filter-more{align-self:end;min-height:38px}
+.filter-more::after{content:' ＋';color:var(--muted)}
+.filter-more[aria-expanded="true"]::after{content:' −'}
+.filter-more[aria-expanded="true"]{background:var(--soft);border-color:var(--accent)}
+.filter-more-count{display:inline-block;min-width:18px;margin-left:6px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--on-accent);font-size:var(--fs-xs);line-height:18px;text-align:center}
+.filter-more-count[hidden]{display:none}
+#filter-adv .filters{margin-top:-6px}
+#filter-adv .presets{margin:0 0 16px}
+/* A phone's quarter-width cell has room for the name and count; the pressed style shows it is open. */
+@media(max-width:600px){.filter-more{min-height:36px;padding:4px}.filter-more:is([aria-expanded])::after{content:none}#filter-adv .filters{margin-top:-4px}}
 .donut .donut-sub{fill:var(--muted)}
 .value-bar{margin-bottom:16px}
 .value-bar em{position:absolute;top:9px;transform:translateX(-50%);font-style:normal;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}

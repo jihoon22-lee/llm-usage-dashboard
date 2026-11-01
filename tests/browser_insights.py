@@ -1,5 +1,5 @@
 """Real Chromium checks for new insights and delayed filter responses, all API data fixture-only."""
-from browser_support import CSP_HEADERS, watch_csp
+from browser_support import CSP_HEADERS, watch_csp, show_filter_details_async
 import argparse
 import asyncio
 from pathlib import Path
@@ -220,6 +220,7 @@ async def main():
             await view('usage')
             await page.locator('#period').select_option('30d')
             await page.locator('#group').select_option('model')
+            await show_filter_details_async(page)
             await page.locator('#cumulative').select_option('1')
             release.set()
             await expect(page.locator('#refresh')).to_be_enabled()
@@ -256,12 +257,17 @@ async def main():
             await expect(page.locator('#filter-summary')).to_contain_text('30일')
             await expect(page.locator('#filter-summary')).to_contain_text('모델')
             await fold.locator('summary').click()
+            await show_filter_details_async(page)
             for size in (320,390):
                 await page.set_viewport_size({'width':size,'height':844})
-                # Six filters wrap into two rows; period, granularity and group stay on the first.
-                boxes=[await page.locator('#'+name).bounding_box() for name in ('period','granularity','group','metric','compare','cumulative')]
-                assert max(b['y'] for b in boxes[:3])-min(b['y'] for b in boxes[:3])<2
-                assert len({round(b['y']) for b in boxes})<=2
+                # Period, group, metric and 세부 설정 share the first row; interval, comparison,
+                # chart form and scope the next.
+                bottoms=lambda boxes:{round(b['y']+b['height']) for b in boxes}
+                main=[await page.locator('#'+name).bounding_box() for name in ('period','group','metric','filter-more')]
+                more=[await page.locator('#'+name).bounding_box() for name in ('granularity','compare','cumulative','scope')]
+                assert max(bottoms(main))-min(bottoms(main))<2,main
+                assert max(bottoms(more))-min(bottoms(more))<2,more
+                assert min(b['y'] for b in more)>max(b['y'] for b in main)
                 assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             for grain in ('week','month'):
                 await page.locator('#granularity').select_option(grain)

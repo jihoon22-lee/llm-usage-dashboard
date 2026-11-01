@@ -3,7 +3,7 @@
 A disposable synthetic store and Flask app serve every request: no provider, account
 file, collector, private origin or production database is consulted.
 """
-from browser_support import Sock, watch_csp, artifact_directory
+from browser_support import Sock, watch_csp, artifact_directory, show_filter_details
 import argparse
 import json
 import sys
@@ -80,6 +80,7 @@ with sync_playwright() as p:
     page.locator('#tab-usage').click()
     page.select_option('#period', '30d')
     page.select_option('#group', 'model')
+    show_filter_details(page)
     page.select_option('#granularity', 'week')
     # Model table: the residual is the last row, unranked and not a model to narrow to.
     residual_row = page.locator('#rows tr.residual-row')

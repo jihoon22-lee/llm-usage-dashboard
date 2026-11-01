@@ -3,7 +3,7 @@
 A disposable synthetic store and Flask app serve every request: no provider, account
 file, collector, private origin or production database is consulted.
 """
-from browser_support import Sock, watch_csp, artifact_directory
+from browser_support import Sock, watch_csp, artifact_directory, show_filter_details
 import argparse
 from datetime import datetime
 import json
@@ -135,6 +135,7 @@ with sync_playwright() as p:
     expect(page.locator('#legend')).to_contain_text('Anthropic / Claude Code · Max 5x')
     expect(page.locator('#legend')).to_contain_text('Anthropic / Claude Code · 계정 미확인')
     expect(page.locator('#scope optgroup[label="Claude 계정"] option')).to_have_count(3)
+    show_filter_details(page)
     page.select_option('#scope', 'account:'+SECOND)
     expect(page.locator('#scope-chip')).to_contain_text('Claude 계정: Max 5x')
     expect(page.locator('#cards')).to_contain_text('45K')

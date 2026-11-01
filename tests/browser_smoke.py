@@ -1,5 +1,5 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory, show_filter_details
 import argparse
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -103,7 +103,8 @@ with sync_playwright() as p:
     assert page.locator('#chart rect').count()>0
     # Check rendered arithmetic against the synthetic Flask response.
     expect(page.get_by_role('heading',name='모델별 사용량 상세',exact=True)).to_be_visible()
-    cells=page.locator('#rows tr').first.locator('td').all_text_contents()
+    # Short numbers by default: the exact value is each number cell's tooltip.
+    cells=page.locator('#rows tr').first.locator('td').evaluate_all("tds=>tds.map(td=>td.querySelector(':scope>[data-tip]:not(.na-text)')?.dataset.tip??td.textContent)")
     first=page.evaluate('sortedModelRows(lastUsage)[0]')
     assert int(cells[8].replace(',','')) == sum(first.get(k,0) for k in ('uncached_input','cached_input','output','cache_creation','unclassified_tokens'))
     if first.get('unclassified_tokens') and not first.get('recorded_tokens'):
@@ -120,6 +121,7 @@ with sync_playwright() as p:
     expect(delta).to_have_text('직전 7일 같은 시점 기록 부족')
     # Claude Code alone has local records a hundred days back: the change against the
     # seven days before, cut at the same time, as the response gives it.
+    show_filter_details(page)
     with page.expect_response(lambda r:'/api/usage?' in r.url and 'scope=route%3Aclaude-code' in r.url and r.status==200):
         page.locator('#scope').select_option('route:claude-code')
     expect(page.locator('#refresh')).to_be_enabled()
