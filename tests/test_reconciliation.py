@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from llm_usage.store import Store,stamp,identity
-from llm_usage.reconciliation import snapshot,link,total
+from llm_usage.reconciliation import snapshot,link,supplements,total
 from llm_usage.cloud import _ingest,IncompletePages
 from llm_usage.collect import model_provider,parse_line
 from llm_usage.telemetry import ingest,resolve
@@ -166,6 +166,37 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(total(u['totals']),160)
         self.assertEqual(sum(total(v) for p in u['series'] for v in p['values'].values()),160)
         self.assertEqual(self.usage(period='today',scope='project:other')['totals']['output'],0)
+
+    def test_each_snapshot_takes_the_linked_records_of_its_own_span(self):
+        # A snapshot's span is [previous end, end): a record at its end belongs to the next one.
+        # A snapshot of one model leaves the scope's other models out; one of no model counts all.
+        at=lambda t:stamp('2026-10-12T'+t+':00Z')
+        with self.store.connect() as c:
+            for key,scope,ts,model,output in (('early','claude:s','08:59','claude-test',4),('start','claude:s','09:00','claude-test',5),
+                                              ('inside','claude:s','09:30','claude-test',15),('edge','claude:s','10:00','claude-test',30),
+                                              ('other','claude:s','10:30','claude-other',7),('after','claude:s','11:00','claude-test',9),
+                                              ('t1','claude:t','09:10','claude-test',10),('t2','claude:t','09:20','claude-other',15)):
+                self.store.event(c,key,at(ts),'Anthropic','claude-code',model,dict(output=output),session=scope[7:],project='p')
+                link(c,scope,key,'local')
+            for scope,model,end,tokens in (('claude:s','claude-test','10:00',100),('claude:s','claude-test','11:00',160),('claude:t',None,'10:00',50)):
+                snapshot(self.store,c,source='claude-cloud',scope_id=scope,route='claude-code',provider='Anthropic',model=model,
+                         session=scope[7:],project='p',start=at('09:00'),end=at(end),tokens=tokens,
+                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
+            entries,conflicts=supplements(c)
+        self.assertEqual(conflicts,[])
+        self.assertEqual(sorted((e['scope_id'],e['end'],e['tokens']) for e in entries),
+                         [('claude:s',at('10:00'),80),('claude:s',at('11:00'),30),('claude:t',at('10:00'),25)])
+
+    def test_origin_split_is_left_out_only_when_asked(self):
+        # A record a cloud aggregate holds is 'cloud' even when telemetry reported it too.
+        with self.store.connect() as c:
+            for key,sources,output in (('l',('local',),1),('c',('claude-cloud:a',),20),('t',('telemetry',),300),('ct',('claude-cloud:a','telemetry'),4000)):
+                self.store.event(c,key,stamp('2026-10-12T09:30:00Z'),'Anthropic','claude-code','claude-test',dict(output=output),session='s',project='p')
+                for source in sources:link(c,'claude:s',key,source)
+        self.evidence(5000)
+        full,bare=self.usage(period='today'),self.usage(period='today',origins=False)
+        self.assertEqual(full['reconciliation'].pop('origin_tokens'),dict(cloud=4020,local=1,telemetry=300))
+        self.assertEqual(full,bare)
 
     def test_account_intervals_remain_unallocated_at_kst_midnight(self):
         with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)

@@ -1,0 +1,4 @@
+# Known false positives: a made-up account suffix on the claude-oauth source name in a
+# test fixture (no credential), matched by the generic API key rule.
+927911e0dfb2d2d74577ee4876d53037df7e1682:tests/js/format.test.mjs:generic-api-key:460
+927911e0dfb2d2d74577ee4876d53037df7e1682:tests/js/format.test.mjs:generic-api-key:464

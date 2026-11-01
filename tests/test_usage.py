@@ -475,6 +475,18 @@ class UsageTests(unittest.TestCase):
         self.assertAlmostEqual(scoped['total'],10.0)
         self.assertIsNone(self.store.usage(period='all',now=now)['insights']['month'])
 
+    def test_month_value_has_no_estimate_before_day_seven(self):
+        # Day 6 (KST) has only what accrued; day 7 is the first with a month-end estimate.
+        pricing={'m1':{'input':10,'output':0}}
+        with self.store.connect() as c:
+            self.store.event(c,'a',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','m1',dict(uncached_input=1_000_000))
+        day6=self.store.usage(period='all',now=stamp('2026-09-06T14:59:00Z'),pricing=pricing,value_alert_usd=5)['insights']['month']
+        self.assertEqual((day6['days_elapsed'],day6['total'],day6['projected'],day6['projected_from_day']),(6,10.0,None,7))
+        self.assertEqual(day6['alert_usd'],5)
+        day7=self.store.usage(period='all',now=stamp('2026-09-06T15:00:00Z'),pricing=pricing)['insights']['month']
+        self.assertEqual(day7['days_elapsed'],7)
+        self.assertAlmostEqual(day7['projected'],10/7*30,places=4)
+
 
 class SessionTableTests(unittest.TestCase):
     def setUp(self):

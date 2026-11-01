@@ -1,10 +1,19 @@
 'use strict';
 // Insights: subscription value, sessions, reports, projects, calendar and cache trend.
-// Ratios span 1x to 100x+, so bars use a log scale with the 1x break-even marked.
-function valueBar(ratio,top){
+// Ratios span 1x to 100x+, so bars use a log scale with the 1x break-even marked. The bars
+// of one list share a scale and line up; only the last one carries the scale's labels.
+function valueBar(ratio,top,labelled=false){
  const pos=v=>Math.max(0,Math.min(100,Math.log10(Math.max(v,.1))+1)/(Math.log10(top)+1)*100);
- const ticks=[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}">${v}배</em>`).join('');
- return `<span class="value-bar${ratio<1?' under':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
+ // A tick at the end of the scale ends its label there, so the label stays inside the bar.
+ const ticks=labelled?[1,10,100,1000].filter(v=>v<=top).map(v=>`<em data-x="${pos(v).toFixed(1)}"${pos(v)>95?' class="end"':''}>${v}배</em>`).join(''):'';
+ return `<span class="value-bar${ratio<1?' under':''}${labelled?' labelled':''}" role="img" aria-label="구독료 대비 ${ratio.toFixed(1)}배 · 로그 눈금"><i data-w="${pos(ratio).toFixed(1)}"></i><b data-x="${pos(1).toFixed(1)}" title="본전(1배)"></b>${ticks}</span>`;
+}
+// A thin bar inside a table cell on a 0-100 scale. With no value it leaves an empty slot,
+// so the numbers beside it stay aligned and nothing reads as zero.
+function cellBar(pct,{tip='',partial=false}={}){
+ if(pct==null)return '<span class="cell-bar none" aria-hidden="true"></span>';
+ const label=tip?` role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}"`:' aria-hidden="true"';
+ return `<span class="cell-bar${partial?' partial':''}"${label}><i data-w="${Math.max(0,Math.min(100,pct)).toFixed(1)}"></i></span>`;
 }
 // A price changed inside the span: each price's own span and value. A span under a day
 // gives no monthly multiple, as a few hours scaled to a month are noise.
@@ -41,19 +50,22 @@ function renderInsights(data){
  // useful records with an unavailable comparison or a misleading subscription setup prompt.
  $('comparison').closest('[data-panel]').hidden=recent&&data.insights?.comparison?.status!=='observed';
  $('subvalue').closest('[data-panel]').hidden=recent&&!month;
- const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치</span><strong>누적 ${usd(month.total)} · 월말 예상 ${usd(month.projected)}</strong></div>`:'';
- const monthAlert=month&&month.alert_usd!=null&&month.projected>month.alert_usd
-  ?`<p class="hint warn-text">월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.</p>`:'';
+ // Early in the month there is no month-end estimate, and the value alert compares what
+ // has accrued so far instead.
+ const early=month&&month.projected==null;
+ const monthLine=month?`<div class="sub-row"><strong>이번 달 환산</strong><span>${month.days_in_month}일 중 ${month.days_elapsed}일 경과 · 공개 단가 기준 리스트 가치${early?` · 월말 예상은 ${month.projected_from_day}일째부터`:''}</span><strong>누적 ${usd(month.total)}${early?'':` · 월말 예상 ${usd(month.projected)}`}</strong></div>`:'';
+ const monthAlert=month&&month.alert_usd!=null&&(early?month.total:month.projected)>month.alert_usd
+  ?`<p class="hint warn-text">${early?`이번 달 누적 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 넘었습니다.`:`월말 예상 환산 가치가 알림 기준 ${usd(month.alert_usd)}를 초과합니다.`}</p>`:'';
  const valueRatio=s=>paidPrice(s)>0&&s.monthly_equiv!=null?s.monthly_equiv/paidPrice(s):null;
  const ratios=subs.map(valueRatio).filter(v=>v!=null);
- const top=Math.max(10,...ratios),bar=ratio=>valueBar(ratio,top);
- const ordered=subscriptionOrder(subs);
- $('subvalue').innerHTML=monthLine+monthAlert+(ordered.length?ordered.map(s=>{
+ const top=Math.max(10,...ratios),ordered=subscriptionOrder(subs);
+ const lastBar=ordered.map(valueRatio).findLastIndex(v=>v!=null),bar=(ratio,i)=>valueBar(ratio,top,i===lastBar);
+ $('subvalue').innerHTML=monthLine+monthAlert+(ordered.length?ordered.map((s,i)=>{
   const ratio=valueRatio(s),price=priceText(s,true);
   const result=s.monthly_usd==null?(s.monthly_equiv!=null?`월 환산 ${usd(s.monthly_equiv)} · 설정에서 구독료 입력`:'설정에서 구독료 입력'):!paidPrice(s)?'무료 프리뷰':ratio!=null?`월 환산 ${usd(s.monthly_equiv)} · ${ratio.toFixed(1)}배`:'—';
   // No tokens in the period is stated as such; tokens without a list price stay 미산정.
   const period=s.period_cost!=null?`기간 환산 ${usd(s.period_cost)}`:s.period_tokens===0?'기간 내 사용 기록 없음':'기간 내 미산정';
-  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${period} · ${esc(price)}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio):''}</div>`;
+  return `<div class="sub-row${ratio!=null?' with-bar':''}"><strong>${esc(serviceFull(s.route))}</strong><span>${period} · ${esc(price)}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${ratio!=null?bar(ratio,i):''}</div>`;
  }).join(''):month?'':'<p class="hint">구독료가 설정되지 않았습니다.</p>');
  applyGeometry($('subvalue'));
  renderCalendar(data);renderSessions(data);renderProjects(data);
@@ -76,16 +88,23 @@ function renderInsights(data){
   ['불완전 시작 세션',fmt(q.partial_sessions)+'개','info','기록 시작 전 사용분은 알 수 없어 관측 이후만 집계'],
   ['시각·카운터 불일치 세션',fmt(q.ambiguous_sessions)+'개','info','순서가 엇갈린 관측 · 큰 값을 중복 없이 보수적으로 처리'],
   ['0 요청 기준값 전환 세션',fmt(q.zero_baseline_sessions)+'개','info','요청 없이 기준값만 바뀐 경우 · 사용량에 더하지 않음']];
- $('quality').innerHTML=`<div class="quality-stats">${qualityRows.map(([label,value,level,note])=>`<div class="q-${level}"><span>${label}</span><strong>${value}</strong><small>${esc(note)}</small></div>`).join('')}</div><p class="hint">${esc(q.scope)} Codex 세션 ${fmt(q.sessions)}개 진단 / ${fmt(q.sessions_observed)}개 관측.</p><details><summary>수집원별 마지막 성공</summary>${q.last_successes.map(s=>`<p class="hint"><strong>${esc(s.name)}</strong> · ${esc(when(s.last_success))} KST</p>`).join('')||'<p>성공 기록이 아직 없습니다.</p>'}</details>`;
+ // Diagnostic counts are a table, not headline numbers; the level shows as a mark and a color.
+ $('quality').innerHTML=`<div class="table-wrap"><table class="quality-table"><thead><tr><th scope="col">항목</th><th scope="col">값</th><th scope="col">처리</th></tr></thead><tbody>${qualityRows.map(([label,value,level,note])=>`<tr class="q-${level}"><th scope="row">${label}</th><td>${value}</td><td>${esc(note)}</td></tr>`).join('')}</tbody></table></div><p class="hint">${esc(q.scope)} Codex 세션 ${fmt(q.sessions)}개 진단 / ${fmt(q.sessions_observed)}개 관측.</p><details><summary>수집원별 마지막 성공</summary>${q.last_successes.map(s=>`<p class="hint"><strong>${esc(s.name)}</strong> · ${esc(when(s.last_success))} KST</p>`).join('')||'<p>성공 기록이 아직 없습니다.</p>'}</details>`;
  const c=insights.comparison;
  if(c.current==null)$('comparison').innerHTML=`<p>${esc(c.reason)}</p>`;
  else{
   const absolute=c.status==='observed'&&c.percent==null;
   const change=absolute?`${signed(c.delta)} 토큰`:c.percent==null?'증감률 계산 불가':`${c.percent>0?'+':''}${c.percent.toFixed(1)}%`;
-  $('comparison').innerHTML=`<div class="comparison-value">${esc(change)}<small>${absolute?'이전 구간 대비 기록된 토큰 차이':'관측 토큰 차이 '+signed(c.delta)}</small></div><p class="hint">현재 ${esc(c.start.slice(0,16).replace('T',' '))} → ${esc(c.end_exclusive.slice(0,16).replace('T',' '))}<br>이전 ${esc(c.previous_start.slice(0,16).replace('T',' '))} → ${esc(c.previous_end_exclusive.slice(0,16).replace('T',' '))} KST · 종료 미포함</p><p class="hint">${esc(c.reason)}${c.previous===0?' 이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong>${signed(r.delta)}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div><p class="hint">캐시 생성 포함 · 변화량 절댓값 상위 6개</p>`;
+  const span=`현재 ${c.start.slice(0,16).replace('T',' ')} → ${c.end_exclusive.slice(0,16).replace('T',' ')} · 이전 ${c.previous_start.slice(0,16).replace('T',' ')} → ${c.previous_end_exclusive.slice(0,16).replace('T',' ')} KST · 종료 미포함`;
+  // What a normal comparison covers is a note; why no rate is shown (records start too late,
+  // an empty earlier window) changes how the number reads, so that stays visible.
+  const observed=c.status==='observed';
+  const note=[observed?c.reason:'','변화량이 큰 모델 6개까지 · 캐시 생성 포함.',data.reconciliation?'서버 누계 보완분을 더한 기간 전체의 변화는 위 기간 요약 카드에 있습니다.':''].filter(Boolean).join(' ');
+  $('comparison').innerHTML=`<div class="panel-tools">${infoTip(note)}</div><div class="contributions">${c.contributions.filter(r=>r.delta!==0).slice(0,6).map(r=>`<div><span>${esc(r.model)}<small>${esc(routeNames[r.route]||r.route)}</small></span><strong data-tip="${esc(signed(r.delta))} 토큰">${r.delta>0?'+':'−'}${compact(Math.abs(r.delta))}</strong></div>`).join('')||'<p class="hint">관측 토큰 차이가 없습니다.</p>'}</div>`
+   +`<p class="comparison-total" data-tip="${esc(span)}">세부 요청 기록 합계 <span class="comparison-value">${esc(change)}</span>${absolute?'':` <small>${esc(signed(c.delta))} 토큰</small>`}</p>`
+   +(!observed||c.previous===0?`<p class="hint">${observed?'':esc(c.reason)+' '}${c.previous===0?'이전 구간 0토큰 · 증감률 대신 토큰 차이를 표시합니다.':''}</p>`:'');
  }
  const cache=insights.cache;
- if(data.reconciliation)$('comparison').insertAdjacentHTML('beforeend','<p class="hint">이 분석은 세부 요청 기록 기준이며 서버 누계 보완분은 상단 합계에서 확인할 수 있습니다.</p>');
  const saved=data.cost&&data.cost.cache_savings;
  $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>세부 요청 기록의 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
  const selected=$('cache-series').value;
@@ -126,6 +145,8 @@ let openSession=null;const sessionDetails=new Map();
 let reportsLoaded=0;
 async function loadReports(){
  if(Date.now()-reportsLoaded<300000)return;
+ if(!lastReports)$('reports').innerHTML='<p class="hint">주간 리포트를 불러오는 중…</p>';
+ if(!lastMonths)$('monthly').innerHTML='<p class="hint">월간 결산을 불러오는 중…</p>';
  try{const d=await api('/api/reports');reportsLoaded=Date.now();renderReports(d.reports||[],d.this_week||null);renderMonths(d.months||[]);}
  catch(e){$('reports').innerHTML=`<p class="hint">주간 리포트를 불러오지 못했습니다 (${esc(e.message)})</p>`;}
 }
@@ -136,42 +157,66 @@ function quotaUseHtml(r,unit='주',from=''){
  if(!('quota_use' in r))return '';
  if(r.quota_use==null)return `<p class="hint">이 ${unit}의 한도 이력은 보존 기간이 지나 한도 활용·소진 횟수를 계산하지 않았습니다.</p>`;
  if(!r.quota_use.length)return `<p class="hint">이 ${unit}에 관측된 한도 이력이 없습니다.${from}</p>`;
- const rows=[...r.quota_use].sort((a,b)=>b.zero_hours-a.zero_hours||b.exhausted-a.exhausted||b.observed_hours-a.observed_hours||compareText.compare(quotaLabel(a),quotaLabel(b)));
+ // A Claude account goes by its name now, as in the facts and account lines beside the table.
+ const label=q=>quotaLabel({...q,account_label:accountName(q.route,q.account_label)});
+ const rows=[...r.quota_use].sort((a,b)=>b.zero_hours-a.zero_hours||b.exhausted-a.exhausted||b.observed_hours-a.observed_hours||compareText.compare(label(a),label(b)));
  // A window with no observed interval reads 미관측, not 0 hours: its exhaustions come from
  // readings the observed time leaves out.
  const seen=q=>q.observed_hours>0,hours=(q,v)=>seen(q)?hoursText(v):'미관측';
  const before=q=>!q.before_reset?'미관측':q.resets_observed>1?`평균 ${percent(q.before_reset.avg)} · 최소 ${percent(q.before_reset.min)} · ${q.resets_observed}회`:`${percent(q.before_reset.avg)} · 1회`;
+ // Observed windows with no exhaustion and no time at 0% fold under the table, their rows
+ // kept in it so the columns line up; with nothing else to show, the table shows them all.
+ const quiet=q=>seen(q)&&!q.exhausted&&!q.zero_hours,folded=rows.some(q=>!quiet(q))?rows.filter(quiet):[];
+ // The bar is the share of the observed time spent at 0%; an unobserved window has none.
+ const zeroBar=q=>seen(q)?cellBar(q.zero_hours/q.observed_hours*100,{tip:`관측 ${hoursText(q.observed_hours)} 중 ${percent(q.zero_hours/q.observed_hours*100)}`}):cellBar(null);
+ const row=q=>`<tr><td>${esc(label(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${zeroBar(q)}<span class="cell-num">${hours(q,q.zero_hours)}</span></td><td>${esc(before(q))}</td><td class="col-req">${hours(q,q.observed_hours)}</td></tr>`;
  return `<p class="report-head report-sub"><strong>한도 활용</strong> · 관측된 구간만 계산 · 초기화 직전 잔여는 초기화를 넘어 관측된 창만${from}</p>`
-  +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(quotaLabel(q))}${q.streak>1?` <span class="badge low">${q.streak}주 연속 소진</span>`:''}</td><td>${q.exhausted}회</td><td>${hours(q,q.zero_hours)}</td><td>${esc(before(q))}</td><td class="col-req">${hours(q,q.observed_hours)}</td></tr>`).join('')}</tbody></table></div>`
+  +`<div class="table-wrap"><table class="report-table quota-use"><thead><tr><th>한도</th><th>소진</th><th>0% 시간</th><th>초기화 직전 잔여</th><th class="col-req">관측</th></tr></thead><tbody>${rows.filter(q=>!folded.includes(q)).map(row).join('')}</tbody>${folded.length?`<tbody class="quota-quiet">${folded.map(row).join('')}</tbody>`:''}</table></div>`
+  +(folded.length?`<details class="quota-quiet-toggle" data-fold="quiet:${unit}:${esc(r.start)}"><summary>소진·0% 시간 없는 한도 ${folded.length}개</summary></details>`:'')
   +(rows.some(q=>!seen(q)&&q.exhausted)?'<p class="hint">‘미관측’은 관측 시간으로 셀 연속 측정이 없었다는 뜻입니다. 소진 횟수는 잔여가 0이 된 측정값 변화만으로 세므로 이런 창에도 있을 수 있습니다(예: 계정 확인 전 기록, 10분보다 긴 간격, 수집 실패, 1분 미만 관측).</p>':'');
 }
 // Claude Code by account (계정 미확인 included): the names set now, else the ones stored.
 const accountParts=list=>list.map(a=>`${esc(accountLabel(a.account)||a.label||'계정')} <span data-tip="${fmt(a.tokens)} 토큰">${compact(a.tokens)}</span>`).join(' · ');
+// Breakdowns as label and value lines, the labels in one column.
+const reportLines=rows=>{const list=rows.filter(([,v])=>v);return list.length?`<dl class="report-lines">${list.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`:'';};
+const detailsLine=t=>t.reasoning_observed!=null?esc(usageDetailsText(t))+(t.cache_estimated_tokens?` · 캐시 ${compact(t.cache_estimated_tokens)}토큰은 기본 단가 추정`:''):'';
+const topList=(list,key)=>list.map(x=>`${esc(x[key])} ${compact(x.tokens)}`).join(' · ');
+// A week's observed facts lead its report, worded as 개요 words them for the latest week.
+function reportFacts(r){
+ const items=(r.facts||[]).map(f=>[f,factText(f,false)]).filter(([,text])=>text);
+ return items.length?`<ul class="report-facts">${items.map(([f,text])=>`<li><span class="ov-fact-kind">${FACT_KINDS[f.kind]}</span><span>${esc(text)}</span></li>`).join('')}</ul>`:'';
+}
 // This week so far against last week cut at the same time (the period cards' comparison).
 function thisWeekHtml(w){
  if(!w)return '';
  const p=w.prior,change=priorChange(p,'',p?.current_tokens??w.tokens,p?total(p):null,'지난주');
  return `<div class="this-week"><p class="report-head"><strong>이번 주 ${esc(w.start)} ~ ${esc(w.end)}</strong> · 진행 중${p?' · '+esc(when(Date.parse(p.current_end)/1000))+' 기준':''} · ${compact(w.tokens)} 토큰 · ${callText(w)}${w.cost!=null?' · 공개 단가 환산 '+usd(w.cost):''}${change?` · <span class="week-delta">${esc(change)}</span>`:''}</p>`
-  +(w.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(w))}${w.cache_estimated_tokens?` · 캐시 ${compact(w.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
-  +(w.routes.length?`<p class="hint">서비스별: ${w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')}</p>`:'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
-  +(w.accounts?`<p class="hint">Claude 계정별: ${accountParts(w.accounts)}</p>`:'')+'</div>';
+  +reportLines([['서비스별',w.routes.map(x=>`${esc(shortService[x.route]||routeNames[x.route]||x.route)} <span data-tip="${fmt(x.tokens)} 토큰">${compact(x.tokens)}</span>`).join(' · ')],
+   ['Claude 계정별',w.accounts?accountParts(w.accounts):''],['세부',detailsLine(w)]])
+  +(w.routes.length?'':'<p class="hint">이번 주에는 아직 사용 기록이 없습니다.</p>')
+  +quotaUseHtml(w,'주',w.quota_from!=null?` · ${esc(when(w.quota_from))}부터 보존된 이력`:'')+'</div>';
 }
 function reportHtml(r){
- return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${callText(r.totals)} · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`
-  +(r.totals.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(r.totals))}${r.totals.cache_estimated_tokens?` · 캐시 ${compact(r.totals.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
+ const residual=r.residual?.tokens&&r.residual.account_tokens?`<span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)`:'';
+ return `<p class="report-head"><strong>${esc(r.start)} ~ ${esc(r.end)}</strong> · ${compact(r.totals.tokens)} 토큰 · ${callText(r.totals)} · 전주 대비 ${pctChange(r.change_pct)}${r.totals.cost!=null?' · 공개 단가 환산 '+usd(r.totals.cost):''}${r.busiest_day?' · 가장 많이 쓴 날 '+esc(r.busiest_day):''}</p>`+reportFacts(r)
   +`<div class="table-wrap"><table class="report-table"><thead><tr><th>서비스</th><th>토큰</th><th class="col-req">요청</th><th>전주 대비</th><th>환산</th></tr></thead><tbody>${r.routes.map(x=>`<tr><td><span class="svc-full">${esc(routeNames[x.route]||x.route)}</span><span class="svc-short">${esc(shortService[x.route]||x.route)}</span></td><td data-tip="${fmt(x.tokens)}">${compact(x.tokens)}</td><td class="col-req">${fmt(x.requests)}</td><td>${pctChange(x.change_pct)}</td><td>${usd(x.cost)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">기록 없음</td></tr>'}</tbody></table></div>`
-  +`<p class="hint">상위 모델: ${r.models.map(m=>`${esc(m.model)} ${compact(m.tokens)}`).join(' · ')||'—'}</p>`
-  +(r.accounts?`<p class="hint">Claude 계정별: ${accountParts(r.accounts)}</p>`:'')
-  +(r.projects?.length?`<p class="hint">상위 프로젝트: ${r.projects.map(x=>`${esc(x.project)} ${compact(x.tokens)}`).join(' · ')}</p>`:'')
-  +(r.residual?.tokens&&r.residual.account_tokens?`<p class="hint">Codex ${esc(residualName)} <span data-tip="${fmt(r.residual.tokens)} 토큰">${compact(r.residual.tokens)}</span> 토큰 · 계정 합계의 ${percent(r.residual.tokens/r.residual.account_tokens*100)} (계정 일별 합계가 주 안에 온전히 든 ${r.residual.days}일 기준)</p>`:'')
-  +(Array.isArray(r.quota_use)||r.exhausted==null?quotaUseHtml(r):`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:e.account_label}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`);
+  +reportLines([['상위 모델',topList(r.models,'model')||'—'],['Claude 계정별',r.accounts?accountParts(r.accounts):''],
+   ['상위 프로젝트',r.projects?.length?topList(r.projects,'project'):''],[`Codex ${esc(residualName)}`,residual],['세부',detailsLine(r.totals)]])
+  +(Array.isArray(r.quota_use)||r.exhausted==null?quotaUseHtml(r):`<p class="hint">${r.exhausted.length?'한도 소진: '+r.exhausted.map(e=>`${esc(quotaLabel({route:e.route,bucket:e.bucket,display_name:e.display_name,account_label:accountName(e.route,e.account_label)}))} ${e.count}회`).join(' · '):'이 주에는 한도 소진이 관측되지 않았습니다.'}</p>`);
 }
 // Kept so the reports can be drawn again when the residual's name arrives or changes.
 let lastReports=null,lastWeek=null;
+// A redraw keeps open the folds that were open, matched by data-fold.
+function keepFolds(box,html){
+ const opened=[...box.querySelectorAll('details[open][data-fold]')].map(d=>d.dataset.fold);
+ box.innerHTML=html;
+ for(const key of opened)box.querySelector(`details[data-fold="${CSS.escape(key)}"]`)?.setAttribute('open','');
+}
 function renderReports(list,week=lastWeek){
  lastReports=list;lastWeek=week;
- $('reports').innerHTML=thisWeekHtml(week)+(list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
-  :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>');
+ keepFolds($('reports'),thisWeekHtml(week)+(list.length?reportHtml(list[0])+(list.length>1?`<details class="report-older" data-fold="older"><summary>이전 리포트 ${list.length-1}개</summary>${list.slice(1).map(r=>`<details data-fold="week:${esc(r.start)}"><summary>${esc(r.start)} ~ ${esc(r.end)} · ${compact(r.totals.tokens)} 토큰 · 전주 대비 ${pctChange(r.change_pct)}</summary>${reportHtml(r)}</details>`).join('')}</details>`:'')
+  :'<p class="hint">첫 리포트는 수집기가 다음 수집 주기에 지난주 기록으로 작성합니다.</p>'));
+ applyGeometry($('reports'));
 }
 // Monthly subscription settlements (finished KST months): each subscription's list-price
 // value against the month's price as set when it was first settled, prorated by time
@@ -179,28 +224,32 @@ function renderReports(list,week=lastWeek){
 const monthStart=m=>Date.parse(m.start+'T00:00:00+09:00')/1000;
 function monthHtml(m){
  const subs=subscriptionOrder(m.subscriptions),top=Math.max(10,...subs.map(s=>s.ratio||0));
- const rows=subs.map(s=>{
+ const lastBar=subs.findLastIndex(s=>s.ratio!=null);
+ const rows=subs.map((s,i)=>{
   const price=priceText(s,false);
   const value=s.value!=null?`환산 ${usd(s.value)}`:s.tokens===0?'사용 기록 없음':'환산 미산정';
   const result=s.ratio!=null?`${s.ratio.toFixed(1)}배`:s.monthly_usd===0?'무료 프리뷰':'—';
   const name=familyOf(s.route)==='claude-code'&&!accountLabel(s.route)&&s.label?`${routeNames['claude-code']} · ${s.label}`:serviceFull(s.route);
-  return `<div class="sub-row${s.ratio!=null?' with-bar':''}"><strong>${esc(name)}</strong><span>${value} · ${esc(price)}${s.tokens?` · <span data-tip="${fmt(s.tokens)} 토큰">${compact(s.tokens)}</span> 토큰`:''}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${s.ratio!=null?valueBar(s.ratio,top):''}</div>`;
+  return `<div class="sub-row${s.ratio!=null?' with-bar':''}"><strong>${esc(name)}</strong><span>${value} · ${esc(price)}${s.tokens?` · <span data-tip="${fmt(s.tokens)} 토큰">${compact(s.tokens)}</span> 토큰`:''}${priceSpans(s.price_segments)}</span><strong>${esc(result)}</strong>${s.ratio!=null?valueBar(s.ratio,top,i===lastBar):''}</div>`;
  }).join('');
  const codex=subs.some(s=>s.route==='codex')&&m.totals.residual_tokens;
  const from=m.quota_from!=null&&m.quota_from>monthStart(m)?` · ${esc(when(m.quota_from))}부터 보존된 이력`:'';
  return `<p class="report-head"><strong>${esc(m.month)}</strong> · ${esc(m.start.slice(5))} ~ ${esc(m.end.slice(5))} · ${compact(m.totals.tokens)} 토큰 · ${callText(m.totals)}${m.totals.cost!=null?' · 공개 단가 환산 '+usd(m.totals.cost):''}${m.partial?` · 부분 월(기록 ${esc(m.records_from.slice(5))}부터)`:''}</p>`
-  +(m.totals.reasoning_observed!=null?`<p class="hint">${esc(usageDetailsText(m.totals))}${m.totals.cache_estimated_tokens?` · 캐시 ${compact(m.totals.cache_estimated_tokens)}토큰은 기본 단가 추정`:''}</p>`:'')
   +(rows||'<p class="hint">이 달에 결산할 구독이 없습니다.</p>')
   +(codex?`<p class="hint">Codex 토큰에는 이 PC에 기록이 없는 ${esc(residualName)} <span data-tip="${fmt(m.totals.residual_tokens)} 토큰">${compact(m.totals.residual_tokens)}</span> 토큰이 들어 있고, 환산 가치는 요청 기록만 계산합니다.</p>`:'')
-  +`<p class="hint">상위 모델: ${m.models.map(x=>`${esc(x.model)} ${compact(x.tokens)}`).join(' · ')||'—'}</p>`
-  +(m.accounts?`<p class="hint">Claude 계정별: ${accountParts(m.accounts)}</p>`:'')
-  +(m.projects.length?`<p class="hint">상위 프로젝트: ${m.projects.map(x=>`${esc(x.project)} ${compact(x.tokens)}`).join(' · ')}</p>`:'')
+  +reportLines([['상위 모델',topList(m.models,'model')||'—'],['Claude 계정별',m.accounts?accountParts(m.accounts):''],
+   ['상위 프로젝트',m.projects.length?topList(m.projects,'project'):''],['세부',detailsLine(m.totals)]])
   +quotaUseHtml(m,'달',from);
 }
 // Month by month: the total, its list-price value and each priced subscription's ratio.
+// Tokens and value each have their own scale; a partial month's bars are lighter, and a
+// month without a value has no bar.
 function monthTrendHtml(list){
+ const most=key=>Math.max(0,...list.map(m=>m.totals[key]||0));
+ const bar=(m,key,top)=>m.totals[key]==null||!top?cellBar(null):cellBar(m.totals[key]/top*100,{partial:m.partial});
+ const tokens=most('tokens'),cost=most('cost');
  const ratios=m=>subscriptionOrder(m.subscriptions).filter(s=>s.ratio!=null).map(s=>`<span class="ratio-item">${esc(serviceShort(s.route,accountLabel(s.route)||s.label))} ${s.ratio.toFixed(1)}배</span>`).join(' · ')||'—';
- return `<div class="table-wrap"><table class="report-table month-trend"><thead><tr><th>월</th><th>토큰</th><th>환산</th><th>구독료 대비</th></tr></thead><tbody>${list.map(m=>`<tr><td>${esc(m.month)}${m.partial?' <small>부분</small>':''}</td><td data-tip="${fmt(m.totals.tokens)}">${compact(m.totals.tokens)}</td><td>${usd(m.totals.cost)}</td><td>${ratios(m)}</td></tr>`).join('')}</tbody></table></div>`;
+ return `<div class="table-wrap"><table class="report-table month-trend"><thead><tr><th>월</th><th>토큰</th><th>환산</th><th>구독료 대비</th></tr></thead><tbody>${list.map(m=>`<tr><td>${esc(m.month)}${m.partial?' <small>부분</small>':''}</td><td>${bar(m,'tokens',tokens)}<span class="cell-num" data-tip="${fmt(m.totals.tokens)}">${compact(m.totals.tokens)}</span></td><td>${bar(m,'cost',cost)}<span class="cell-num">${usd(m.totals.cost)}</span></td><td>${ratios(m)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 // Reports and settlements name accounts and the residual as set now; drawn again when
 // those names arrive or change after them.
@@ -208,9 +257,9 @@ function redrawReports(){if(lastReports)renderReports(lastReports);renderMonths(
 let lastMonths=null;
 function renderMonths(list=lastMonths){
  lastMonths=list;if(!list)return;
- $('monthly').innerHTML=list.length?monthHtml(list[0])
-  +(list.length>1?`<p class="report-head report-sub"><strong>월별 추이</strong></p>${monthTrendHtml(list)}<details class="report-older"><summary>이전 결산 ${list.length-1}개</summary>${list.slice(1).map(m=>`<details><summary>${esc(m.month)} · ${compact(m.totals.tokens)} 토큰${m.totals.cost!=null?' · 환산 '+usd(m.totals.cost):''}</summary>${monthHtml(m)}</details>`).join('')}</details>`:'')
-  :'<p class="hint">첫 결산은 수집기가 다음 달 첫 수집 주기에 지난달 기록으로 작성합니다.</p>';
+ keepFolds($('monthly'),list.length?monthHtml(list[0])
+  +(list.length>1?`<p class="report-head report-sub"><strong>월별 추이</strong></p>${monthTrendHtml(list)}<details class="report-older" data-fold="older"><summary>이전 결산 ${list.length-1}개</summary>${list.slice(1).map(m=>`<details data-fold="month:${esc(m.month)}"><summary>${esc(m.month)} · ${compact(m.totals.tokens)} 토큰${m.totals.cost!=null?' · 환산 '+usd(m.totals.cost):''}</summary>${monthHtml(m)}</details>`).join('')}</details>`:'')
+  :'<p class="hint">첫 결산은 수집기가 다음 달 첫 수집 주기에 지난달 기록으로 작성합니다.</p>');
  applyGeometry($('monthly'));
 }
 function sessionDetailHtml(d){
@@ -249,9 +298,10 @@ let openProject=null;const projectDetails=new Map();
 function projectDetailHtml(d){
  const m=d.month,peak=Math.max(1,...d.daily.map(x=>x.tokens));
  const bars=d.daily.map((x,i)=>{const h=Math.max(1,x.tokens/peak*36);return `<rect x="${i*8}" y="${40-h}" width="6" height="${h}" data-tip="${esc(x.day)} · ${fmt(x.tokens)} 토큰 · ${fmt(x.requests)}회"></rect>`;}).join('');
- const budget=m.budget?` · 예산 ${Math.round(m.budget_ratio*100)}% 사용 → 월말 예상 <strong class="${m.projected_budget_ratio>=1?'warn-text':''}">${Math.round(m.projected_budget_ratio*100)}%</strong>`:'';
- return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''} → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}${budget}</p>`
-  +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽</p>`
+ const early=m.projected_tokens==null;
+ const budget=m.budget?` · 예산 ${Math.round(m.budget_ratio*100)}% 사용${early?'':` → 월말 예상 <strong class="${m.projected_budget_ratio>=1?'warn-text':''}">${Math.round(m.projected_budget_ratio*100)}%</strong>`}`:'';
+ return `<tr class="sess-detail-row"><td colspan="7"><div class="sess-detail">${d.unallocated_intervals?.length?`<p class="hint">합계에 포함된 시간 미배분 ${compact(d.unallocated_intervals.reduce((n,e)=>n+e.tokens,0))} 토큰 · 세부 차트에는 배분하지 않습니다.</p>`:''}<p><strong>${esc(d.project)}</strong> · 이번 달(${esc(m.month)}) ${m.days_in_month}일 중 ${m.days_elapsed}일 · ${compact(m.tokens)} 토큰${m.cost!=null?' · '+usd(m.cost):''}${early?'':` → 월말 예상 ${compact(m.projected_tokens)} 토큰${m.projected_cost!=null?' · '+usd(m.projected_cost):''}`}${budget}</p>`
+  +`<svg class="sess-hours" viewBox="0 0 ${Math.max(8,d.daily.length*8)} 40" preserveAspectRatio="none" role="img" aria-label="최근 ${d.days}일 일별 토큰">${bars}</svg><p class="hint">최근 ${d.days}일 일별 토큰 · 월말 예상은 경과 일수 기준 단순 외삽${early?`이며 ${m.projected_from_day}일째부터 표시`:''}</p>`
   +`<table class="sess-models"><thead><tr><th>모델</th><th>경로</th><th>요청</th><th>토큰</th><th>비용 추정</th></tr></thead><tbody>${d.models.map(x=>`<tr><td>${esc(x.model)}</td><td>${esc(shortService[x.route]||x.route)}</td><td>${fmt(x.requests)}</td><td>${fmt(x.tokens)}</td><td>${usd(x.cost)}</td></tr>`).join('')}</tbody></table>`
   +(d.sessions.length?`<p class="hint">많이 쓴 세션: ${d.sessions.map(x=>`<code data-tip="${esc(String(x.session))}">${esc(shortId(x.session))}</code> ${compact(x.tokens)}`).join(' · ')}</p>`:'')+'</div></td></tr>';
 }
@@ -318,7 +368,7 @@ function fitCalendar(){
 }
 function renderCalendar(data){
  calWeeks=calendarWeeks();
- $('calendar-caption').textContent=`최근 ${calWeeks}주 · 일별 `+metricName()+' · 기간 필터 무관';
+ $('calendar-caption').textContent=`최근 ${calWeeks}주 · 일별 `+metricName();
  if(!('calendar' in data)){if(!$('calendar').textContent.trim())$('calendar').innerHTML='<div class="empty">불러오는 중…</div>';return;}
  const days=Object.fromEntries((data.calendar||[]).map(r=>[r.day,r]));
  const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Seoul'}));

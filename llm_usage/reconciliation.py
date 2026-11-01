@@ -3,6 +3,7 @@
 Only an interval wholly inside a selected range contributes to its total. It
 enters a chart bucket only when the whole interval fits there as well.
 """
+from bisect import bisect_left
 from contextlib import contextmanager
 import copy
 import json
@@ -83,19 +84,34 @@ def aliases(c, route, event_id, *values):
 
 
 def _raw(c, row, begin, end):
-    if row['source']=='codex-account':
-        # Unknown old records remain explicitly unverified. A proven different
-        # native creator must never subtract from this account's server total.
-        from .codex_usage import account_filter
-        account_sql,account_args=account_filter(row.get('account_key'))
-        where='route=? AND ts>=? AND ts<? AND '+account_sql;args=(row['route'],begin,end,*account_args)
-    else:
-        where='id IN (SELECT event_id FROM usage_links WHERE scope_id=?) AND ts>=? AND ts<?'
-        args=(row['scope_id'],begin,end)
+    """Local records under a Codex account day: the route's records of that account."""
+    # Unknown old records remain explicitly unverified. A proven different
+    # native creator must never subtract from this account's server total.
+    from .codex_usage import account_filter
+    account_sql,account_args=account_filter(row.get('account_key'))
+    where='route=? AND ts>=? AND ts<? AND '+account_sql;args=(row['route'],begin,end,*account_args)
     if row['model']:
         where+=' AND model=?';args+= (row['model'],)
     return dict(c.execute('SELECT '+','.join('COALESCE(SUM('+k+'),0) AS '+k for k in TOKENS)+
                           ' FROM events WHERE '+where,args).fetchone())
+
+
+def _linked(c, scope_id):
+    """A scope's linked local records in time order (times, rows), read once for all of
+    the scope's snapshots."""
+    rows=c.execute('SELECT ts,model,'+','.join(TOKENS)+' FROM events WHERE id IN '
+                   '(SELECT event_id FROM usage_links WHERE scope_id=?) ORDER BY ts',(scope_id,)).fetchall()
+    return [r[0] for r in rows],rows
+
+
+def _window(linked, begin, end, model):
+    """The linked records' tokens in [begin, end), of `model` only when one is given."""
+    times,rows=linked
+    out=dict.fromkeys(TOKENS,0)
+    for r in rows[bisect_left(times,begin):bisect_left(times,end)]:
+        if model and r[1]!=model:continue
+        for i,k in enumerate(TOKENS,2):out[k]+=r[i]
+    return out
 
 
 def _evidence(c):
@@ -163,7 +179,7 @@ def _supplements(c, received=None):
                              project=r['project'],account=_account(c,r)) for r in rows)
     groups={}
     for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
-    out=[];conflicts=[]
+    out=[];conflicts=[];linked={}
     for group in groups.values():
         previous=None
         for r in sorted(group,key=lambda x:x['end']):
@@ -183,7 +199,12 @@ def _supplements(c, received=None):
             if amount<0 or (delta and any(v<0 for v in delta.values())):
                 conflicts.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],model=r['model'],project=r['project'],start=begin,end=r['end'],reason='counter_decreased',checked=r['checked']))
                 previous=r;continue
-            raw=_raw(c,r,begin,r['end'])
+            if r['source']=='codex-account':raw=_raw(c,r,begin,r['end'])
+            else:
+                # A scope-linked source keeps many cumulative snapshots of one scope (a
+                # session): its records are read once and each snapshot's span summed.
+                if r['scope_id'] not in linked:linked[r['scope_id']]=_linked(c,r['scope_id'])
+                raw=_window(linked[r['scope_id']],begin,r['end'],r['model'])
             missing=amount-sum(raw[k] for k in PARTS)
             detail={k:delta[k]-raw[k] for k in PARTS} if delta else None
             if missing<0 or (detail and any(v<0 for v in detail.values())):
@@ -249,8 +270,9 @@ def series_label(e, group):
     return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
 
 
-def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None):
-    """Overlay a COPY of the cached request-only response; never mutate the cache."""
+def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None, origins=True):
+    """Overlay a COPY of the cached request-only response; never mutate the cache.
+    `origins`: also split the period's records by where they came from (`origin_tokens`)."""
     data=copy.deepcopy(body)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
     # reach back as far as the local records (whose first record is taken in the scope too).
@@ -376,17 +398,19 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         overlapping_intervals=overlapping,conflicts=conflicts,
         cost_basis='세부 요청 기록 중 단가가 확인된 부분',requests_basis='수집한 고유 요청',
         sources=sorted({e['source'] for e in accepted}))
-    where='e.ts>=? AND e.ts<?';args=[a,b]
-    if scope:
-        kind,_,value=scope.partition(':')
-        if kind in ('route','provider','model','project','account'):
-            column=("COALESCE(e.project,'미분류')" if kind=='project' else
-                    "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
-            where+=' AND '+column+'=?';args.append(value)
-    origins=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
-                      "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
-                      'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
-    data['reconciliation']['origin_tokens']={r['origin']:r['tokens'] for r in origins}
+    # The split looks up every record of the period, so callers that do not show it skip it.
+    if origins:
+        where='e.ts>=? AND e.ts<?';args=[a,b]
+        if scope:
+            kind,_,value=scope.partition(':')
+            if kind in ('route','provider','model','project','account'):
+                column=("COALESCE(e.project,'미분류')" if kind=='project' else
+                        "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
+                where+=' AND '+column+'=?';args.append(value)
+        rows=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
+                       "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
+                       'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
+        data['reconciliation']['origin_tokens']={r['origin']:r['tokens'] for r in rows}
     comparison=data.get('compare')
     if comparison:
         ca,cb=stamp(comparison['start']),stamp(comparison['end_exclusive'])

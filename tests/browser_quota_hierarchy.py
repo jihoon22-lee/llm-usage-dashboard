@@ -100,7 +100,7 @@ with sync_playwright() as p:
     fixture_page(page)
     errors = []; page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
     preview(page, blocked)
-    assert page.goto(origin+'/').status == 200
+    assert page.goto(origin+'/?view=quota').status == 200
     expect(page.locator('#refresh')).to_be_enabled()
     overview = page.locator('[data-quota="antigravity"] .overview-value')
     expect(overview).to_contain_text('5시간: Gemini 53.6% · 3rd party 사용 불가')
@@ -117,7 +117,8 @@ with sync_playwright() as p:
     expect(claude).not_to_contain_text('사용 불가')
     check_plan_text(page)
     timeline = page.locator('#reset-timeline')
-    expect(timeline).to_contain_text('Antigravity 주간 3rd party 소진 중')
+    expect(timeline).to_contain_text('Antigravity 주간 3rd party 소진')
+    expect(timeline).not_to_contain_text('소진 중')
     expect(timeline).not_to_contain_text('Antigravity 5시간 3rd party')
     expect(timeline).to_contain_text('Antigravity 5시간 Gemini')
     page.screenshot(path=str(output/'quota-hierarchy-desktop.png'), full_page=True)
@@ -153,7 +154,7 @@ with sync_playwright() as p:
     fixture_page(mobile)
     mobile.on('pageerror', lambda error: errors.append(str(error)));watch_csp(mobile,errors)
     preview(mobile, blocked)
-    assert mobile.goto(origin+'/').status == 200
+    assert mobile.goto(origin+'/?view=quota').status == 200
     expect(mobile.locator('#refresh')).to_be_enabled()
     mobile.locator('[data-quota="antigravity"]').click()
     expect(mobile.locator('#quota-antigravity')).to_be_visible()

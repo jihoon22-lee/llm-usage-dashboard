@@ -5,13 +5,15 @@ Linux/WSL에서 실행하며 Tailscale 소유자 계정으로만 접근합니다
 
 A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale access, local-first collection. Korean UI and documentation. Independent project; not an official provider product.
 
-현재 릴리스: **[v0.10.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.10.0)** · [변경 기록](CHANGELOG.md)
+현재 릴리스: **[v0.11.0](https://github.com/jihoon22-lee/llm-usage-dashboard/releases/tag/v0.11.0)** · [변경 기록](CHANGELOG.md)
 
 수집 기준: [클라우드 누계 대조·한국시간 미배분량·선택적 telemetry](docs/collection-reconciliation.md).
 
 ## 기능
 
-- 한도·사용량·리포트·상태 네 탭: 잔여 한도·다음 초기화·보유 초기화권과 크레딧 확인
+- 개요·한도·사용량·리포트 네 탭: 기본 화면인 개요에 지금 쓸 수 있는 한도, 오늘·이번 주·최근 30일 사용량, 지난달 구독 가치, 기록된 사실만으로 만든 관측을 표시
+- 헤더의 데이터 상태: 조치가 필요한 수집 문제와 일시 실패를 세고, 누르면 같은 기준으로 묶은 진단 화면을 엶
+- 한도 탭: 잔여 한도·다음 초기화·보유 초기화권과 크레딧 확인
 - 사용량 안의 토큰 분석·한도 소비·클라우드 및 리뷰 목록: 기능/모델별 일별 소비율과 작업·PR·실행 상태, 일부 작업의 소비 상세
 - 최근 1시간 빠른 보기: 정확한 60분의 로컬 기록을 서비스·모델·프로젝트·세션별로 집계하고 CSV로 내보내기
 - 한도별 실제 감소량: 최근 30분 안의 연속 관측 구간과 감소한 %p 표시, 작업 지속 시간은 예측하지 않음
@@ -24,7 +26,7 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 - 없는 원본 값을 0이나 100%로 채우지 않고 미제공·실패·오래된 관측을 구분
 - Claude 계정 여러 개(zerosub·paseo 등 `CLAUDE_CONFIG_DIR`별 로그인): 하나의 Claude Code 서비스 안에서 계정별 한도·초기화·토큰 사용량·구독 가치를 구분
 - 설정에서 구독 종료를 표시하면 그 서비스의 한도 조회·알림을 멈추고 한도 카드를 접음(사용 기록은 계속 집계)
-- 리포트 탭: 이번 주 현황(지난주 같은 시점 대비), 주간 리포트(한도 활용·Claude 계정별·상위 프로젝트), 월간 구독 결산(구독료 대비 배수·월별 추이)
+- 리포트 탭: 이번 주 현황(지난주 같은 시점 대비), 주간 리포트(그 주의 관측 사실·한도 활용·Claude 계정별·상위 프로젝트), 월간 구독 결산(구독료 대비 배수·월별 추이)
 
 ## 지원 범위
 
@@ -75,7 +77,7 @@ Python 3.11+, uv 0.12.23, Git, systemd가 실행되는 Linux/WSL, 로그인된 T
 서버 경로·홈에는 ASCII 영문자·숫자·`_ . / -`만 사용할 수 있습니다. 먼저 [설치 안내](docs/setup.md)를 확인하세요.
 
 ```bash
-git clone --branch v0.10.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
+git clone --branch v0.11.0 https://github.com/jihoon22-lee/llm-usage-dashboard.git
 cd llm-usage-dashboard
 git switch -c main
 uv sync --locked --no-dev
@@ -84,7 +86,7 @@ uv sync --locked --no-dev
 sudo ./install.sh --owner "$USER"
 ```
 
-v0.10.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
+v0.11.0의 고정된 설치 절차입니다. 태그 clone의 detached HEAD에서 설치·업데이트용 로컬 main을 생성합니다. 개발 최신 코드는 원격 main을 사용하세요. 기존 v0.1.0에는 uv.lock이 없으며, 업데이트는 [의존성 전환 안내](docs/operations.md)를 따릅니다.
 
 수집은 로컬 기록을 읽고 기존 인증으로 계정 한도를 조회합니다. Windows와 상태줄 연결은 [명시적으로 선택](docs/setup.md)합니다.
 설치기가 출력하는 개인 Tailscale 주소로 접속합니다. Funnel로 인터넷에 공개하지 않습니다.
