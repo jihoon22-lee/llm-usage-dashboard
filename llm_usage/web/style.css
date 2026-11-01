@@ -547,7 +547,7 @@ body:not([data-view=usage]):not([data-view=reports]):not([data-view=status]) #in
 .quality-table{margin:14px 0 4px}
 .quality-table thead th{text-align:left}
 .quality-table thead th:nth-child(2),.quality-table td{text-align:right;font-variant-numeric:tabular-nums}
-.quality-table th[scope=row]{width:13em;text-align:left;font-size:var(--fs-sm);color:var(--ink);background:none;font-weight:500}
+.quality-table th[scope=row]{width:13em;text-align:left;font-size:var(--fs-sm);color:var(--ink);background:none;font-weight:500;padding:14px 12px;border-bottom:1px solid var(--line)}
 .quality-table td:nth-child(2){width:7em}
 .quality-table td:last-child{text-align:left;white-space:normal;color:var(--muted);font-size:var(--fs-xs);min-width:14em}
 .quality-table .q-warn td:nth-child(2){color:var(--warning-ink);font-weight:650}
