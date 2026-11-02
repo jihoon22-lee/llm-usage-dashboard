@@ -14,7 +14,7 @@ HTTPS 9444와 로컬 8766을 사용합니다. 설치기는 기존 Funnel·다른
 설치기는 root로 시스템 유닛·Serve를 설정하지만 서비스는 지정한 일반 사용자로 실행합니다.
 owner를 생략하면 유효한 비root SUDO_USER를 사용합니다. root 직접 실행에서는 일반 사용자 `--owner`를 명시합니다.
 uv 설치는 [공식 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에서 버전 0.12.23을 선택합니다. 프로젝트 환경은 `uv sync --locked --no-dev`로 재현합니다.
-첫 설치는 checkout 실행이며 [릴리스 실행 전환](operations.md)으로 개발과 운영 코드를 분리할 수 있습니다.
+첫 설치는 checkout 실행이며 [릴리스 환경 전환](operations.md#릴리스-환경으로-전환)으로 개발 checkout과 운영 코드·의존성을 분리할 수 있습니다.
 
 ## Windows와 상태줄
 
