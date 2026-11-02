@@ -62,13 +62,36 @@
 
 ## 운영 적용
 
-- 아직 적용하지 않았다. 운영은 그대로 `5caab17` 코드를 공유 `.venv`로 실행한다.
-- 적용하려면 사용자가 운영 배포를 요청해야 하고, 한 번은 대화형 sudo가 필요하다. sudoers 규칙은 재시작만 허용한다.
-  1. 기본 checkout의 main을 이 변경이 들어간 커밋이나 릴리스 태그로 fast-forward한다.
-  2. `.venv/bin/python packaging/deploy.py`로 코드만 일반 배포한다. 배포기의 health·heartbeat 확인과 자동 rollback을 거친다.
-  3. `.venv/bin/python packaging/deploy.py --prepare`로 실행 중인 그 릴리스에 환경을 만들고 검사한다.
-  4. `sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release`로 유닛만 옮긴다. 실패하면 유닛이 복원되어 3단계 직후 상태로 돌아간다.
-- 적용 뒤에는 두 프로세스의 실행 파일·작업 폴더, health, 새 heartbeat, 실제 인증 화면을 확인한다. 그다음 AGENTS.md의 운영 `.venv` 규칙을 실제 구조에 맞게 고친다.
+2026-11-02 사용자 요청으로 v0.12.0을 먼저 릴리스한 뒤 운영을 릴리스 환경으로 옮겼다. DB 구조와 저장 데이터가 바뀌지 않는 배포라 배포 직전 DB 백업은 만들지 않았다.
+
+- **릴리스:** [PR #104](https://github.com/jihoon22-lee/llm-usage-dashboard/pull/104)(merge commit `91e1ad3`)를 병합하고 `v0.12.0` 태그를 push했다.
+  - 릴리스 workflow의 14개 작업이 통과해 wheel·소스 묶음·manifest·SHA256SUMS가 게시됐다.
+  - workflow가 쓴 CI 출처 문단은 남기고, 변경 사항과 업데이트 주의를 노트에 더했다.
+- **1단계 일반 배포(10:07 KST):** 기본 checkout을 `v0.12.0`으로 fast-forward하고 `.venv/bin/python packaging/deploy.py`를 실행했다.
+  - checkout `.venv`로 단위 테스트 588개를 통과한 뒤 `current`를 `91e1ad3`으로 바꾸고 재시작했다(10:07:28).
+  - health 200과 재시작 뒤 heartbeat(10:07:37)를 확인했다.
+  - 보존 개수를 넘은 가장 오래된 릴리스 `7081388`이 정리됐다.
+- **2단계 `--prepare`(10:08 KST):** 실행 중인 `91e1ad3`에 환경을 만들고, 그 환경의 Python으로 단위 테스트 588개를 통과했다.
+  - 두 서비스의 PID는 그대로였고, history에는 같은 커밋 한 줄만 더해졌다.
+  - 환경의 Python은 `/usr/bin/python3.14`(3.14.4)를 직접 가리킨다(`pyvenv.cfg`의 `home = /usr/bin`).
+  - 런타임 패키지 8개와 `.pyc` 200개가 있다. checkout `.venv`를 가리키는 경로는 없다.
+- **3단계 유닛 이동(10:25 KST):** 사용자가 `sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release`를 실행했다.
+  - 두 유닛의 `ExecStart` 실행 파일이 `current/.venv/bin`으로 바뀌었고, sudoers는 그대로였다.
+  - 웹 health와 수집기 실행 확인을 통과했다.
+  - 바꾸기 전 유닛 파일은 `/var/backups/llm-usage/20261102-102516-dsv3btuv/`에 있다.
+- **전환 뒤 확인:**
+  - 웹 마스터·worker와 수집기의 인터프리터가 릴리스 환경이고, 작업 폴더는 `releases/91e1ad3…`이다.
+  - worker가 연 확장 모듈 5개는 모두 릴리스 환경의 것이다. checkout `.venv`에서 연 파일은 없다.
+  - 재시작(10:25:17) 뒤 heartbeat가 10:27:11에 들어왔다. 그 뒤 두 서비스 로그에는 경고 이상의 항목이나 import·권한 오류가 없다.
+  - 수집원 42개의 상태가 전환 전과 같다(정상 31, 부분 5, 미제공 4, 종료 2). 정상이 아닌 항목은 전환 전부터 그 상태였다.
+  - Tailscale 주소로 개요·사용량·리포트 API를 GET으로만 요청해 모두 200을 받았다.
+    - 재시작 직후 첫 개요 응답만 1.33초였다.
+    - 이어서 3번 잰 중앙값은 개요 0.37초, 사용량 core 0.35초, 리포트 0.21초다. 0.11.0과 같은 수준이다.
+  - 실제 인증 화면을 headless Chromium으로 열어 봤다. GET이 아니거나 다른 출처로 가는 요청은 막도록 설정했고, 실제로 막힌 요청은 없었다.
+    - 개요의 30일 차트와 `눈에 띄는 점`이 표시됐고, 콘솔·HTTP 오류는 없었다.
+    - 실제 값이 담긴 캡처는 확인 직후 지웠다.
+  - 배포기가 두 유닛을 릴리스 환경으로 인식한다. 다음 배포부터 대상 릴리스의 환경을 만들고 그 환경으로 검사하며, `--rollback`은 환경까지 되돌린다.
+- 운영 서비스는 더 이상 기본 checkout의 `.venv`를 실행하지 않는다. 그 `.venv`는 배포 도구를 실행하고 새 릴리스 환경의 Python을 정한다. AGENTS.md의 의존성 규칙을 이 구조에 맞게 고쳤다.
 
 ## 알려진 제약
 
