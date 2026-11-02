@@ -44,7 +44,7 @@ system_update.py는 릴리스와 환경 파일이 있는지만 확인하며 릴�
 ```bash
 git fetch origin --tags
 git switch main
-git merge --ff-only v0.11.0
+git merge --ff-only v0.12.0
 .venv/bin/python packaging/deploy.py
 ```
 
@@ -65,6 +65,14 @@ rollback은 릴리스 환경에서 이전 릴리스를 그 환경과 함께 다�
 실제 브라우저 검사는 `--smoke --smoke-origin HTTPS_ORIGIN`을 함께 지정해야 합니다. 생략한 기본 브라우저 스크립트는 합성 데이터 검사입니다.
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
+
+## 0.12.0 업데이트
+
+릴리스마다의 실행 환경과 그 전환 명령을 추가합니다. 앱 코드·런타임 의존성·DB 구조·수집 방식은 0.11.0과 같아 위 **업데이트** 명령을 그대로 사용합니다. 공유 환경에서는 이 명령이 코드만 전환하고 전환 명령을 안내합니다. 옮기지 않아도 0.11.0과 같이 동작하며, 옮기려면 이어서 [릴리스 환경으로 전환](#릴리스-환경으로-전환)의 `--prepare`와 `system_update.py --release`를 실행합니다.
+
+옮긴 뒤에는 0.12.0 이상의 배포기를 사용합니다. 0.11.0 이하의 배포기는 릴리스 환경을 만들지 않으므로, 그 배포기로 전환한 릴리스는 `.venv`가 없어 시작되지 않습니다.
+
+DB·설정 파일 변경이 없어 `packaging/deploy.py --rollback`으로 0.11.0 코드에 되돌릴 수 있습니다. 릴리스 환경에서는 0.11.0 릴리스의 lock으로 그 환경을 먼저 만듭니다. 유닛 이동을 되돌리려면 `system_update.py`가 출력한 백업 폴더의 두 유닛 파일을 `/etc/systemd/system/`에 복사하고 `sudo systemctl daemon-reload`와 `sudo systemctl restart llm-usage.service`를 실행합니다.
 
 ## 0.11.0 업데이트
 
