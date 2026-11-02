@@ -13,25 +13,44 @@ journalctl -u llm-usage.service -u llm-usage-collector.service --since '10 minut
 
 ## 릴리스 실행과 업데이트
 
-다음 최초 전환 명령은 실제 서비스와 릴리스 링크를 변경합니다. 깨끗한 Git main, Node24, 검증된 설정이 필요합니다.
+운영은 커밋마다 내보낸 릴리스(`~/.local/lib/llm-usage/releases/<commit>`)를 `current` 링크로 실행합니다. 배포기는 릴리스마다 그 릴리스의 `uv.lock`으로 전용 가상환경 `releases/<commit>/.venv`를 만듭니다. uv 0.12.23으로 개발 그룹 없이 동기화하고 바이트코드를 미리 컴파일합니다. 앱 코드는 설치하지 않고 유닛이 실행하는 릴리스 폴더에서 읽습니다.
+
+두 유닛이 `current/.venv`의 gunicorn과 python을 실행하는 **릴리스 환경**에서는 런타임 의존성이 바뀐 버전도 같은 배포기로 전환하고, `--rollback`이 코드와 의존성을 함께 되돌립니다. 기본 checkout의 `.venv`는 배포 도구와 개발에만 쓰입니다. 유닛이 아직 기본 checkout의 `.venv`를 실행하면 **공유 환경**입니다. 어느 쪽인지는 실행 파일 경로로 확인합니다.
 
 ```bash
+systemctl show -p ExecStart llm-usage.service llm-usage-collector.service
+```
+
+### 릴리스 환경으로 전환
+
+다음 명령은 실제 서비스와 릴리스 링크를 변경합니다. 깨끗한 Git main, Node24, uv 0.12.23의 `uvx`, 검증된 설정이 필요합니다.
+
+이미 릴리스로 실행 중인 공유 환경 설치는 코드와 환경을 따로 바꿉니다. 먼저 아래 **업데이트**의 일반 배포로 대상 커밋을 실행합니다. 이 단계는 코드만 바꾸며 배포기의 health·heartbeat 확인과 자동 rollback을 거칩니다. 그다음 실행 중인 그 릴리스에 환경을 만들고 유닛을 옮깁니다.
+
+```bash
+.venv/bin/python packaging/deploy.py
 .venv/bin/python packaging/deploy.py --prepare
 sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release
 ```
 
---prepare는 읽기 전용 명령이 아닙니다. 코드를 `~/.local/lib/llm-usage/releases/<commit>`으로 내보내고 current 링크로 선택합니다.
-아래 기존 배포기는 코드만 전환합니다. uv 의존성 변경을 포함한 업데이트에는 사용하지 마세요. 운영 `.venv`에 `uv sync`를 실행하면 실행 중인 패키지가 바뀝니다. 임시 환경의 사전 검증과 실제 배포 시 코드·환경의 동시 전환이 필요합니다.
+처음 릴리스로 실행하는 checkout 설치는 첫 줄 없이 `--prepare`와 `system_update.py --release`만 실행합니다.
 
-아래 명령은 운영 환경의 런타임 의존성이 대상 v0.11.0의 lock과 이미 일치하는 경우에만 사용합니다. 앱은 프로젝트 버전 표기를 읽지 않으므로 표기만 다를 때도 쓸 수 있습니다. 0.7.x에서 갱신한다면 아래의 **0.8.0 업데이트**에서 의존성과 DB 복구 조건을 먼저 확인하세요.
+--prepare는 읽기 전용 명령이 아닙니다. HEAD를 `releases/<commit>`으로 내보내고 그 환경을 만든 뒤, 그 환경으로 단위 테스트를 실행하고 current 링크로 선택합니다. 서비스는 재시작하지 않으므로 다음 재시작부터 그 코드가 실행됩니다. 릴리스 모드에서 실행 중인 릴리스와 다른 커밋을 준비하면 경고합니다.
+
+system_update.py는 릴리스와 환경 파일이 있는지만 확인하며 릴리스 코드를 root로 실행하지 않습니다. 두 유닛의 실행 위치와 실행 파일을 바꾸고 재시작한 뒤, 웹 health와 15초 동안 같은 수집기 프로세스가 실행 중인지 확인합니다. 확인에 실패하면 이번에 바꾼 유닛 파일을 되돌리고 다시 시작합니다. 위 순서에서는 이 단계가 환경만 바꾸므로 되돌린 상태가 전환 직전과 같습니다. 바꾸기 전 파일은 `/var/backups/llm-usage/<time>-<random>/`에 남습니다. 이 확인은 새 수집 heartbeat까지 기다리지 않으므로 전환 뒤 진단 화면이나 heartbeat를 확인합니다.
+
+### 업데이트
 
 ```bash
 git fetch origin --tags
 git switch main
 git merge --ff-only v0.11.0
-.venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python packaging/deploy.py
 ```
+
+릴리스 환경에서는 배포기가 대상 릴리스의 환경을 만들고 그 환경으로 검사한 뒤 전환·재시작합니다. lock의 패키지가 uv 캐시에 없으면 네트워크가 필요하며, 환경을 만들지 못하면 서비스와 current 링크를 바꾸지 않고 멈춥니다.
+
+공유 환경에서는 이 명령이 기본 checkout의 `.venv`로 검사하고 코드만 전환한 뒤 위의 전환 명령을 안내합니다. 이때는 운영 환경의 런타임 의존성이 대상 버전의 lock과 이미 일치하는 경우에만 사용합니다. 앱은 프로젝트 버전 표기를 읽지 않으므로 표기만 다를 때도 쓸 수 있습니다. 0.7.x에서 갱신한다면 아래의 **0.8.0 업데이트**에서 의존성과 DB 복구 조건을 먼저 확인하세요.
 
 개인 수정 때문에 fast-forward가 안 되면 강제로 초기화하지 않습니다. 변경을 보존하고 통합·검증하세요.
 
@@ -42,7 +61,7 @@ git merge --ff-only v0.11.0
 ```
 
 현재 배포기는 배포 직전 DB 백업을 만들지 않습니다. 수집기의 기존 주기 백업은 별도 기능이며 배포 직전 상태를 보장하지 않습니다. 복구가 필요한 작업 전에는 기존 백업의 시각과 복구 범위를 확인하세요.
-현재 rollback은 코드 전환이며 **공유 .venv의 의존성과 DB까지 복구하지 않습니다.** 의존성 갱신 전에 버전·복구 방법을 확보하세요.
+rollback은 릴리스 환경에서 이전 릴리스를 그 환경과 함께 다시 선택합니다. 릴리스 환경이 생기기 전에 만든 릴리스는 그 릴리스의 lock으로 환경을 먼저 만듭니다. **DB는 복구하지 않습니다.** 공유 환경의 rollback은 코드만 되돌리므로 의존성 갱신 전에 버전·복구 방법을 확보하세요.
 실제 브라우저 검사는 `--smoke --smoke-origin HTTPS_ORIGIN`을 함께 지정해야 합니다. 생략한 기본 브라우저 스크립트는 합성 데이터 검사입니다.
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 복귀 재시작 결과도 health·heartbeat로 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
@@ -170,6 +189,8 @@ uv sync --locked --no-dev
 
 ## uv 전환의 배포 준비
 
+이 절과 위 버전별 절의 서비스 정지·`uv sync` 절차는 공유 환경의 의존성 변경 방법입니다. 릴리스 환경으로 전환한 설치는 위 **업데이트** 경로를 사용합니다.
+
 개발 checkout과 `.venv`, 기존 `releases/<commit>` 및 `current` 운영 구조를 유지합니다. 별도 후보·Git 백업 디렉터리나 새 systemd drop-in을 만들지 않습니다. 소스와 의존성 변경은 Git 이력으로 관리합니다. 기존 운영 데이터 백업 기능은 소스 코드 버전 관리와 별개입니다.
 
 배포 전에는 임시 checkout의 독립 환경에서 `uv sync --locked`와 테스트를 수행합니다. PR/main의 Python 3.11/3.14 × 고정/최소 Gunicorn, 실제 TCP/Unix transport, 브라우저, Git 설치 및 wheel 검사가 모두 성공해야 합니다. 검증에 사용한 임시 checkout과 가상환경은 종료 후 삭제합니다.
@@ -203,5 +224,6 @@ local.json 백업에도 알림 비밀이 들어갑니다. 기본 config의 서�
 | 단가 불일치 | DB 폴더 pricing이 config 폴더보다 우선함 |
 | 오프라인 통계 잔존 | 로컬 사본 삭제·사이트 데이터 삭제 |
 | 프로젝트 분리 | 이전 경로형 이름과 신규 이름·예산 매핑 |
+| 릴리스 환경 생성 실패 | `uvx`의 uv 0.12.23, 네트워크나 uv 캐시, 기본 checkout `.venv`의 Python |
 
 실제 계정 수신·운영 적용은 합성 테스트와 별도로 확인하고 기록합니다.

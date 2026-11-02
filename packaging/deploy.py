@@ -6,17 +6,22 @@
   .venv/bin/python packaging/deploy.py --rollback  return to the previous release
 
 1. refuses a dirty tree or a branch other than main
-2. runs the unit tests, the JavaScript syntax check and the Node unit tests
-3. release mode (units run from ~/.local/lib/llm-usage/current, see
+2. release mode (units run from ~/.local/lib/llm-usage/current, see
    packaging/system_update.py --release): exports HEAD with `git archive` into
-   releases/<commit> and atomically repoints `current`, so editing this checkout
-   never changes what is running. Without release mode the units run this
-   checkout directly (the original install).
-4. restarts the web unit (PartOf carries it to the collector) through the
+   releases/<commit> and gives it its own environment, releases/<commit>/.venv,
+   synced by uv from that release's uv.lock without the dev group. Without release
+   mode the units run this checkout directly (the original install).
+3. runs the unit tests (in release mode with the release's environment), the
+   JavaScript syntax check and the Node unit tests
+4. release mode: atomically repoints `current`, so editing this checkout never
+   changes what is running. Units started from current/.venv switch their
+   dependencies with the code; units still started from this checkout's .venv
+   switch only the code, and the deployer says how to move them.
+5. restarts the web unit (PartOf carries it to the collector) through the
    password-less rule from packaging/system_update.py; a failed restart puts the
    previous release back. Without the rule it reloads only the web workers
    (checkout mode) or stops (release mode).
-5. waits for /healthz, a collector restarted after step 4 and its next heartbeat;
+6. waits for /healthz, a collector restarted after step 5 and its next heartbeat;
    in release mode a failed check rolls back to the previous release
 """
 import argparse
@@ -42,6 +47,10 @@ import urllib.parse
 PROJECT=Path(__file__).resolve().parents[1]
 RELEASE_ROOT=Path.home()/'.local/lib/llm-usage'
 KEEP=5
+# Release environments are synced by the uv version CI uses; a release's environment is
+# complete once its marker file exists (packaging/system_update.py checks the same name).
+UV_VERSION='0.12.23'
+ENVIRONMENT_MARKER='ENVIRONMENT'
 
 
 def run(*args,check=True,capture=False):
@@ -130,6 +139,46 @@ def build_release(commit,root=RELEASE_ROOT):
     return target
 
 
+def base_python():
+    """The interpreter this checkout's .venv was made from; release environments use it too."""
+    return os.path.realpath(PROJECT/'.venv/bin/python')
+
+
+def prepare_environment(release,python=None,uv=('uvx','--from',f'uv=={UV_VERSION}','uv')):
+    """Give a release its own .venv from its own uv.lock (no dev group), once.
+
+    A virtual environment records absolute paths, so it is made in the release's final
+    folder. The services cannot write bytecode there (ProtectHome=read-only), so it is
+    compiled now. The app itself is imported from the release folder, as the units run
+    it, and is not installed. An environment with its marker is never synced again: it
+    may be the one running. Without the marker a partial one is removed and remade."""
+    if (release/ENVIRONMENT_MARKER).is_file():return
+    python=python or base_python();target=release/'.venv'
+    shutil.rmtree(target,ignore_errors=True)
+    env={k:v for k,v in os.environ.items() if k not in ('VIRTUAL_ENV','PYTHONPATH','PYTHONHOME')}
+    env.update(UV_PROJECT_ENVIRONMENT=str(target),UV_PYTHON_DOWNLOADS='never')
+    try:
+        subprocess.run([*uv,'sync','--locked','--no-dev','--no-install-project','--compile-bytecode','--python',python],
+                       cwd=release,env=env,check=True)
+        # Also proves the services' two programs start: -I keeps the release folder off sys.path.
+        version=subprocess.run([str(target/'bin/python'),'-I','-c','import sys,flask,gunicorn;print(sys.version.split()[0])'],
+                               cwd='/',check=True,text=True,stdout=subprocess.PIPE).stdout.strip()
+        if not (target/'bin/gunicorn').is_file():raise RuntimeError('gunicorn 실행 파일 없음')
+    except (OSError,RuntimeError,subprocess.CalledProcessError):
+        shutil.rmtree(target,ignore_errors=True);raise
+    marker=release/(ENVIRONMENT_MARKER+'.new')
+    marker.write_text(f'uv {UV_VERSION}\npython {python} {version}\n')
+    os.replace(marker,release/ENVIRONMENT_MARKER)
+
+
+def environment(release):
+    """prepare_environment for the deployer: a failure stops before any service change."""
+    try:prepare_environment(release)
+    except (OSError,RuntimeError,subprocess.CalledProcessError) as exc:
+        sys.exit(f'릴리스 {release.name[:12]}의 실행 환경을 만들지 못했습니다({exc}). uv {UV_VERSION}(uvx)와 '
+                 f'{base_python()}, 네트워크 또는 uv 캐시를 확인하세요. 서비스와 current 링크는 바꾸지 않았습니다.')
+
+
 def current_release(root=RELEASE_ROOT):
     link=root/'current'
     return Path(os.readlink(link)) if link.is_symlink() else None
@@ -167,6 +216,18 @@ def release_mode(root=RELEASE_ROOT):
     return unit('llm-usage.service','WorkingDirectory')==str(root/'current')
 
 
+def unit_program(name):
+    """The program a unit starts, from `systemctl show -p ExecStart` (`{ path=... ; argv[]=... }`)."""
+    found=re.search(r'\bpath=(\S+)',unit(name,'ExecStart'))
+    return found[1] if found else ''
+
+
+def release_environment_mode(root=RELEASE_ROOT):
+    """Both units start their program from current/.venv (packaging/system_update.py --release)."""
+    prefix=str(root/'current/.venv/bin')+'/'
+    return all(unit_program(name).startswith(prefix) for name in ('llm-usage.service','llm-usage-collector.service'))
+
+
 # ---- deployment -----------------------------------------------------------
 
 def restart(before_web,before_collector,database):
@@ -177,13 +238,20 @@ def restart(before_web,before_collector,database):
     return None if wait(lambda:heartbeat(database)>mark,180) else 'no heartbeat'
 
 
-def checks():
+def tree_checks():
     if run('git','rev-parse','--abbrev-ref','HEAD',capture=True).stdout.strip()!='main':sys.exit('main 체크아웃에서만 배포합니다.')
     if run('git','status','--porcelain',capture=True).stdout.strip():sys.exit('커밋되지 않은 변경이 있습니다.')
-    python=str(PROJECT/'.venv/bin/python')
+
+
+def code_checks(python):
+    """The JavaScript checks and the unit tests, run from this clean checkout with `python`."""
     for script in sorted((PROJECT/'llm_usage/web').glob('*.js')):run('node','--check',str(script))
     run('node','--test','tests/js/*.test.mjs')
     run(python,'-m','unittest','discover','-s','tests','-q')
+
+
+def checks():
+    tree_checks();code_checks(str(PROJECT/'.venv/bin/python'))
 
 
 def deploy_release(target,rollback_to,label,database):
@@ -241,15 +309,39 @@ def main():
         if not release_mode():sys.exit('릴리스 모드가 아니어서 되돌릴 이전 릴리스가 없습니다.')
         previous=previous_release()
         if previous is None:sys.exit('이전 릴리스가 없습니다.')
+        # Units started from current/.venv need one in the release they return to; a release
+        # from before release environments gets it from its own lock.
+        if release_environment_mode():environment(previous)
         deploy_release(previous,current_release(),'롤백',database)
         return
-    checks()
-    head=run('git','rev-parse','HEAD',capture=True).stdout.strip()
-    if args.prepare:
-        switch(build_release(head));print(f'릴리스 준비: {head[:12]} → {RELEASE_ROOT/"current"}');return
-    if release_mode():
-        deploy_release(build_release(head),current_release(),head[:7],database)
+    if args.prepare or release_mode():
+        tree_checks()
+        head=run('git','rev-parse','HEAD',capture=True).stdout.strip()
+        # Units started from current/.venv run each release in its own environment, and
+        # --prepare readies one for system_update.py --release. Release-mode units still
+        # started from this checkout's .venv are checked with it and switch only the code.
+        moved=release_environment_mode();target=build_release(head)
+        if moved or args.prepare:
+            environment(target);code_checks(str(target/'.venv/bin/python'))
+        else:code_checks(python)
+        current=current_release()
+        if args.prepare:
+            switch(target);print(f'릴리스 준비: {head[:12]} → {RELEASE_ROOT/"current"}')
+            # Running release-mode units would pick up other code at their next restart, without
+            # the deployer's checks: such an install deploys the commit first (docs/operations.md).
+            if current is not None and current!=target and release_mode():
+                print('경고: 실행 중인 릴리스와 다른 커밋입니다. 서비스는 다음 재시작부터 이 코드를 실행합니다. '
+                      '릴리스로 실행 중인 설치는 이 커밋을 먼저 일반 배포한 뒤 --prepare 하세요.')
+            return
+        if moved and current is not None:environment(current)
+        deploy_release(target,current,head[:7],database)
+        if not moved:
+            print('두 유닛은 아직 이 checkout의 .venv로 실행되어 코드만 바뀌었습니다. 릴리스마다의 환경으로 옮기려면 한 번만: '
+                  '.venv/bin/python packaging/deploy.py --prepare 다음 '
+                  'sudo .venv/bin/python packaging/system_update.py --owner $USER --release')
     else:
+        checks()
+        head=run('git','rev-parse','HEAD',capture=True).stdout.strip()
         before_web,before_collector=started('llm-usage.service'),started('llm-usage-collector.service')
         problem=restart(before_web,before_collector,database)
         if problem=='denied':
