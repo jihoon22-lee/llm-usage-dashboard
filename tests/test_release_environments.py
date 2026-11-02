@@ -37,7 +37,7 @@ Type=simple
 User=owner
 WorkingDirectory={project}
 ExecStart={project}/.venv/bin/gunicorn --no-control-socket --workers 1 --threads 4 --timeout 120 --umask 0077 --bind 127.0.0.1:8766 --bind unix:/run/llm-usage/http.sock llm_usage.webapp:create_app()
-ReadWritePaths=/home/owner/.local/share/llm-usage
+ReadWritePaths=/home/example/.local/share/llm-usage
 [Install]
 WantedBy=multi-user.target
 '''
@@ -94,7 +94,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_units_count_as_moved_only_when_both_start_from_current_venv(self):
         moved=f'{{ path={self.root}/current/.venv/bin/gunicorn ; argv[]={self.root}/current/.venv/bin/gunicorn --bind x ; ignore_errors=no }}'
-        checkout='{ path=/home/owner/projects/llm-usage-dashboard/.venv/bin/python ; argv[]=python -m llm_usage.cli collect }'
+        checkout='{ path=/home/example/projects/llm-usage-dashboard/.venv/bin/python ; argv[]=python -m llm_usage.cli collect }'
         for programs,expected in (((moved,moved),True),((moved,checkout),False),(('',''),False)):
             with self.subTest(expected=expected),patch.object(deploy,'unit',side_effect=lambda name,prop:programs[name.endswith('collector.service')]):
                 self.assertEqual(deploy.release_environment_mode(self.root),expected)
