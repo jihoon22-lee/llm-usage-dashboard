@@ -140,9 +140,16 @@ class DeployFlowTests(unittest.TestCase):
         self.assertIn('sudo .venv/bin/python packaging/system_update.py --owner $USER --release',printed)
 
     def test_prepare_makes_and_checks_the_environment_before_selecting_the_release(self):
-        self.run_main(['--prepare'],release_mode=False,moved=False)
+        printed=self.run_main(['--prepare'],release_mode=False,moved=False)
         self.assertEqual(self.calls,[('tree_checks',),('environment',self.target),('code_checks',str(self.target/'.venv/bin/python')),
                                      ('switch',self.target)])
+        self.assertNotIn('경고',printed)
+
+    def test_prepare_warns_when_running_release_units_would_pick_up_other_code(self):
+        self.assertIn('먼저 일반 배포한 뒤 --prepare',self.run_main(['--prepare'],moved=False))
+        # The documented order: the commit is deployed first, so --prepare only adds its environment.
+        self.current=self.target
+        self.assertNotIn('경고',self.run_main(['--prepare'],moved=False))
 
     def test_rollback_gives_an_older_release_an_environment_only_for_moved_units(self):
         for moved in (True,False):
@@ -219,12 +226,15 @@ class UnitUpdateTests(unittest.TestCase):
         self.assertIn('되돌리고 다시 시작했습니다',str(stopped.exception.code))
         self.assertEqual((self.web.read_text(),self.collector.read_text()),self.originals)
 
-    def test_collector_counts_as_running_only_without_automatic_restarts(self):
-        for shown,expected in (('ActiveState=active\nSubState=running\nNRestarts=0\n',True),
-                               ('ActiveState=active\nSubState=running\nNRestarts=1\n',False),
-                               ('ActiveState=activating\nSubState=auto-restart\nNRestarts=0\n',False)):
-            with self.subTest(shown=shown),patch.object(update.time,'sleep'), \
-                    patch.object(update.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=shown)):
+    def test_collector_counts_as_running_only_while_the_same_process_stays_up(self):
+        up='ActiveState=active\nSubState=running\nMainPID={}\n'
+        for first,last,expected in ((up.format(41),up.format(41),True),
+                                    (up.format(41),up.format(57),False),  # restarted by Restart=always in between
+                                    (up.format(41),'ActiveState=activating\nSubState=auto-restart\nMainPID=0\n',False),
+                                    (up.format(0),up.format(0),False)):
+            replies=iter([first,last])
+            with self.subTest(first=first,last=last),patch.object(update.time,'sleep'), \
+                    patch.object(update.subprocess,'run',side_effect=lambda *a,**k:subprocess.CompletedProcess([],0,stdout=next(replies))):
                 self.assertEqual(update.collector_running(),expected)
 
 

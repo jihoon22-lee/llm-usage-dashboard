@@ -25,17 +25,18 @@
   - 두 유닛이 `current/.venv`에서 실행되는지 확인해 동작을 나눈다.
     - **옮긴 설치:** 새 릴리스 환경으로 단위 테스트를 실행한다. 전환 전에는 실패 시 돌아갈 현재 릴리스에도 환경이 있는지 확인한다.
     - **아직 옮기지 않은 설치:** 이전처럼 checkout `.venv`로 검사하고 코드만 전환한다. 끝에 한 번만 실행할 전환 명령을 안내한다.
-  - `--prepare`는 항상 환경을 만들고 그 환경으로 검사한다.
+  - `--prepare`는 항상 환경을 만들고 그 환경으로 검사한다. 릴리스 모드에서 실행 중인 릴리스와 다른 커밋을 준비하면 경고한다. 서비스가 다음 재시작에 배포기의 확인 없이 그 코드를 실행하게 되기 때문이다.
   - `--rollback`은 옮긴 설치에서 이전 릴리스에 환경이 없으면, 그 릴리스의 lock으로 먼저 만든다.
 - `packaging/system_update.py --release`
   - 유닛을 바꾸기 전에 릴리스·표식·`bin/python`·`bin/gunicorn` 파일이 있는지만 확인한다. root로 릴리스 코드를 실행하거나 import하지 않는다.
   - 웹 `ExecStart`는 실행 파일만 `current/.venv/bin/gunicorn`으로 바꾸고 인자를 그대로 둔다. gunicorn 실행이 아니면 바꾸지 않고 멈춘다.
   - 수집기는 `current/.venv/bin/python -m llm_usage.cli collect`로 실행한다. `--checkout`은 두 유닛을 checkout `.venv`로 되돌린다.
-  - 재시작 뒤 웹 health를 확인하고, 15초 뒤에도 수집기가 자동 재시작 없이 실행 중인지 확인한다. 실패하면 이번에 바꾼 유닛 파일을 되돌리고 다시 시작한다.
+  - 재시작 뒤 웹 health를 확인하고, 15초 동안 같은 수집기 프로세스가 실행 중인지 확인한다. 자동 재시작 횟수가 재시작 때 초기화되는지에 기대지 않는다. 실패하면 이번에 바꾼 유닛 파일을 되돌리고 다시 시작한다.
   - 백업 폴더 이름은 같은 초에 실행해도 겹치지 않게 `<시각>-<무작위>`로 만든다.
 - 문서: `docs/operations.md`에 다음을 적었다.
   - 릴리스 환경과 공유 환경을 확인하는 방법
   - 전환 명령과 업데이트·롤백의 차이
+  - 이미 릴리스로 실행 중인 설치의 전환 순서: 일반 배포로 코드를 먼저 바꾸고, 실행 중인 릴리스에 환경을 만든 뒤 유닛만 옮긴다. 그래야 코드 변경은 배포기의 heartbeat 확인과 자동 rollback을 거치고, 유닛 단계의 복원이 전환 직전 상태로 완전히 돌아간다.
   - 환경 생성 실패의 확인 항목
 - 테스트: `tests/test_release_environments.py`를 추가했다.
   - 가짜 uv로 동기화 인자·환경 변수·표식, 한 번만 실행, 실패·중단 뒤 정리를 확인한다.
@@ -45,7 +46,7 @@
 
 ## 검증
 
-- 독립 worktree와 uv 0.12.23의 잠긴 환경에서 Python 단위 테스트 587개를 통과했다.
+- 독립 worktree와 uv 0.12.23의 잠긴 환경에서 Python 단위 테스트 588개를 통과했다.
 - 임시 루트에서 배포기의 실제 함수로 릴리스 환경을 만들었다. 서비스와 운영 릴리스 폴더는 사용하지 않았다.
   - 현재 main 릴리스는 0.5초에 만들어졌다. `flask 3.1.3`, `gunicorn 26.2.0`, Python 3.14.4가 들어갔다.
   - Playwright·pip-audit·앱 패키지는 들어가지 않았다. `.pyc`는 200개였다.
@@ -54,7 +55,7 @@
 - 그 릴리스 폴더에서 다음을 실행했다.
   - 환경의 gunicorn: 합성 설정으로 `/healthz` 200을 받았다.
   - 운영 유닛과 같은 형태의 수집기 1회: 임시 HOME, Codex CLI 없는 PATH에서 종료 코드 0이었고 수집기 상태와 수집원 14개를 임시 DB에 기록했다.
-- 배포기와 같은 방식으로 실행했다. 릴리스 환경의 python으로, 깨끗한 checkout에서 단위 테스트 587개가 모두 통과했다. gunicorn을 직접 띄우는 전송 테스트도 포함된다.
+- 배포기와 같은 방식으로 실행했다. 릴리스 환경의 python으로, 깨끗한 checkout에서 단위 테스트 588개가 모두 통과했다. gunicorn을 직접 띄우는 전송 테스트도 포함된다.
 - 실제 운영 유닛 파일의 사본에 `--release` 변환을 적용했다. 두 유닛에서 `ExecStart` 한 줄씩만 바뀌었고 gunicorn 인자는 그대로였다.
 - uv 캐시와 `~/.local/lib/llm-usage`는 같은 ext4에 있다. 같은 파일시스템의 worktree 환경 파일은 링크 수가 4였다. 운영 릴리스 환경도 캐시 파일을 하드링크로 공유한다. 임시 루트(tmpfs)에서는 복사로 대신했다.
 - 검증 전후로 운영 `current`·`history`·`releases`가 같았고 두 서비스는 정상이었다.
@@ -64,16 +65,17 @@
 - 아직 적용하지 않았다. 운영은 그대로 `5caab17` 코드를 공유 `.venv`로 실행한다.
 - 적용하려면 사용자가 운영 배포를 요청해야 하고, 한 번은 대화형 sudo가 필요하다. sudoers 규칙은 재시작만 허용한다.
   1. 기본 checkout의 main을 이 변경이 들어간 커밋이나 릴리스 태그로 fast-forward한다.
-  2. `.venv/bin/python packaging/deploy.py --prepare`로 환경을 만들고 검사한다.
-  3. `sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release`로 유닛을 옮긴다.
+  2. `.venv/bin/python packaging/deploy.py`로 코드만 일반 배포한다. 배포기의 health·heartbeat 확인과 자동 rollback을 거친다.
+  3. `.venv/bin/python packaging/deploy.py --prepare`로 실행 중인 그 릴리스에 환경을 만들고 검사한다.
+  4. `sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release`로 유닛만 옮긴다. 실패하면 유닛이 복원되어 3단계 직후 상태로 돌아간다.
 - 적용 뒤에는 두 프로세스의 실행 파일·작업 폴더, health, 새 heartbeat, 실제 인증 화면을 확인한다. 그다음 AGENTS.md의 운영 `.venv` 규칙을 실제 구조에 맞게 고친다.
 
 ## 알려진 제약
 
 - 릴리스 환경의 Python은 기본 checkout `.venv`의 원래 Python을 따른다. Python을 바꾸려면 checkout `.venv`를 새 Python으로 만든 뒤 배포한다. 이전 릴리스는 자기 환경을 유지한다.
 - 새 lock의 패키지가 uv 캐시에 없으면 환경을 만들 때 네트워크가 필요하다.
-- 실행 중인 프로세스의 site-packages 경로는 `current`를 거친다. 그래서 링크 전환과 재시작 사이의 몇 초 동안 지연 import가 새 릴리스의 패키지를 읽을 수 있다. 배포기는 전환 직후 바로 재시작한다.
-- rollback은 DB를 복구하지 않는다. system_update.py의 자동 복원은 유닛 파일만 대상으로 하며 sudoers는 되돌리지 않는다.
+- 웹은 gunicorn 실행 파일의 shebang이 실제 `releases/<commit>` 경로를 가리켜 프로세스마다 자기 릴리스 환경에 고정된다. 수집기는 `current/.venv/bin/python`으로 시작해 site-packages 경로가 `current`를 거친다. 그래서 링크 전환과 재시작 사이 몇 초 동안의 지연 import만 새 릴리스의 패키지를 읽을 수 있다. 배포기는 전환 직후 바로 재시작한다.
+- rollback은 DB를 복구하지 않는다. system_update.py의 자동 복원은 유닛 파일만 대상으로 하며 sudoers는 되돌리지 않는다. 그 확인은 새 수집 heartbeat까지 기다리지 않는다.
 
 ## 함께 처리한 README 화면
 

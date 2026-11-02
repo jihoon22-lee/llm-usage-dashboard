@@ -95,13 +95,18 @@ def healthy(seconds=60):
     return False
 
 
-def collector_running(settle=15):
-    """Still running after `settle` seconds: Restart=always would otherwise hide a crash loop."""
-    time.sleep(settle)
-    shown=subprocess.run(['systemctl','show','llm-usage-collector.service','-p','ActiveState','-p','SubState','-p','NRestarts'],
+def collector_state():
+    shown=subprocess.run(['systemctl','show','llm-usage-collector.service','-p','ActiveState','-p','SubState','-p','MainPID'],
                          check=True,text=True,stdout=subprocess.PIPE).stdout
-    state=dict(line.split('=',1) for line in shown.splitlines() if '=' in line)
-    return state.get('ActiveState')=='active' and state.get('SubState')=='running' and state.get('NRestarts')=='0'
+    return dict(line.split('=',1) for line in shown.splitlines() if '=' in line)
+
+
+def collector_running(settle=15):
+    """The same collector process runs for `settle` seconds: Restart=always would otherwise
+    hide a crash loop behind an active unit."""
+    first=collector_state();time.sleep(settle);last=collector_state()
+    return (all(state.get('ActiveState')=='active' and state.get('SubState')=='running' for state in (first,last))
+            and first.get('MainPID')==last.get('MainPID')!='0')
 
 
 def restart_and_check():

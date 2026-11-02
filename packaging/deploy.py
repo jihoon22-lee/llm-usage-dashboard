@@ -324,13 +324,20 @@ def main():
         if moved or args.prepare:
             environment(target);code_checks(str(target/'.venv/bin/python'))
         else:code_checks(python)
-        if args.prepare:
-            switch(target);print(f'릴리스 준비: {head[:12]} → {RELEASE_ROOT/"current"}');return
         current=current_release()
+        if args.prepare:
+            switch(target);print(f'릴리스 준비: {head[:12]} → {RELEASE_ROOT/"current"}')
+            # Running release-mode units would pick up other code at their next restart, without
+            # the deployer's checks: such an install deploys the commit first (docs/operations.md).
+            if current is not None and current!=target and release_mode():
+                print('경고: 실행 중인 릴리스와 다른 커밋입니다. 서비스는 다음 재시작부터 이 코드를 실행합니다. '
+                      '릴리스로 실행 중인 설치는 이 커밋을 먼저 일반 배포한 뒤 --prepare 하세요.')
+            return
         if moved and current is not None:environment(current)
         deploy_release(target,current,head[:7],database)
         if not moved:
-            print('두 유닛은 아직 이 checkout의 .venv로 실행되어 코드만 바뀌었습니다. 릴리스마다의 환경으로 옮기려면 한 번만 실행: '
+            print('두 유닛은 아직 이 checkout의 .venv로 실행되어 코드만 바뀌었습니다. 릴리스마다의 환경으로 옮기려면 한 번만: '
+                  '.venv/bin/python packaging/deploy.py --prepare 다음 '
                   'sudo .venv/bin/python packaging/system_update.py --owner $USER --release')
     else:
         checks()

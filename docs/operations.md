@@ -23,16 +23,21 @@ systemctl show -p ExecStart llm-usage.service llm-usage-collector.service
 
 ### 릴리스 환경으로 전환
 
-다음 명령은 실제 서비스와 릴리스 링크를 변경합니다. 깨끗한 Git main, Node24, uv 0.12.23의 `uvx`, 검증된 설정이 필요합니다. 처음 릴리스로 실행하는 설치와 공유 환경의 릴리스 설치 모두 같은 두 명령을 사용합니다.
+다음 명령은 실제 서비스와 릴리스 링크를 변경합니다. 깨끗한 Git main, Node24, uv 0.12.23의 `uvx`, 검증된 설정이 필요합니다.
+
+이미 릴리스로 실행 중인 공유 환경 설치는 코드와 환경을 따로 바꿉니다. 먼저 아래 **업데이트**의 일반 배포로 대상 커밋을 실행합니다. 이 단계는 코드만 바꾸며 배포기의 health·heartbeat 확인과 자동 rollback을 거칩니다. 그다음 실행 중인 그 릴리스에 환경을 만들고 유닛을 옮깁니다.
 
 ```bash
+.venv/bin/python packaging/deploy.py
 .venv/bin/python packaging/deploy.py --prepare
 sudo .venv/bin/python packaging/system_update.py --owner "$USER" --release
 ```
 
---prepare는 읽기 전용 명령이 아닙니다. HEAD를 `releases/<commit>`으로 내보내고 그 환경을 만든 뒤, 그 환경으로 단위 테스트를 실행하고 current 링크로 선택합니다. 서비스는 재시작하지 않습니다.
+처음 릴리스로 실행하는 checkout 설치는 첫 줄 없이 `--prepare`와 `system_update.py --release`만 실행합니다.
 
-system_update.py는 릴리스와 환경 파일이 있는지만 확인하며 릴리스 코드를 root로 실행하지 않습니다. 두 유닛의 실행 위치와 실행 파일을 바꾸고 재시작한 뒤, 웹 health와 15초 뒤에도 수집기가 자동 재시작 없이 실행 중인지 확인합니다. 확인에 실패하면 이번에 바꾼 유닛 파일을 되돌리고 다시 시작합니다. 바꾸기 전 파일은 `/var/backups/llm-usage/<time>-<random>/`에 남습니다.
+--prepare는 읽기 전용 명령이 아닙니다. HEAD를 `releases/<commit>`으로 내보내고 그 환경을 만든 뒤, 그 환경으로 단위 테스트를 실행하고 current 링크로 선택합니다. 서비스는 재시작하지 않으므로 다음 재시작부터 그 코드가 실행됩니다. 릴리스 모드에서 실행 중인 릴리스와 다른 커밋을 준비하면 경고합니다.
+
+system_update.py는 릴리스와 환경 파일이 있는지만 확인하며 릴리스 코드를 root로 실행하지 않습니다. 두 유닛의 실행 위치와 실행 파일을 바꾸고 재시작한 뒤, 웹 health와 15초 동안 같은 수집기 프로세스가 실행 중인지 확인합니다. 확인에 실패하면 이번에 바꾼 유닛 파일을 되돌리고 다시 시작합니다. 위 순서에서는 이 단계가 환경만 바꾸므로 되돌린 상태가 전환 직전과 같습니다. 바꾸기 전 파일은 `/var/backups/llm-usage/<time>-<random>/`에 남습니다. 이 확인은 새 수집 heartbeat까지 기다리지 않으므로 전환 뒤 진단 화면이나 heartbeat를 확인합니다.
 
 ### 업데이트
 
