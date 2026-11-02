@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='llm-resource-browser-') as root:
             assert page.locator('#limits').bounding_box()['y'] < page.locator('#resource-panel').bounding_box()['y']
             tabs=page.locator('#tabs [role=tab]').evaluate_all('ts=>ts.map(t=>t.id)')
             assert tabs==['tab-overview','tab-quota','tab-usage','tab-reports'],tabs
-            if width==1440:page.screenshot(path=str(output/'dashboard.png'))
+            if width==1440:page.screenshot(path=str(output/'quota.png'))
             expect(page.locator('#quota-codex .bucket-decrease').first).to_be_visible()
             single=page.evaluate('''()=>{
               const host=document.createElement('div');

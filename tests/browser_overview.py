@@ -61,7 +61,8 @@ def preview(page, offline=False):
             route.fulfill(json=limits)
         elif path == '/api/overview':
             data = fixture_json(route.request)
-            data['facts'] = FACTS+data['facts']
+            # The synthetic records all fall at one time of day; the listed peak hours stand in for theirs.
+            data['facts'] = FACTS+[fact for fact in data['facts'] if fact['kind'] != 'peak_hours']
             data['month'] = MONTH
             route.fulfill(json=data)
         else:
@@ -93,6 +94,13 @@ with sync_playwright() as p:
     expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     expect(page.locator('#view-quota')).to_be_hidden()
     assert 'view=' not in page.url, page.url
+    # The README image (docs/assets/dashboard.png): the default view as it first opens, down to
+    # the end of the chart and facts row, before any row takes focus or the chart a pointer.
+    expect(page.locator('#ov-chart .ov-hit')).to_have_count(30)
+    expect(page.locator('#ov-facts .ov-fact').nth(5)).to_be_visible()
+    bottom = page.evaluate("Math.ceil(Math.max(...[...document.querySelector('#ov-chart-title').closest('.ov-grid').children]"
+                           ".map(panel=>panel.getBoundingClientRect().bottom))+scrollY)")
+    page.screenshot(path=str(output/'dashboard.png'), full_page=True, clip={'x': 0, 'y': 0, 'width': 1440, 'height': bottom+16})
 
     # What can be used now: a held window leads with 사용 불가 and the window that holds it;
     # each Antigravity model family has its own row.
