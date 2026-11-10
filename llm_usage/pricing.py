@@ -12,41 +12,84 @@ import re
 # Provider-internal or unidentified models with no public token price: costs stay
 # unestimated by design, so they are not reported as missing a rate.
 NO_PUBLIC_PRICE=frozenset({'compactor','codex-auto-review','gpt-reserve','unknown'})
+# One rate per model: where a provider charges more for long prompts or peak hours, the
+# base (lowest) tier is listed, because stored usage does not say which tier a request
+# fell in. Costs for such requests are therefore a lower bound.
+_OPUS=dict(input=5,cached=0.5,output=25,cache_write=6.25,cache_write_1h=10)
+_OPUS_LEGACY=dict(input=15,cached=1.5,output=75,cache_write=18.75,cache_write_1h=30)
+_SONNET=dict(input=3,cached=0.3,output=15,cache_write=3.75,cache_write_1h=6)
+_FABLE=dict(input=10,cached=0.25,output=50,cache_write=12.5,cache_write_1h=20)
+_GEMINI_FLASH=dict(input=0.75,cached=0.075,output=3.75)
+_MUSE_SPARK=dict(input=1.25,cached=0.15,output=4.25)
+_MUSE_CONTRIBUTOR=dict(input=0.1,cached=0.002,output=0.2)
 BUILTIN={
-    'claude-opus-4':dict(input=15,cached=1.5,output=75,cache_write=18.75,cache_write_1h=30),
-    'claude-sonnet-4':dict(input=3,cached=0.3,output=15,cache_write=3.75,cache_write_1h=6),
-    'claude-haiku-4':dict(input=1,cached=0.1,output=5,cache_write=1.25,cache_write_1h=2),
+    # Anthropic, verified 2026-11-10. https://platform.claude.com/docs/en/about-claude/pricing
+    # Cache reads are 0.025x input on Fable 5.1/5.2 and 0.05x on Opus/Sonnet 5.5.
+    'claude-fable-5-2':dict(input=8,cached=0.2,output=40,cache_write=10,cache_write_1h=16),
+    'claude-fable-5-1':_FABLE,
+    'claude-fable-5':{**_FABLE,'cached':1},
     'claude-opus-5-5':dict(input=4,cached=0.2,output=20,cache_write=5,cache_write_1h=8),
+    'claude-opus-5':_OPUS,
+    'claude-opus-4-8':_OPUS,
+    'claude-opus-4-7':_OPUS,
+    'claude-opus-4-6':_OPUS,
+    'claude-opus-4-5':_OPUS,
+    'claude-opus-4-1':_OPUS_LEGACY,
+    'claude-opus-4':_OPUS_LEGACY,
+    'claude-sonnet-5-5':dict(input=2,cached=0.1,output=10,cache_write=2.5,cache_write_1h=4),
+    # The $3/$15 increase announced for 2026-09-01 was cancelled; $2/$10 is the standard price.
+    'claude-sonnet-5':dict(input=2,cached=0.2,output=10,cache_write=2.5,cache_write_1h=4),
+    'claude-sonnet-4-6':_SONNET,
+    'claude-sonnet-4-5':_SONNET,
+    'claude-sonnet-4':_SONNET,
+    # Prompts up to 100K tokens; longer prompts cost 5x ($0.50/$2.50).
+    'claude-haiku-5-5':dict(input=0.1,cached=0.01,output=0.5,cache_write=0.125,cache_write_1h=0.2),
+    'claude-haiku-4-5':dict(input=1,cached=0.1,output=5,cache_write=1.25,cache_write_1h=2),
+    # OpenAI, standard tier up to 272K input, verified 2026-11-10 (cache_write is the
+    # 30-minute rate). https://developers.openai.com/api/docs/pricing
     'gpt-5':dict(input=1.25,cached=0.125,output=10,cache_write=1.25),
     'gpt-5-mini':dict(input=0.25,cached=0.025,output=2,cache_write=0.25),
+    'gpt-6-astra':dict(input=10,cached=1,output=50,cache_write=12.5),
     'gpt-6-sol':dict(input=2,cached=0.2,output=10,cache_write=2.5),
-    # Standard <=272K input, verified 2026-10-03; 6.1 halves Sol's cache-read rate.
-    # https://developers.openai.com/api/docs/models/gpt-6.1-sol
+    # 6.1 halves the cache-read rate of its 6.0 counterpart.
     'gpt-6.1-sol':dict(input=2,cached=0.1,output=10,cache_write=2.5),
+    'gpt-6.1-terra':dict(input=1,cached=0.05,output=5,cache_write=1.25),
     'gpt-6-luna':dict(input=0.1,cached=0.01,output=0.5,cache_write=0.125),
-    'gemini-2.5-pro':dict(input=1.25,cached=0.31,output=10),
-    'gemini-2.5-flash':dict(input=0.3,cached=0.075,output=2.5),
     # Dated history (KST 'since' dates; each applies until the next entry).
     # Only past, announced changes are encoded — promo end dates shift, so
     # future rates are never scheduled here and must be updated manually.
-    # GPT-5.6 GA'd 2026-06-26; Sol promo cut 2026-08-22 ("at least through"
-    # 2026-11-21 per OpenAI, extendable).
+    # GPT-5.6 GA'd 2026-06-26; Sol promo cut 2026-08-22 (listed as available
+    # until 2026-11-30 when checked on 2026-11-10; it has been extended before).
     'gpt-5.6-sol':[dict(since='2026-06-26',input=5,cached=0.5,output=30,cache_write=6.25),
                    dict(since='2026-08-22',input=4,cached=0.4,output=20,cache_write=5)],
     'gpt-5.6-terra':[dict(since='2026-06-26',input=2.5,cached=0.25,output=15,cache_write=3.125),
                      dict(since='2026-07-30',input=2,cached=0.2,output=12,cache_write=2.5)],
     'gpt-5.6-luna':[dict(since='2026-06-26',input=1,cached=0.1,output=6,cache_write=1.25),
                     dict(since='2026-07-30',input=0.2,cached=0.02,output=1.2,cache_write=0.25)],
-    # Gemini 3.x Flash introductory rates (announced to end 2026-12-31 but
-    # left unscheduled — update manually when Google confirms the new rates).
-    'gemini-3.6-flash':dict(input=0.75,cached=0.075,output=3.75),
-    'gemini-3.7-flash':dict(input=0.75,cached=0.075,output=3.75),
-    'gemini-3.8-flash':dict(input=0.75,cached=0.075,output=3.75),
+    # Google, paid standard tier, verified 2026-11-10. https://aistudio.google.com/docs/pricing
+    # Pro models list the tier up to 200K prompt tokens.
+    'gemini-2.5-pro':dict(input=1.25,cached=0.125,output=10),
+    'gemini-2.5-flash':dict(input=0.3,cached=0.03,output=2.5),
+    'gemini-3.1-pro':dict(input=2,cached=0.2,output=12),
+    # Introductory rates. Announced to double on 2026-12-01 (4 Argon) and 2027-01-01
+    # (3.x Flash); left unscheduled — update manually once the new rates apply.
+    'gemini-4-argon':dict(input=2,cached=0.1,output=10),
+    'gemini-3.6-flash':_GEMINI_FLASH,
+    'gemini-3.7-flash':_GEMINI_FLASH,
+    'gemini-3.8-flash':_GEMINI_FLASH,
+    # Meta Muse Spark as listed by OpenCode, verified 2026-11-10. The contributor
+    # endpoint is cheaper because its traffic may be used for training.
+    # https://opencode.ai/docs/zen/ https://opencode.ai/docs/go/
+    'muse-spark-1.2':_MUSE_SPARK,
+    'muse-spark-1.3':_MUSE_SPARK,
+    'muse-spark-1.2-contributor':_MUSE_CONTRIBUTOR,
+    'muse-spark-1.3-contributor':_MUSE_CONTRIBUTOR,
     # deepseek-v4-flash is the retired V4 API alias; observed events predate
     # the V4.1-Flash handover so the original V4 rates apply.
     'deepseek-v4-flash':dict(input=0.14,cached=0.0028,output=0.28),
+    # Off-peak rate; peak hours cost 2x. https://api-docs.deepseek.com/quick_start/pricing
+    'deepseek-v4.1-flash':dict(input=0.15,cached=0.003,output=0.6),
 }
-
 
 def _layer_paths(settings):
     paths=[Path(settings.get('pricing_file') or Path.home()/'.config/llm-usage/pricing.json')]
