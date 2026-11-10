@@ -277,6 +277,18 @@ def estimate(values,rates):
             +unspecified*default+five*rates.get('cache_write_5m',default)+hour*rates.get('cache_write_1h',default))/1e6
 
 
+COST_PARTS=('uncached_input','cached_input','output','cache_creation')
+
+
+def estimate_parts(values,rates):
+    """estimate() split by token type; the parts add up to the estimate."""
+    read=values.get('uncached_input',0)*rates['input']/1e6
+    cached=values.get('cached_input',0)*rates.get('cached',rates['input'])/1e6
+    output=values.get('output',0)*rates['output']/1e6
+    return dict(uncached_input=read,cached_input=cached,output=output,
+                cache_creation=max(0.0,estimate(values,rates)-read-cached-output))
+
+
 def cache_estimated_tokens(values,rates):
     """Claude writes priced by a fallback because their TTL or hourly rate is unknown."""
     return values.get('cache_creation_unknown',0)+(values.get('cache_creation_1h',0) if 'cache_write_1h' not in rates else 0)

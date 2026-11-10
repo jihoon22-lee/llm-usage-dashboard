@@ -12,13 +12,17 @@ from .reconciliation import RESIDUAL, held, residual, supplements
 from .store import KST, stamp
 
 TOP = 5
-FACTS = 6
+FACTS = 7
 # A day or a 3-hour block is only worth naming when it stands out this much.
 PEAK_DAY_RATIO = 1.5
 PEAK_HOURS_SHARE = 25.0
 SERVICE_CHANGE_PCT = 25.0
 # A service below this share of the week is too small for its change to matter.
 SERVICE_SHARE_FLOOR = 10.0
+# A model is worth naming when its share of the estimated cost is this large and this far
+# above its share of the tokens.
+COST_SHARE_FLOOR = 20.0
+COST_SHARE_GAP = 15.0
 
 
 def _day(moment):
@@ -49,40 +53,72 @@ def _period(usage, now):
                 prior=_prior(usage), points=_timeline(usage, now))
 
 
-def _projects(store, start, end):
-    """Tokens per project in [start, end), as the usage tab counts a `project:` scope: the
-    records plus the server totals wholly inside the range. The account residual is no project."""
-    totals = {}
+def _projects(store, start, end, pricing=None):
+    """Tokens and estimated cost per project in [start, end). Tokens are counted as the usage
+    tab counts a `project:` scope: the records plus the server totals wholly inside the range.
+    The cost covers the records only (a server total has no token types to price) and is None
+    for a project with no priced record. The account residual is no project."""
+    from .pricing import estimate, rate_for
+    totals, costs = {}, {}
     with store.connect() as c:
         c.execute('BEGIN')
-        for name, tokens in c.execute("SELECT COALESCE(project,'미분류'),SUM(uncached_input+cached_input+output+cache_creation) FROM "
-                                      + store.table + ' WHERE ts>=? AND ts<? GROUP BY 1', (start, end)):
-            totals[name] = totals.get(name, 0) + (tokens or 0)
+        for r in c.execute("SELECT COALESCE(project,'미분류') AS name,model,date(ts,'unixepoch','+9 hours') AS day,"
+                           'SUM(uncached_input) AS uncached_input,SUM(cached_input) AS cached_input,SUM(output) AS output,'
+                           'SUM(cache_creation) AS cache_creation,SUM(cache_creation_5m) AS cache_creation_5m,'
+                           'SUM(cache_creation_1h) AS cache_creation_1h FROM ' + store.table
+                           + ' WHERE ts>=? AND ts<? GROUP BY 1,2,3', (start, end)):
+            row = dict(r)
+            totals[row['name']] = totals.get(row['name'], 0) + token_total(row)
+            rate = rate_for(row['model'], pricing, row['day']) if pricing else None
+            if rate:
+                costs[row['name']] = costs.get(row['name'], 0.0) + estimate(row, rate)
         for e in supplements(c)[0]:
             if residual(e) or not (start <= e['start'] and e['end'] <= end):
                 continue
             name = e['project'] or '미분류'
             totals[name] = totals.get(name, 0) + e['tokens']
-    return totals
+    return totals, costs
 
 
-def _ranked(totals, denominator):
+def _ranked(totals, denominator, costs=None, cost_total=None):
+    """The top entries by tokens, each with its estimated cost and share of the period's cost
+    where it has one."""
     top = sorted(((k, v) for k, v in totals.items() if v > 0), key=lambda kv: (-kv[1], kv[0]))[:TOP]
-    return [dict(name=k, tokens=v, share=v / denominator * 100 if denominator else None) for k, v in top]
+    ranked = []
+    for name, tokens in top:
+        cost = (costs or {}).get(name)
+        ranked.append(dict(name=name, tokens=tokens, share=tokens / denominator * 100 if denominator else None, cost=cost,
+                           cost_share=cost / cost_total * 100 if cost is not None and cost_total else None))
+    return ranked
 
 
 def _models(usage):
-    """Models over every service, so a row equals the usage tab's `model:` scope."""
-    totals, routes = {}, {}
+    """Models over every service, so a row equals the usage tab's `model:` scope. A model's
+    cost is the sum over the services that priced it."""
+    totals, routes, costs = {}, {}, {}
     for row in usage['rows']:
         if row['model'] == RESIDUAL:
             continue
         tokens = token_total(row)
         totals[row['model']] = totals.get(row['model'], 0) + tokens
+        if row.get('est_cost') is not None:
+            costs[row['model']] = costs.get(row['model'], 0.0) + row['est_cost']
         # The service that carried most of the model's use names its color.
         if tokens >= routes.get(row['model'], ('', -1))[1]:
             routes[row['model']] = (row['route'], tokens)
-    return totals, {model: route for model, (route, _) in routes.items()}
+    return totals, {model: route for model, (route, _) in routes.items()}, costs
+
+
+def _cost_facts(models, costs, tokens, cost_total):
+    """The model whose share of the estimated cost most exceeds its share of the tokens."""
+    if not tokens or not cost_total:
+        return []
+    gaps = [(costs[name] / cost_total * 100, total / tokens * 100, name) for name, total in models.items() if costs.get(name)]
+    gaps = [g for g in gaps if g[0] >= COST_SHARE_FLOOR and g[0] - g[1] >= COST_SHARE_GAP]
+    if not gaps:
+        return []
+    cost_share, token_share, name = max(gaps, key=lambda g: g[0] - g[1])
+    return [dict(kind='cost_share', model=name, cost_share=cost_share, token_share=token_share, cost=costs[name])]
 
 
 def _recent(usage, now):
@@ -195,14 +231,17 @@ def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, name
         today = store.usage(period='today', granularity='hour', **span)
         week = store.usage(period='custom', start=_day(monday), end=_day(monday + timedelta(days=6)), granularity='day', **span)
         last30 = store.usage(period='30d', granularity='day', **span)
-        projects = _projects(store, stamp(last30['start']), stamp(last30['end_exclusive']))
+        projects, project_costs = _projects(store, stamp(last30['start']), stamp(last30['end_exclusive']), pricing)
     recent, per_day = _recent(last30, now)
-    models, model_routes = _models(last30)
+    models, model_routes, model_costs = _models(last30)
+    cost_total = (last30.get('cost') or {}).get('period')
+    recent['cost'] = cost_total
     month = _month(store)
     report = (reports(store, 1) or [None])[0]
-    facts = week_facts(report) + _subscription_facts(subscriptions, last30, month) + _usage_facts(recent, per_day, last30.get('heatmap'))
+    facts = (week_facts(report) + _cost_facts(models, model_costs, recent['tokens'], cost_total)
+             + _subscription_facts(subscriptions, last30, month) + _usage_facts(recent, per_day, last30.get('heatmap')))
     return dict(generated=now, collected_at=last30.get('collected_at'),
                 today=_period(today, now), week=_period(week, now), recent=recent,
-                models=[{**m, 'route': model_routes.get(m['name'])} for m in _ranked(models, recent['tokens'])],
-                projects=_ranked({k: v for k, v in projects.items() if k != RESIDUAL}, recent['tokens']),
+                models=[{**m, 'route': model_routes.get(m['name'])} for m in _ranked(models, recent['tokens'], model_costs, cost_total)],
+                projects=_ranked({k: v for k, v in projects.items() if k != RESIDUAL}, recent['tokens'], project_costs, cost_total),
                 month=month, facts=facts[:FACTS])

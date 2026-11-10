@@ -1189,10 +1189,10 @@ class Store:
         if sections!='core':
             insights=usage_insights(c,a,b,now,period,first,total,rows,buckets,scope_sql,scope_args)
             insights['month']=month
-        cost={'period':None,'lifetime':None,'coverage':None,'lifetime_coverage':None,'cache_savings':None,'cache_estimated_tokens':0}
+        cost={'period':None,'lifetime':None,'coverage':None,'lifetime_coverage':None,'cache_savings':None,'cache_estimated_tokens':0,'by_type':None}
         if pricing:
-            from .pricing import cache_estimated_tokens
-            priced=0;savings=0.0
+            from .pricing import COST_PARTS,cache_estimated_tokens,estimate_parts
+            priced=0;savings=0.0;by_type=dict.fromkeys(COST_PARTS,0.0)
             # Rows are (provider, route, model): a model used through two routes
             # must not show the other route's spend on each row.
             cost_by_row={}
@@ -1205,10 +1205,14 @@ class Store:
                     cost['cache_estimated_tokens']+=cache_estimated_tokens(dict(r),rate)
                     key=(r['provider'],r['route'],r['model'])
                     cost_by_row[key]=cost_by_row.get(key,0)+estimate(dict(r),rate)
+                    for part,value in estimate_parts(dict(r),rate).items():by_type[part]+=value
                     # What the cache reads would have cost as uncached input at the same list rate.
                     savings+=r['cached_input']*(rate['input']-rate.get('cached',rate['input']))/1e6
             for row in rows:row['est_cost']=cost_by_row.get((row['provider'],row['route'],row['model']))
-            if priced:cost['period']=sum(cost_by_row.values());cost['cache_savings']=round(savings,4)
+            if priced:
+                cost['period']=sum(cost_by_row.values());cost['cache_savings']=round(savings,4)
+                # Where the estimate comes from: the token mix and the cost mix differ widely.
+                cost['by_type']={part:round(value,4) for part,value in by_type.items()}
             if token_total(total):cost['coverage']=priced/token_total(total)*100
             if lifetime_priced:
                 cost['lifetime']=lifetime_cost

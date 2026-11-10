@@ -107,7 +107,7 @@ function overviewTiles(o){
 }
 
 // Observed facts only: no forecast, no expected pace and no advice to switch accounts.
-const FACT_KINDS={exhausted:'한도',zero_hours:'한도',service_change:'사용',peak_day:'사용',peak_hours:'사용',idle_subscription:'구독',value_below_price:'구독'};
+const FACT_KINDS={exhausted:'한도',zero_hours:'한도',service_change:'사용',peak_day:'사용',peak_hours:'사용',idle_subscription:'구독',value_below_price:'구독',cost_share:'비용'};
 // A Claude account goes by the name it has on this page now, as in the quota rows above; the
 // plan label stored with an older week or month is only a fallback.
 const accountName=(route,stored)=>accountLabel(route)||stored||undefined;
@@ -123,6 +123,7 @@ function factText(f,withWeek=true){
    // A service's change covers all of its accounts.
    return `${week}${serviceName(f.route)} 사용량 ${ratio>=2?`그 전 주의 ${timesText(ratio)}배`:`그 전 주보다 ${f.change_pct>0?'+':'−'}${Math.abs(f.change_pct).toFixed(0)}%`}`;
   }
+  case 'cost_share':return `${f.model} · 최근 30일 토큰의 ${f.token_share.toFixed(1)}%, 환산 비용의 ${f.cost_share.toFixed(1)}% (${usd(f.cost)})`;
   case 'peak_day':return `최근 30일 중 가장 많이 쓴 날 ${dayLabel(f.day)} · ${compact(f.tokens)} (사용한 날 평균의 ${timesText(f.ratio)}배)`;
   case 'peak_hours':return `사용이 가장 많은 시간대 ${f.start_hour}–${f.end_hour}시 · 최근 30일의 ${f.share.toFixed(0)}%`;
   case 'idle_subscription':return `${serviceShort(f.route)} 최근 30일 ${f.collected?'사용 기록 없음':'수집된 기록 없음'} · 월 ${usd(f.monthly_usd)}`;
@@ -130,7 +131,7 @@ function factText(f,withWeek=true){
  }
  return '';
 }
-const factTarget=f=>f.kind==='peak_day'?`data-day="${esc(f.day)}"`:f.kind==='peak_hours'?'data-drill-period="30d"'
+const factTarget=f=>f.kind==='cost_share'?`data-scope="model:${esc(f.model)}" data-period="30d"`:f.kind==='peak_day'?`data-day="${esc(f.day)}"`:f.kind==='peak_hours'?'data-drill-period="30d"'
  :f.kind==='idle_subscription'?`data-quota-jump="${esc(familyOf(f.route))}"`:f.kind==='value_below_price'?'data-goto="reports" data-anchor="monthly"':'data-goto="reports"';
 function overviewFacts(facts){
  const items=(facts||[]).map(f=>[f,factText(f)]).filter(([,text])=>text);
@@ -172,7 +173,7 @@ function overviewRanks(list,kind){
  return list.map(r=>{
   const name=kind==='model'?esc(r.name)+` <small>${esc(serviceName(r.route))}</small>`:esc(r.name);
   const share=r.share!=null?percent(r.share):'—';
-  return `<div class="rank" data-scope="${kind}:${esc(r.name)}" data-period="30d" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${name}</strong><span>${compact(r.tokens)} <small>${share}</small></span></div>`
+  return `<div class="rank" data-scope="${kind}:${esc(r.name)}" data-period="30d" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${name}</strong><span>${compact(r.tokens)} <small>${share}</small>${r.cost!=null?` <small class="rank-cost" data-tip="공개 단가 환산 · 최근 30일 환산 비용의 ${percent(r.cost_share)}">· ${usd(r.cost)}</small>`:''}</span></div>`
    +`<svg class="rank-bar ov-rank-${kind}" viewBox="0 0 1000 13" preserveAspectRatio="none" aria-hidden="true"><rect width="${(r.tokens/max*1000).toFixed(1)}" height="13"${kind==='model'?` fill="${serviceColor(r.route)}"`:''}/></svg></div>`;
  }).join('');
 }

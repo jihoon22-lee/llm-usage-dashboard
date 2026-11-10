@@ -84,6 +84,43 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(data['models'][0]['route'], 'codex')
         self.assertTrue(all(0 < r['share'] <= 100 for r in data['models']+data['projects']))
 
+    def test_ranks_carry_the_cost_the_usage_tab_shows(self):
+        data = self.build()
+        period = self.store.usage(period='30d', **SPAN)
+        total = period['cost']['period']
+        self.assertAlmostEqual(data['recent']['cost'], total)
+        for row in data['models']:
+            scoped = self.store.usage(period='30d', scope='model:'+row['name'], **SPAN)
+            self.assertAlmostEqual(row['cost'], scoped['cost']['period'], msg=row)
+            self.assertAlmostEqual(row['cost_share'], row['cost']/total*100)
+        self.assertAlmostEqual(sum(r['cost'] for r in data['projects']), total)
+        # The token-type split of the same period adds up to its estimate.
+        self.assertAlmostEqual(sum(period['cost']['by_type'].values()), total, places=3)
+        self.assertEqual(set(period['cost']['by_type']), {'uncached_input', 'cached_input', 'output', 'cache_creation'})
+
+    def test_unpriced_use_has_no_cost_instead_of_zero(self):
+        with self.store.connect() as c:
+            self.store.event(c, 'new', NOW-7200, 'Other', 'codex', 'model-without-rate', dict(uncached_input=50_000_000), project='gamma')
+        data = self.build()
+        row = next(r for r in data['models'] if r['name'] == 'model-without-rate')
+        self.assertIsNone(row['cost']); self.assertIsNone(row['cost_share'])
+        project = next(r for r in data['projects'] if r['name'] == 'gamma')
+        self.assertIsNone(project['cost'])
+        self.assertIsNone(self.store.usage(period='30d', group='route', sections='core', now=NOW)['cost']['by_type'])
+
+    def test_cost_fact_names_the_model_whose_cost_outweighs_its_tokens(self):
+        # Output-heavy use: few tokens, most of the cost.
+        with self.store.connect() as c:
+            self.store.event(c, 'dear', NOW-7200, 'Anthropic', 'claude-code', 'claude-x', dict(output=400_000), project='beta')
+        data = self.build()
+        fact = next(f for f in data['facts'] if f['kind'] == 'cost_share')
+        self.assertEqual(fact['model'], 'claude-x')
+        self.assertGreaterEqual(fact['cost_share']-fact['token_share'], overview.COST_SHARE_GAP)
+        row = next(r for r in data['models'] if r['name'] == 'claude-x')
+        self.assertAlmostEqual(fact['cost_share'], row['cost_share']); self.assertAlmostEqual(fact['token_share'], row['share'])
+        self.assertEqual(overview._cost_facts({'m': 10}, {}, 10, None), [])
+        self.assertEqual(overview._cost_facts({'a': 50, 'b': 50}, {'a': 5.0, 'b': 5.0}, 100, 10.0), [])
+
     def test_facts_are_observations_without_forecasts(self):
         with self.store.connect() as c:
             self.store.save_state(c, 'report:2026-10-26', dict(

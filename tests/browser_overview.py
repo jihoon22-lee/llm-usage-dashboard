@@ -164,6 +164,21 @@ with sync_playwright() as p:
     expect(page.locator('#scope')).to_have_value('project:'+project['name'])
     page.wait_for_function('()=>lastUsage&&lastUsage.scope===%r' % ('project:'+project['name']))
     assert page.evaluate('total(lastUsage.totals)') == project['tokens']
+    # The drill lands on the same estimate, and the composition panel splits it by token type.
+    assert abs(page.evaluate('lastUsage.cost.period')-project['cost']) < 1e-6
+    mix = page.locator('#composition .cost-mix')
+    expect(mix).to_contain_text('비용 구성')
+    assert mix.locator('.cost-mix-bar rect').count() == page.evaluate('Object.values(lastUsage.cost.by_type).filter(v=>v>0).length')
+    assert abs(page.evaluate("[...document.querySelectorAll('.cost-mix-key b')].reduce((n,b)=>n+parseFloat(b.textContent),0)")-100) < 0.3
+    expect(page.locator('#rows tr td:last-child small').first).to_contain_text('1M당 $')
+    page.go_back(); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
+    # Ranked rows carry their estimate, and the cost fact opens its model over the same 30 days.
+    expect(page.locator('#ov-models .rank-cost').first).to_have_text('· '+page.evaluate('usd(lastOverview.models[0].cost)'))
+    cost_fact = next(f for f in overview['facts'] if f['kind'] == 'cost_share')
+    page.locator('#ov-facts .ov-fact[data-scope]').click()
+    expect(page.locator('#scope')).to_have_value('model:'+cost_fact['model'])
+    page.wait_for_function('()=>lastUsage&&lastUsage.scope===%r' % ('model:'+cost_fact['model']))
+    assert abs(page.evaluate('lastUsage.cost.period')-cost_fact['cost']) < 1e-6
     page.go_back(); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     # The today tile does the same for today.
     page.locator('#ov-tiles .ov-tile').first.click()
