@@ -274,7 +274,7 @@ function renderUsage(data){
  if(costOption.disabled&&$('metric').value==='cost')$('metric').value='tokens';
  $('chart-caption').textContent=`${range||data.start.slice(0,10)+'부터'} · ${fullLabel('group')} · ${metricName()} · ${modeNames[$('cumulative').value]}`;
  $('chart-by-model').hidden=$('group').value==='model';
- chart(data);composition(data);ranking(data);renderInsights(data);renderWhatif();
+ chart(data);composition(data);ranking(data);renderEfforts(data);renderInsights(data);renderWhatif();
  // A refresh may land after a lazy insights fetch; if the new core payload
  // dropped the merged section while a tab that shows it is open, fetch it again.
  if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens')&&!('insights' in data))loadInsights();

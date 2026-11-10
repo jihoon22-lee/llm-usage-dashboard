@@ -22,7 +22,8 @@ from .store import Store, identity, project_label, stamp
 SQL_RECORD_ERRORS = (sqlite3.IntegrityError, sqlite3.ProgrammingError, sqlite3.InterfaceError, sqlite3.DataError)
 RECORD_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OverflowError, *SQL_RECORD_ERRORS)
 
-PARSER_VERSION=3
+# 4 reads the reasoning effort (Codex turn settings, Claude responses) from records read before.
+PARSER_VERSION=4
 
 
 def model_provider(model):
@@ -78,6 +79,8 @@ def parse_line(store,c,route,d,state):
             if not state.get('fork_started') or (stamp(d.get('timestamp')) or state['fork_started'])>=state['fork_started']:
                 state['has_turn_context']=True
                 if p.get('model'):state['model']=p['model']
+                if state.get('session') and store.turn_effort(c,state['session'],stamp(d.get('timestamp')),p.get('effort') or p.get('reasoning_effort')):
+                    state['_effort']=True
         elif typ=='token_usage_record':
             ts=stamp(d.get('timestamp'))
             if not state.get('session') or not ts:return
@@ -173,6 +176,7 @@ def collect_file(store,path,route):
                 store.rebuild_codex(c,state.pop('_dirty'),
                                     dict(session=state.get('session'),project=state.get('project'),
                                          agent_kind=state.get('agent_kind')))
+            if state.pop('_effort',None):store.apply_turn_efforts(c,state['session'])
             end=f.tell();f.seek(max(0,end-TAIL_BYTES));tail=hashlib.sha256(f.read(end-max(0,end-TAIL_BYTES))).hexdigest()
             store.save_state(c,key,dict(parser_version=PARSER_VERSION,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
             return store.error_count(c,key)

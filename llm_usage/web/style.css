@@ -944,3 +944,8 @@ body:has(dialog[open]){overflow:hidden}
  .ov-tile .stat-value{font-size:var(--fs-xl)}
  .ov-ranks{grid-template-columns:minmax(0,1fr)}
 }
+/* Use by reasoning effort: one block of rows per model. */
+.effort-table td:nth-child(2),.effort-table th:nth-child(2){text-align:left}
+.effort-table tbody tr:not(.effort-first) td{border-top:0}
+.effort-table tbody tr.effort-first td{border-top:1px solid var(--border)}
+.effort-table tbody td{border-bottom:0;padding-top:9px;padding-bottom:9px}

@@ -63,8 +63,10 @@ def ingest_message(store,c,route,data,*,session=None,project=None,account=None,s
     if not isinstance(iterations,list):raise ValueError('invalid usage iterations')
     advisors=[(i,part) for i,part in enumerate(iterations) if isinstance(part,dict) and part.get('type')=='advisor_message']
     values=components(usage);detail_status(store,c,key,values)
+    # Claude Code writes the request's effort and speed beside the response.
     store.event(c,key,ts,model_provider(message.get('model','')),route,message.get('model'),values,
-                session=sid,project=project,agent_kind=kind,account=account,allow_empty=bool(advisors))
+                session=sid,project=project,agent_kind=kind,account=account,allow_empty=bool(advisors),
+                effort=data.get('effort'),speed=usage.get('speed'))
     aliases(c,route,key,message['id'],data.get('requestId'),data.get('request_id'),data.get('uuid'))
     if route=='claude-code' and sid:link(c,'claude:'+sid,key,source,finality)
     # A historical parent may already have an account even when this replay does not.
