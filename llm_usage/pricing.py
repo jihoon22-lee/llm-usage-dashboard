@@ -13,9 +13,10 @@ import re
 # Provider-internal or unidentified models with no public token price: costs stay
 # unestimated by design, so they are not reported as missing a rate.
 NO_PUBLIC_PRICE=frozenset({'compactor','codex-auto-review','gpt-reserve','unknown'})
-# One rate per model: where a provider charges more for long prompts or peak hours, the
-# base (lowest) tier is listed, because stored usage does not say which tier a request
-# fell in. Costs for such requests are therefore a lower bound.
+# One rate per model: where a provider's API charges more for long prompts or peak hours,
+# the base tier is listed. The use recorded here runs on subscriptions, which carry no
+# long-context surcharge (Codex states so and lists one credit rate per model; Anthropic's
+# over-100K Haiku prices are API prices). Sent with an API key, such requests would cost more.
 _OPUS=dict(input=5,cached=0.5,output=25,cache_write=6.25,cache_write_1h=10)
 _OPUS_LEGACY=dict(input=15,cached=1.5,output=75,cache_write=18.75,cache_write_1h=30)
 _SONNET=dict(input=3,cached=0.3,output=15,cache_write=3.75,cache_write_1h=6)

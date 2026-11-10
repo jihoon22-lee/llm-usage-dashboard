@@ -171,6 +171,9 @@ with sync_playwright() as p:
     assert mix.locator('.cost-mix-bar rect').count() == page.evaluate('Object.values(lastUsage.cost.by_type).filter(v=>v>0).length')
     assert abs(page.evaluate("[...document.querySelectorAll('.cost-mix-key b')].reduce((n,b)=>n+parseFloat(b.textContent),0)")-100) < 0.3
     expect(page.locator('#rows tr td:last-child small').first).to_contain_text('1M당 $')
+    # The fixture's records state no reasoning effort: the panel says so instead of listing zeros.
+    expect(page.locator('#efforts')).to_contain_text('추론 수준이 기록된 요청이 없습니다')
+    assert page.locator('#group option[value=effort]').count() == 1
     page.go_back(); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     # Ranked rows carry their estimate, and the cost fact opens its model over the same 30 days.
     expect(page.locator('#ov-models .rank-cost').first).to_have_text('· '+page.evaluate('usd(lastOverview.models[0].cost)'))

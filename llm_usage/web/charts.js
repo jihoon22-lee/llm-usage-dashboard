@@ -242,3 +242,25 @@ function ranking(data){
   return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.route)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
  applyGeometry($('ranking'));
 }
+
+// Use by reasoning effort. A token costs the same at any level; the table shows what a
+// request uses at each, per model, with the levels in their order.
+const EFFORT_ORDER=['none','minimal','low','medium','high','xhigh','max'];
+function renderEfforts(data){
+ const box=$('efforts'),all=(data.efforts||[]).filter(e=>e.requests>0);
+ box.closest('[data-panel]').hidden=data.period==='1h';
+ if(!all.some(e=>e.effort)){box.innerHTML='<p class="hint">선택 기간에 추론 수준이 기록된 요청이 없습니다.</p>';return;}
+ // Models in order of their use; a model with one unrecorded level only says nothing here.
+ const groups=new Map();
+ for(const e of all){const key=e.route+'\u0000'+e.model;(groups.get(key)||groups.set(key,[]).get(key)).push(e);}
+ const rank=e=>e.effort==null?EFFORT_ORDER.length:EFFORT_ORDER.indexOf(e.effort)<0?EFFORT_ORDER.length-1:EFFORT_ORDER.indexOf(e.effort);
+ const shown=[...groups.values()].filter(rows=>rows.some(e=>e.effort)).sort((a,b)=>b.reduce((n,e)=>n+e.tokens,0)-a.reduce((n,e)=>n+e.tokens,0));
+ const per=(value,e)=>value==null?'—':compact(value/e.requests);
+ // A request often costs under a cent: keep three decimals there instead of rounding to $0.
+ const perRequest=v=>v<0.1?'$'+v.toFixed(3):usd(v);
+ const cells=e=>`<td>${e.effort?esc(e.effort):'<span class="na-text">미기록</span>'}</td><td>${tableNumber(e.requests)}</td><td>${per(e.tokens,e)}</td><td>${per(e.output,e)}</td>`
+  +`<td>${e.reasoning_observed&&e.output?percent(e.reasoning/e.output*100):'<span class="na-text">미제공</span>'}</td><td>${e.cost==null?'—':perRequest(e.cost/e.requests)}</td>`;
+ box.innerHTML=`<div class="table-wrap"><table class="effort-table"><thead><tr><th scope="col">모델</th><th scope="col">추론 수준</th><th scope="col">요청</th><th scope="col">요청당 토큰</th><th scope="col">요청당 출력</th><th scope="col">출력 중 추론</th><th scope="col">요청당 비용</th></tr></thead><tbody>`
+  +shown.map(rows=>rows.sort((a,b)=>rank(a)-rank(b)).map((e,i)=>`<tr${i?'':' class="effort-first"'}>${i?'<td></td>':`<td rowspan="1">${esc(e.model)}<small>${esc(routeNames[e.route]||e.route)}</small></td>`}${cells(e)}</tr>`).join('')).join('')
+  +'</tbody></table></div>';
+}

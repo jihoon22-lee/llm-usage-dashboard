@@ -28,6 +28,21 @@ STATUS_LINE_SOURCES = {'claude-code', 'antigravity', 'antigravity-tokens'}
 # a few days scaled to a whole month are noise. Before it there is no estimate at all.
 PROJECTION_FROM_DAY = 7
 ONE_TIME_SOURCES = {'session-backfill'}
+# Reasoning effort as the tools record it. Per-token prices do not depend on it; what it
+# changes is how many tokens a request uses, so it is kept as a dimension of the usage.
+EFFORT_LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
+_EFFORT_SUFFIX = re.compile(r'(?: \((%s)\)|-(%s))$' % ('|'.join(EFFORT_LEVELS[1:]), '|'.join(EFFORT_LEVELS[1:])))
+
+
+def clean_label(value):
+    """A short lower-case word (an effort level, a speed tier) or None."""
+    return value.lower() if isinstance(value, str) and re.fullmatch(r'[A-Za-z]{2,12}', value) else None
+
+
+def model_effort(model):
+    """The effort a model name carries ('swe-2 (max)', 'claude-sonnet-5-5-high'), if any."""
+    found = _EFFORT_SUFFIX.search(model or '')
+    return (found.group(1) or found.group(2)) if found else None
 # Source detail written while a subscription is marked ended in the settings.
 USER_ENDED_DETAIL = '설정에서 구독 종료로 표시 · 한도 조회 중지'
 SUPPORTED_ROUTES = ('codex','claude-code','antigravity','opencode-go','devin')
@@ -200,13 +215,21 @@ class Store:
                 INSERT OR IGNORE INTO account_token_buckets
                   SELECT route,day,tokens,checked,'' FROM account_tokens;
             """)
-            for column in ('session','project','agent_kind','account','parent_id'):
+            added_text=set()
+            for column in ('session','project','agent_kind','account','parent_id','effort','speed'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
                     # The web and the collector start together after a deploy; the
                     # other process may add the column between the check and here.
-                    try:c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT')
+                    try:c.execute(f'ALTER TABLE events ADD COLUMN {column} TEXT');added_text.add(column)
                     except sqlite3.OperationalError as exc:
                         if 'duplicate column' not in str(exc):raise
+            # Codex states the effort per turn, not per request: the turns' settings are kept
+            # here and each request takes the latest one at or before its time.
+            c.execute('CREATE TABLE IF NOT EXISTS session_effort (session TEXT NOT NULL, ts REAL NOT NULL, effort TEXT NOT NULL, PRIMARY KEY(session,ts))')
+            if 'effort' in added_text:
+                # Routes that name the effort in the model (Devin, Antigravity) have it already.
+                for (model,) in c.execute('SELECT DISTINCT model FROM events').fetchall():
+                    if model_effort(model):c.execute('UPDATE events SET effort=? WHERE model=?',(model_effort(model),model))
             added_details=set()
             for column in (*DETAILS,'requests'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
@@ -247,23 +270,23 @@ class Store:
 
         ts is the hour start (KST is a whole-hour offset, so hours, days, weeks and
         months group exactly as on events); advisor subcalls carry no API request."""
-        key=",".join(['ts','provider','route','model',"IFNULL(project,char(0))","IFNULL(agent_kind,char(0))","IFNULL(account,char(0))"])
+        key=",".join(['ts','provider','route','model',"IFNULL(project,char(0))","IFNULL(agent_kind,char(0))","IFNULL(account,char(0))","IFNULL(effort,char(0))"])
         match=' AND '.join(['ts=CAST(OLD.ts/3600 AS INTEGER)*3600','provider=OLD.provider','route=OLD.route','model=OLD.model',
-                            'project IS OLD.project','agent_kind IS OLD.agent_kind','account IS OLD.account'])
+                            'project IS OLD.project','agent_kind IS OLD.agent_kind','account IS OLD.account','effort IS OLD.effort'])
         add=f"""INSERT INTO usage_hourly VALUES (CAST(NEW.ts/3600 AS INTEGER)*3600,NEW.provider,NEW.route,NEW.model,NEW.project,NEW.agent_kind,
-              {','.join('NEW.'+k for k in METRICS)},NEW.requests,NEW.account) ON CONFLICT({key}) DO UPDATE SET
+              {','.join('NEW.'+k for k in METRICS)},NEW.requests,NEW.account,NEW.effort) ON CONFLICT({key}) DO UPDATE SET
               {','.join(f'{k}={k}+excluded.{k}' for k in METRICS)},requests=requests+excluded.requests;"""
         remove=f"""UPDATE usage_hourly SET {','.join(f'{k}={k}-OLD.{k}' for k in METRICS)},requests=requests-OLD.requests WHERE {match};
               DELETE FROM usage_hourly WHERE {match} AND requests+advisor_calls<=0;"""
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')  # the web and the collector may start together
-            # Version 3 adds detail coverage and separate advisor subcall counts.
-            # An older release finds a different
+            # Version 4 adds the reasoning effort to the key (3 added detail coverage and
+            # advisor subcall counts). An older release finds a different
             # version and rebuilds its own table; this one does the same in return.
-            if self.state(c,'rollup_version')==3:return
+            if self.state(c,'rollup_version')==4:return
             for statement in ['DROP TABLE IF EXISTS usage_hourly',
                 f"""CREATE TABLE usage_hourly (ts INTEGER NOT NULL, provider TEXT NOT NULL, route TEXT NOT NULL, model TEXT NOT NULL,
-                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in METRICS)}, requests INTEGER NOT NULL, account TEXT)""",
+                    project TEXT, agent_kind TEXT, {','.join(k+' INTEGER NOT NULL' for k in METRICS)}, requests INTEGER NOT NULL, account TEXT, effort TEXT)""",
                 f'CREATE UNIQUE INDEX usage_hourly_key ON usage_hourly({key})',
                 'CREATE INDEX usage_hourly_route_ts ON usage_hourly(route,ts)',
                 'DROP TRIGGER IF EXISTS events_rollup_insert','DROP TRIGGER IF EXISTS events_rollup_delete','DROP TRIGGER IF EXISTS events_rollup_update',
@@ -272,10 +295,10 @@ class Store:
                 f'CREATE TRIGGER events_rollup_update AFTER UPDATE ON events BEGIN {remove} {add} END',
                 self.ROLLUP_INSERT]:
                 c.execute(statement)
-            self.save_state(c,'rollup_version',3)
+            self.save_state(c,'rollup_version',4)
 
     ROLLUP_SELECT=('SELECT CAST(ts/3600 AS INTEGER)*3600,provider,route,model,project,agent_kind,'
-                   +','.join(f'SUM({k})' for k in METRICS)+',SUM(requests),account FROM events GROUP BY 1,2,3,4,5,6,account')
+                   +','.join(f'SUM({k})' for k in METRICS)+',SUM(requests),account,effort FROM events GROUP BY 1,2,3,4,5,6,account,effort')
     ROLLUP_INSERT='INSERT INTO usage_hourly '+ROLLUP_SELECT
 
     def rebuild_rollup(self):
@@ -310,10 +333,14 @@ class Store:
             c.close()
 
     def event(self, c, key, ts, provider, route, model, values, session=None, project=None, agent_kind=None, account=None,
-              parent_id=None, requests=1, allow_empty=False):
+              parent_id=None, requests=1, allow_empty=False, effort=None, speed=None):
         # Streaming snapshots are monotonic maxima per globally stable request ID.
         numbers = [max(0, int(values.get(k) or 0)) for k in TOKENS]
         if not any(numbers) and not allow_empty:return
+        effort=clean_label(effort) or model_effort(model)
+        if effort is None and session and route.startswith('codex'):
+            turn=c.execute('SELECT effort FROM session_effort WHERE session=? AND ts<=? ORDER BY ts DESC LIMIT 1',(session,ts)).fetchone()
+            effort=turn[0] if turn else None
         details=[max(0,int(values.get(k) or 0)) for k in DETAILS]
         # TTL splits are one coherent observation, never independent maxima.
         # Conflicting splits of the same total stay unknown until a newer total.
@@ -328,7 +355,7 @@ class Store:
         detail_updates+=',reasoning_observed=CASE WHEN excluded.output>events.output THEN excluded.reasoning_observed WHEN excluded.output=events.output THEN MAX(events.reasoning_observed,excluded.reasoning_observed) ELSE events.reasoning_observed END'
         detail_updates+=',advisor_calls=MAX(events.advisor_calls,excluded.advisor_calls),requests=excluded.requests'
         # A copy read without an account (local replay, telemetry) keeps a resolved one.
-        columns=('id','ts','provider','route','model',*METRICS,'session','project','agent_kind','account','parent_id','requests')
+        columns=('id','ts','provider','route','model',*METRICS,'session','project','agent_kind','account','parent_id','requests','effort','speed')
         c.execute('INSERT INTO events ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+') ON CONFLICT(id) DO UPDATE SET '
                   + ','.join(f'{k}=MAX(events.{k},excluded.{k})' for k in TOKENS)
                   + ','+detail_updates
@@ -336,8 +363,22 @@ class Store:
                   + ',session=COALESCE(excluded.session,events.session)'
                   + ',project=COALESCE(excluded.project,events.project)'
                   + ',agent_kind=COALESCE(excluded.agent_kind,events.agent_kind)'
-                  + ',account=COALESCE(excluded.account,events.account),parent_id=COALESCE(excluded.parent_id,events.parent_id)',
-                  (key, ts, provider, route, model or 'unknown', *numbers,*details,session,project,agent_kind,account,parent_id,requests))
+                  + ',account=COALESCE(excluded.account,events.account),parent_id=COALESCE(excluded.parent_id,events.parent_id)'
+                  + ',effort=COALESCE(excluded.effort,events.effort),speed=COALESCE(excluded.speed,events.speed)',
+                  (key, ts, provider, route, model or 'unknown', *numbers,*details,session,project,agent_kind,account,parent_id,requests,
+                   effort,clean_label(speed)))
+
+    def turn_effort(self,c,session,ts,effort):
+        """Record the effort a Codex turn was set to. True when it is new."""
+        effort=clean_label(effort)
+        if not effort or not session or not ts:return False
+        return bool(c.execute('INSERT OR IGNORE INTO session_effort VALUES (?,?,?)',(session,ts,effort)).rowcount)
+
+    def apply_turn_efforts(self,c,session):
+        """Give the session's stored requests the effort of the turn they ran in."""
+        latest='(SELECT effort FROM session_effort s WHERE s.session=events.session AND s.ts<=events.ts ORDER BY s.ts DESC LIMIT 1)'
+        changed=c.execute(f"UPDATE events SET effort={latest} WHERE session=? AND route LIKE 'codex%' AND effort IS NOT {latest}",(session,)).rowcount
+        if changed:self.bump_data_version(c)
 
     def codex_point(self,c,session,ts,provider,route,model,usage,last):
         keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
@@ -647,7 +688,8 @@ class Store:
     # Subscription accounts: one per route, Claude Code split by account (pending = original).
     ACCOUNT_SQL="CASE WHEN route='claude-code' THEN COALESCE(account,'claude-code') ELSE route END"
     GROUPS={'provider':'provider','route':'route','model':'model',
-            'project':"COALESCE(project,'미분류')",'agent':"COALESCE(agent_kind,'미분류')",'account':ACCOUNT_SQL}
+            'project':"COALESCE(project,'미분류')",'agent':"COALESCE(agent_kind,'미분류')",'account':ACCOUNT_SQL,
+            'effort':"COALESCE(effort,'미기록')"}
     SCOPE_KINDS={'route':'route','provider':'provider','model':'model',
                  'project':"COALESCE(project,'미분류')",'account':ACCOUNT_SQL}
     COMPARE_SHIFTS={'week':7,'month':28}
@@ -1218,6 +1260,20 @@ class Store:
             if lifetime_priced:
                 cost['lifetime']=lifetime_cost
                 if token_total(lifetime):cost['lifetime_coverage']=lifetime_priced/token_total(lifetime)*100
+        # The same use by reasoning effort. A token costs the same at any effort; what differs
+        # is how many a request uses, so each level reports its volume per request.
+        efforts={}
+        for r in c.execute('SELECT route,model,effort,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
+                           ' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY route,model,effort,day',
+                           (a.timestamp(),b.timestamp(),*scope_args)):
+            row=dict(r);name=_EFFORT_SUFFIX.sub('',row['model'])
+            e=efforts.setdefault((row['route'],name,row['effort']),dict(route=row['route'],model=name,effort=row['effort'],requests=0,
+                                 tokens=0,output=0,reasoning=0,reasoning_observed=0,cost=None))
+            e['requests']+=row['requests'];e['tokens']+=token_total(row)
+            for k in ('output','reasoning','reasoning_observed'):e[k]+=row[k]
+            rate=rate_for(row['model'],pricing,row['day']) if pricing else None
+            if rate:e['cost']=(e['cost'] or 0)+estimate(row,rate)
+        efforts=sorted(efforts.values(),key=lambda e:(-e['tokens'],e['route'],e['model'],e['effort'] or ''))
         subs=[]
         claude_routes=[r[0] for r in c.execute('SELECT route FROM claude_accounts')]
         # A sole identified non-default home still has its own subscription route.
@@ -1286,7 +1342,7 @@ class Store:
                 range_end_exclusive=min(b,finish).isoformat(),partial=begin<a or finish>b))
         return dict(period=period,start=a.isoformat(),end_exclusive=b.isoformat(),timezone='Asia/Seoul',totals=total,lifetime=lifetime,
                     granularity=granularity,heatmap=heatmap,cost=cost,
-                    rows=rows,series=series,labels=labels,first_record=first,insights=insights,
+                    rows=rows,series=series,labels=labels,first_record=first,insights=insights,efforts=efforts,
                     calendar=calendar,subscriptions=subs,claude_split=claude_split,sessions=session_list,sessions_total=sessions_total,sessionless_requests=sessionless,projects=project_list,compare=compare_data,
                     scope=scope,scope_options=scope_options,
                     coverage='로컬·클라우드 요청 기록과 서버 누계를 중복 없이 대조합니다. KST 기준으로 배분 가능한 토큰은 차트에 포함하고, 일자를 확정할 수 없는 계정·세션 누계는 미배분으로 표시합니다. 계정 차이를 dot 사용량으로 단정하지 않습니다. 다른 PC의 사용량은 미수집입니다. Antigravity는 로컬 대화 DB, Devin은 로컬 sessions.db의 요청별 사용량을 집계합니다. 삭제된 기록과 원본 모델명이 없는 요청은 완전히 복구할 수 없습니다. 직접 API 과금은 분석하지 않습니다.',
