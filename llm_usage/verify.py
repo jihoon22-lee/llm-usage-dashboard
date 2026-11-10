@@ -242,10 +242,13 @@ def _devin_db(path):
     except sqlite3.Error:
         src.close()
     tmp = Path(tempfile.mkdtemp(prefix='verify-devin-')); dst = tmp/'sessions.db'
-    shutil.copyfile(path, dst)
-    try: shutil.copyfile(str(path)+'-wal', str(dst)+'-wal')
-    except OSError: pass
-    return sqlite3.connect(dst), tmp
+    try:
+        shutil.copyfile(path, dst)
+        try: shutil.copyfile(str(path)+'-wal', str(dst)+'-wal')
+        except OSError: pass
+        return sqlite3.connect(dst), tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True); raise
 
 
 def _devin_expected(cfg, checkpoints):
