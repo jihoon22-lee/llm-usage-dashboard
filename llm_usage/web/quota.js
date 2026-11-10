@@ -256,6 +256,8 @@ function moveQuota(route,dir){
  const i=order.indexOf(route),j=i+dir;if(i<0||j<0||j>=order.length)return;
  [order[i],order[j]]=[order[j],order[i]];orderStore.set('quota',order);
  if(lastLimits)renderLimits(lastLimits);
+ // The row moved and was drawn again: the same arrow keeps the keyboard focus.
+ [...$('quota-overview').querySelectorAll('[data-move]')].find(b=>b.dataset.move===route&&Number(b.dataset.dir)===dir)?.focus();
 }
 const panelSections=()=>[...document.querySelectorAll('main>[data-view],#usage-tokens')].filter(s=>s.querySelector(':scope>[data-panel]'));
 const panelEls=section=>[...section.querySelectorAll(':scope>[data-panel]')];

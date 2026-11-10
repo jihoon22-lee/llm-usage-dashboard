@@ -232,7 +232,11 @@ def record_consumption(c,account,raw,requested,checked):
           ON CONFLICT(account,thread_id) DO UPDATE SET checked=excluded.checked,data_as_of=excluded.data_as_of,
           status=excluded.status,payload=excluded.payload,previous=excluded.previous,retry_at=excluded.retry_at''',
           (account,sid,checked,as_of,effective,json.dumps(payload),previous,checked+(3600 if has_values(payload) else 21600)))
-    # An omitted requested row is not a successful zero or a fresh unavailable row.
+    # An omitted requested row is not a successful zero or a fresh unavailable row: it stays
+    # pending and is asked for again later, so it cannot hold up the threads behind it.
+    for sid in requested-found:
+        c.execute('''INSERT INTO codex_thread_consumption VALUES (?,?,?,NULL,'pending','{}',NULL,?)
+          ON CONFLICT(account,thread_id) DO UPDATE SET retry_at=excluded.retry_at''',(account,sid,checked,checked+21600))
     return len(found),len(requested-found)
 
 

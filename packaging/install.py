@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install only service units and the dedicated Serve port. No app dependencies on WRG."""
+import re
 import argparse
 import json
 import os
@@ -47,6 +48,10 @@ def main():
         with socket.socket() as probe:probe.bind(('127.0.0.1',8766))
     try:prepare_data_directory(data_dir,owner)
     except ValueError as exc:p.error(str(exc))
+    existing=UNITS/'llm-usage.service'
+    if existing.exists() and re.search(r'^WorkingDirectory=.*/\.local/lib/llm-usage/current$',existing.read_text(),re.M):
+        sys.exit('이 설치는 릴리스 환경(~/.local/lib/llm-usage/current)으로 실행 중입니다. 설치기를 다시 실행하면 유닛이 이 checkout을 '
+                 '가리키게 되므로 중단합니다. 업데이트는 packaging/deploy.py, 유닛 변경은 packaging/system_update.py를 사용하세요.')
     backup=BACKUPS/time.strftime('%Y%m%d-%H%M%S')
     backup.mkdir(parents=True,mode=0o700)
     (backup/'tailscale-serve.json').write_text(json.dumps(serve))

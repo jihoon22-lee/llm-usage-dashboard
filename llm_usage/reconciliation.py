@@ -295,6 +295,9 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         for offset in range(0,len(missing),500):
             data['sessions'].extend(Store.session_rows(c,a,b,pricing,scope,missing[offset:offset+500]).values())
     accepted=[];unallocated=[];overlapping=[]
+    # Per subscription: what the records alone gave, what the accepted supplements add, and
+    # whether a supplement crossing the period edge leaves the rest unknown.
+    recorded={s['route']:s.get('period_tokens') for s in data.get('subscriptions') or []};supplemented={};crossing=set()
     for e in entries:
         if e['end']<=a or e['start']>=b:continue
         public={**e,'start':datetime.fromtimestamp(e['start'],KST).isoformat(),
@@ -306,9 +309,9 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         sub=next((s for s in data.get('subscriptions') or [] if s['route']==(e.get('account') or e['route'])),None)
         if not (a<=e['start'] and e['end']<=b):
             overlapping.append(public)
-            if sub is not None and not sub.get('period_tokens'):sub['period_tokens']=None
+            if sub is not None:crossing.add(sub['route'])
             continue
-        if sub is not None and sub.get('period_tokens') is not None:sub['period_tokens']+=e['tokens']
+        if sub is not None:supplemented[sub['route']]=supplemented.get(sub['route'],0)+e['tokens']
         accepted.append(e);add(data['totals'],e)
         split=data.get('claude_split')
         if split is not None and e['route']=='claude-code':
@@ -356,6 +359,12 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if kind=='account' and value and not value.startswith('claude-code'):continue
             options=data.get('scope_options',{}).get(kind)
             if options is not None and value and value not in options:options.append(value)
+    for sub in data.get('subscriptions') or []:
+        base=recorded[sub['route']]
+        if base is None:continue  # unknown for another reason: left as it was
+        used=base+supplemented.get(sub['route'],0)
+        # No use on record and an aggregate across the edge: 'no usage' is unknown, not 0.
+        sub['period_tokens']=None if not used and sub['route'] in crossing else used
     # The card comparison: on both sides, aggregates whose whole interval ended by the same
     # elapsed time. An account day is one total: it counts once the day is over by the cut,
     # whenever its count was first received; a day still open at the cut counts on neither

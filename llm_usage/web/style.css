@@ -920,7 +920,8 @@ body:has(dialog[open]){overflow:hidden}
 .ov-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:var(--fs-xs);color:var(--muted);margin-bottom:10px}
 .ov-key{display:inline-flex;align-items:center;gap:6px}
 .ov-key b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
-.ov-chart{min-height:190px}
+.ov-chart-panel{display:flex;flex-direction:column}
+.ov-chart{flex:1;min-height:190px}
 .ov-bars{display:block}
 .ov-bars line{stroke:var(--line)}
 .ov-bars text{font-size:var(--fs-xs);fill:var(--subtle);font-variant-numeric:tabular-nums}

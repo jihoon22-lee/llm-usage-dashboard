@@ -174,8 +174,10 @@ function priceBody(model){
  for(const k of RATE_KEYS){
   const input=$('cfg-pricing').querySelector(`input[data-model="${CSS.escape(model)}"][data-key="${k}"]`);
   if(input.value===''){
-   // An emptied optional rate is removed; input and output are required and stay as stored.
+   // An emptied optional rate is removed. Input and output are required: emptying one
+   // that had a value is refused here instead of quietly restoring it on save.
    if(k!=='input'&&k!=='output')body[k]=null;
+   else if(input.defaultValue!=='')throw Error('입력·출력 단가는 비울 수 없습니다: '+model);
    continue;
   }
   const v=parseFloat(input.value);

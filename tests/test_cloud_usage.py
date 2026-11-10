@@ -97,6 +97,17 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertNotIn(SECRET, dump)
         self.assertNotIn('TEST-ONLY-PRIVATE', dump)
 
+    def test_one_unreadable_cloud_entry_is_counted_and_the_rest_is_kept(self):
+        bad = assistant('msg_bad', '2026-10-12T09:30:30Z', 5)
+        bad['payload']['message']['usage']['output_tokens'] = 5.5
+        api = FakeApi([[session('session_cloud')]],
+                      {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5), bad, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]})
+        self.run_collect(api)
+        self.assertEqual([r['output'] for r in self.rows()], [5, 7])
+        with self.store.connect() as c:
+            self.assertEqual([tuple(r) for r in c.execute("SELECT source,record,kind FROM import_errors WHERE source LIKE 'claude-cloud:%'")],
+                             [('claude-cloud:session_cloud', '1', 'ValueError')])
+
     def test_cloud_reasoning_is_kept_like_a_local_transcript_line(self):
         message = assistant('msg_1', '2026-10-12T09:30:00Z', 40)
         message['payload']['message']['usage']['reasoning_output_tokens'] = 12

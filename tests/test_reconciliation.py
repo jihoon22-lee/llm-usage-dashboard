@@ -50,6 +50,11 @@ class ReconciliationTests(unittest.TestCase):
         inside=subs(period='custom',start='2026-10-11',end='2026-10-12')
         self.assertEqual((inside['codex']['period_tokens'],inside['devin']['period_tokens']),(1000,0))
         self.assertIsNone(subs(period='today')['codex']['period_tokens'])
+        # An account day crossing the period's start is read first; the day wholly inside
+        # the period still counts toward the subscription.
+        with self.store.connect() as c:
+            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-09',tokens=700),dict(startDate='2026-10-10',tokens=900)],self.now)
+        self.assertEqual(subs(period='custom',start='2026-10-10',end='2026-10-11')['codex']['period_tokens'],900)
         # Claude cloud supplements count toward the Claude subscription too.
         self.event();self.evidence()
         self.assertEqual(self.usage(period='today',subscriptions={'claude-code':20})['subscriptions'][0]['period_tokens'],100)

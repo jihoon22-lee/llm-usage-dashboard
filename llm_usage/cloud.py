@@ -107,31 +107,38 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
     project=_project(item);count=0
     entries=entries if entries is not None else list(_numeric_entries(_pages(fetch,headers,item,endpoint)))
     session_ids={d.get('sessionId') or d.get('session_id') for e in entries if (d:=e.get('payload') or {}).get('type')=='assistant'}-{None}
-    for entry in entries:
-        d=(entry or {}).get('payload') or {}
-        if d.get('type')=='result' and d.get('modelUsage'):
-            if d.get('parent_tool_use_id'):continue  # already included in the parent's modelUsage
-            sid=d.get('session_id') or d.get('sessionId') or (next(iter(session_ids)) if len(session_ids)==1 else item['id'] if not session_ids else None)
-            if sid is None:continue  # no provable scope to subtract the detailed records
-            start=stamp(item.get('created_at'));end=stamp(entry.get('created_at') or d.get('timestamp'))
-            if not start or not end:continue
-            for model,u in d['modelUsage'].items():
-                parts=dict(uncached_input=u.get('inputTokens'),cached_input=u.get('cacheReadInputTokens'),
-                           cache_creation=u.get('cacheCreationInputTokens'),output=u.get('outputTokens'))
-                if not all(number(v) for v in parts.values()):continue
-                total_tokens=sum(parts.values())
-                if number(u.get('thinkingTokens')):parts['reasoning']=u['thinkingTokens']
-                snapshot(store,c,source='claude-cloud',scope_id='claude:'+sid,route='claude-code',
-                         provider=model_provider(model),model=model,start=start,end=end+0.000001,
-                         tokens=total_tokens,parts=parts,session=sid,project=project,
-                         account_key=account_key,checked=time.time())
-            continue
-        if d.get('type')!='assistant':continue
-        sid=d.get('sessionId') or d.get('session_id') or item['id']
-        # Same identity as a local transcript line, so a teleported copy merges.
-        from .claude_usage import ingest_message
-        count+=ingest_message(store,c,'claude-code',d,session=sid,project=project,account=account,
-                              source='claude-cloud:'+endpoint,finality='provisional' if endpoint=='events' else 'final')
+    # One entry this parser cannot read is counted against the session and skipped: the
+    # session's other requests are still stored, as with a bad line in a local transcript.
+    errors='claude-cloud:'+str(item['id'])
+    c.execute('DELETE FROM import_errors WHERE source=?',(errors,))
+    for index,entry in enumerate(entries):
+        try:
+            d=(entry or {}).get('payload') or {}
+            if d.get('type')=='result' and d.get('modelUsage'):
+                if d.get('parent_tool_use_id'):continue  # already included in the parent's modelUsage
+                sid=d.get('session_id') or d.get('sessionId') or (next(iter(session_ids)) if len(session_ids)==1 else item['id'] if not session_ids else None)
+                if sid is None:continue  # no provable scope to subtract the detailed records
+                start=stamp(item.get('created_at'));end=stamp(entry.get('created_at') or d.get('timestamp'))
+                if not start or not end:continue
+                for model,u in d['modelUsage'].items():
+                    parts=dict(uncached_input=u.get('inputTokens'),cached_input=u.get('cacheReadInputTokens'),
+                               cache_creation=u.get('cacheCreationInputTokens'),output=u.get('outputTokens'))
+                    if not all(number(v) for v in parts.values()):continue
+                    total_tokens=sum(parts.values())
+                    if number(u.get('thinkingTokens')):parts['reasoning']=u['thinkingTokens']
+                    snapshot(store,c,source='claude-cloud',scope_id='claude:'+sid,route='claude-code',
+                             provider=model_provider(model),model=model,start=start,end=end+0.000001,
+                             tokens=total_tokens,parts=parts,session=sid,project=project,
+                             account_key=account_key,checked=time.time())
+                continue
+            if d.get('type')!='assistant':continue
+            sid=d.get('sessionId') or d.get('session_id') or item['id']
+            # Same identity as a local transcript line, so a teleported copy merges.
+            from .claude_usage import ingest_message
+            count+=ingest_message(store,c,'claude-code',d,session=sid,project=project,account=account,
+                                  source='claude-cloud:'+endpoint,finality='provisional' if endpoint=='events' else 'final')
+        except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+            store.import_error(c,errors,index,type(exc).__name__)
     from .claude_usage import summary
     summary(store,c)
     return count
