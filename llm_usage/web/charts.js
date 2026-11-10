@@ -194,7 +194,26 @@ function composition(data){
   return `<div data-token="${key}" data-tip="${esc(name)}: ${fmt(parts[key])} (${(parts[key]/sum*100).toFixed(1)}%)"><strong>${dot(color)} ${esc(name)}</strong><span>${compact(parts[key])} · ${(parts[key]/sum*100).toFixed(1)}%</span></div>`;
  });
  const names=excluded.map(([name])=>name),cut=names.length?(names.length>1?`${names.length}개 항목`:names[0])+' 제외':'';
- $('composition').innerHTML=`<div class="donut-wrap"><div class="donut-figure"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}</svg><div class="donut-center"><strong>${compact(sum)}</strong><span>${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</span>${cut?`<span class="donut-sub">전체 ${compact(grand)}</span>`:''}</div></div><div class="donut-key">${keyRows.join('')}</div></div>`;
+ $('composition').innerHTML=`<div class="donut-wrap"><div class="donut-figure"><svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(names.length?names.join('·')+' 제외 ':'')}비중순 토큰 구성 도넛 차트">${rings}</svg><div class="donut-center"><strong>${compact(sum)}</strong><span>${cut?esc(cut.length>14?names.length+'개 항목 제외':cut):'전체 토큰'}</span>${cut?`<span class="donut-sub">전체 ${compact(grand)}</span>`:''}</div></div><div class="donut-key">${keyRows.join('')}</div></div>`+costMix(data,all,parts,tint,dot);
+}
+// The same period by estimated cost: a token type's share of the cost can be far from its
+// share of the tokens (cache reads are most of the tokens at a fraction of the price).
+function costMix(data,types,tokens,tint,dot){
+ const cost=data.cost||{},by=cost.by_type;
+ if(!by)return '';
+ const rows=types.filter(([,key])=>by[key]>0).sort((a,b)=>by[b[1]]-by[a[1]]),sum=rows.reduce((n,[,key])=>n+by[key],0);
+ if(!sum)return '';
+ // Shares of the tokens that have a type, so both percentages run over the same use.
+ const typed=['uncached_input','cached_input','output','cache_creation'].reduce((n,key)=>n+(tokens[key]||0),0);
+ const gap=rows.length>1?4:0;let x=0;
+ const bar=rows.map(([name,key,color])=>{
+  const width=by[key]/sum*1000,rect=`<rect x="${x.toFixed(1)}" width="${Math.max(1,width-gap).toFixed(1)}" height="12" fill="${tint(color)}" data-tip="${esc(name)}: ${usd(by[key])} (${(by[key]/sum*100).toFixed(1)}%)"/>`;
+  x+=width;return rect;
+ }).join('');
+ const partial=cost.coverage!=null&&cost.coverage<99.5?' · 일부 미산정':'';
+ return `<div class="cost-mix"><p class="cost-mix-title"><strong>비용 구성</strong><small>공개 단가 환산 ${usd(sum)}${partial}</small></p>`
+  +`<svg class="cost-mix-bar" viewBox="0 0 1000 12" preserveAspectRatio="none" role="img" aria-label="토큰 유형별 환산 비용 구성">${bar}</svg>`
+  +`<div class="cost-mix-key">${rows.map(([name,key,color])=>`<span data-cost-type="${key}">${dot(color)} ${esc(name)} <b>${(by[key]/sum*100).toFixed(1)}%</b> <small>토큰의 ${typed?((tokens[key]||0)/typed*100).toFixed(1):'0.0'}%</small></span>`).join('')}</div></div>`;
 }
 function ranking(data){
  const metric=$('metric').value;
