@@ -157,6 +157,19 @@ class ActivityTests(unittest.TestCase):
         with self.store.connect() as c:
             self.assertEqual(self.store.state(c,'codex_activity:poll:test')['next_attempt'],NOW+86400)
 
+    def test_a_thread_the_provider_leaves_out_waits_instead_of_failing_the_poll(self):
+        with self.store.connect() as c:
+            activity.record_consumption(c,self.account,usage('thread-a'),['thread-a','thread-b'],NOW)
+            rows={r['thread_id']:(r['status'],r['retry_at']) for r in c.execute('SELECT * FROM codex_thread_consumption')}
+        self.assertEqual(rows['thread-b'],('pending',NOW+21600))
+        self.assertNotEqual(rows['thread-a'][0],'pending')
+        # A later answer for it replaces the placeholder; a known thread keeps its values when left out.
+        with self.store.connect() as c:
+            activity.record_consumption(c,self.account,usage('thread-b'),['thread-a','thread-b'],NOW+60)
+            after={r['thread_id']:(r['status'],r['payload']) for r in c.execute('SELECT * FROM codex_thread_consumption')}
+        self.assertNotEqual(after['thread-b'][0],'pending')
+        self.assertNotEqual(after['thread-a'][1],'{}')
+
     def test_permanent_detail_failure_cannot_starve_unread_tasks(self):
         newest=task(1);older=task(2);older['created_at']-=100
         with self.store.connect() as c:

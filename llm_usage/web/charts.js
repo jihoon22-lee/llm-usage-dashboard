@@ -13,7 +13,7 @@ function chart(data){
  const allLabels=grouped.labels,labels=allLabels.filter(l=>!hiddenLabels.has(l)),points=grouped.points;
  $('legend').innerHTML=allLabels.map(label=>`<button data-label="${esc(label)}" aria-pressed="${!hiddenLabels.has(label)}">${esc(seriesLabel(label))}</button>`).join('');
  $('legend').insertAdjacentHTML('beforeend',missingRoutes(data).map(row=>`<span class="unavailable-series">${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</span>`).join(''));
- $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);chart(data);};});
+ $('legend').querySelectorAll('[data-label]').forEach(el=>{el.style.setProperty('--color',colorOf(el.dataset.label));el.onclick=()=>{hiddenLabels.has(el.dataset.label)?hiddenLabels.delete(el.dataset.label):hiddenLabels.add(el.dataset.label);const label=el.dataset.label;chart(data);[...$('legend').querySelectorAll('[data-label]')].find(b=>b.dataset.label===label)?.focus();};});
  if(data.compare&&!$('cumulative').value.startsWith('share'))$('legend').insertAdjacentHTML('beforeend',`<span class="unavailable-series" data-tip="${esc(data.compare.label)}: ${esc(data.compare.start.slice(0,10))} ~ ${esc(data.compare.end_exclusive.slice(0,10))} (종료 미포함)">⎯⎯ ${esc(data.compare.label)} 합계</span>`);
  if(!labels.length){$('chart').innerHTML='<div class="empty">표시할 항목을 범례에서 선택하세요. 기록이 없으면 수집 후 표시됩니다.</div>';return;}
  const mode=$('cumulative').value,cumulative=mode==='1',share=mode.startsWith('share');

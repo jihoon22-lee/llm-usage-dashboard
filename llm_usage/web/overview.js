@@ -151,7 +151,10 @@ function overviewChart(recent){
  $('ov-chart-caption').dataset.tip=recent.unallocated_tokens?'계정 일 단위 누계처럼 하루를 정할 수 없는 사용량은 막대에 나누지 않습니다.':'';
  if(!peak){box.innerHTML='<p class="hint">최근 30일에 날짜별로 나눌 수 있는 사용 기록이 없습니다.</p>';return;}
  const tick=niceStep(peak),top=Math.max(tick,Math.ceil(peak/tick)*tick);
- const H=190,L=46,R=6,T=10,B=24,plot=width-L-R,h=H-T-B,step=plot/days.length,bar=Math.max(2,step*.68);
+ // Beside a long list of facts the panel is taller than the chart's own height: the plot
+ // grows into it (measured with the box empty, so it also shrinks back).
+ box.replaceChildren();
+ const H=Math.max(190,Math.min(380,Math.floor(box.clientHeight))),L=46,R=6,T=10,B=24,plot=width-L-R,h=H-T-B,step=plot/days.length,bar=Math.max(2,step*.68);
  const y=v=>T+h-v/top*h;
  let svg=`<svg class="ov-bars" width="${width}" height="${H}" viewBox="0 0 ${width} ${H}" role="img" aria-label="최근 30일 서비스별 사용량 · 합계 ${compact(recent.tokens)}">`;
  for(let v=0;v<=top;v+=tick)svg+=`<line x1="${L}" x2="${width-R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text x="${L-6}" y="${(y(v)+4).toFixed(1)}" text-anchor="end">${compact(v)}</text>`;

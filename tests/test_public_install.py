@@ -103,4 +103,25 @@ class InstallerBoundaryTests(unittest.TestCase):
         self.assertFalse((self.home/'.codex').exists())
 
 
+    def test_an_install_running_from_the_release_folder_is_not_rewritten(self):
+        config_dir=self.home/'.config/llm-usage';config_dir.mkdir(parents=True)
+        (config_dir/'config.json').write_text(json.dumps({'origin':'https://fixture.example:9444',
+            'allowed_logins':['owner'],'database':str(self.home/'.local/share/llm-usage/usage.db')}))
+        units=self.root/'units';units.mkdir();backups=self.root/'backups'
+        unit=f'[Service]\nWorkingDirectory={self.home}/.local/lib/llm-usage/current\nExecStart=x\n'
+        (units/'llm-usage.service').write_text(unit)
+        def run(*args,**kwargs):
+            if args[:2]==('tailscale','status'):return json.dumps({'Self':{'DNSName':'fixture.example.','UserID':1},'User':{'1':{'LoginName':'owner'}}})
+            if args[:3]==('tailscale','serve','status'):return '{}'
+            raise AssertionError(('service side effect',args))
+        with patch.object(sys,'argv',['script','--owner','fixture']),patch.object(os,'geteuid',return_value=0),\
+             patch.object(install.pwd,'getpwnam',return_value=self.owner),patch.object(install,'PROJECT',self.root),\
+             patch.object(install,'UNITS',units,create=True),patch.object(install,'BACKUPS',backups,create=True),\
+             patch.object(install,'run',side_effect=run),patch.object(install.socket,'socket'),patch('os.chown'),\
+             contextlib.redirect_stderr(io.StringIO()) as shown:
+            with self.assertRaises(SystemExit) as stop:install.main()
+        self.assertIn('packaging/deploy.py',str(stop.exception.code)+shown.getvalue())
+        self.assertEqual((units/'llm-usage.service').read_text(),unit)
+        self.assertFalse(backups.exists())
+
 if __name__=='__main__':unittest.main()

@@ -173,8 +173,7 @@ def _threads(store,account,fetch,now):
     if ids:
         raw=fetch('usage/thread_usage/query_v2',dict(threads=[dict(thread_id=i) for i in ids]))
         with store.connect() as c:
-            _,missing=data.record_consumption(c,account,raw,ids,now)
-        if missing:raise ValueError('requested thread rows omitted')
+            data.record_consumption(c,account,raw,ids,now)
     _thread_summary(store,account,now)
     return bool(ids)
 
