@@ -46,14 +46,19 @@ def open_db(path):
     except (OSError, sqlite3.Error):
         pass
     tmp = Path(tempfile.mkdtemp(prefix='llm-usage-devin-'))
-    target = tmp / 'sessions.db'
-    shutil.copyfile(path, target)
     try:
-        shutil.copyfile(str(path) + '-wal', str(target) + '-wal')
-    except OSError:
-        pass
-    con = sqlite3.connect(target)
-    con.row_factory = sqlite3.Row
+        target = tmp / 'sessions.db'
+        shutil.copyfile(path, target)
+        try:
+            shutil.copyfile(str(path) + '-wal', str(target) + '-wal')
+        except OSError:
+            pass
+        con = sqlite3.connect(target)
+        con.row_factory = sqlite3.Row
+    except BaseException:
+        # A copy that failed part-way still holds conversation rows: nothing of it stays behind.
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     return con, tmp
 
 

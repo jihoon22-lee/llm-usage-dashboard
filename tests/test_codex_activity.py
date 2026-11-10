@@ -129,6 +129,34 @@ class ActivityTests(unittest.TestCase):
         with self.store.connect() as c:state=self.store.state(c,'codex_activity:scan:'+self.account+':code_review')
         self.assertEqual(state['cursor'],'next');self.assertEqual(state['error'],'HTTP 500')
 
+    def test_an_unidentifiable_list_item_does_not_stop_the_scan(self):
+        api=Api();bad=task(2);bad['id']='cr_9f3'
+        api.pages[('code_review','')]=dict(items=[task(1),bad],cursor='next')
+        api.pages[('code_review','next')]=dict(items=[task(3)],cursor=None)
+        collector._scan(self.store,self.account,api,'code_review',2,NOW)
+        with self.store.connect() as c:
+            state=self.store.state(c,'codex_activity:scan:'+self.account+':code_review')
+            stored=c.execute('SELECT COUNT(*) FROM codex_activity_tasks').fetchone()[0]
+        self.assertEqual((stored,state['invalid'],state['complete'],state['error']),(2,1,True,None))
+
+    def test_failed_details_are_asked_for_less_often(self):
+        with self.store.connect() as c:
+            gone=activity.record_task(c,self.account,task(1),NOW);broken=activity.record_task(c,self.account,task(2),NOW)
+        def fetch(path,body=None):
+            raise HTTPError('https://chatgpt.com/redacted',404 if path.endswith('/task_1') else 500,'failure',{},None)
+        collector._details(self.store,self.account,fetch,5,NOW)
+        collector._details(self.store,self.account,fetch,5,NOW+301)
+        with self.store.connect() as c:
+            wait={r['id']:r['next_detail'] for r in c.execute('SELECT id,next_detail FROM codex_activity_tasks')}
+        self.assertEqual(wait[gone],NOW+86400)       # deleted upstream: once a day
+        self.assertEqual(wait[broken],NOW+301+3600)  # a repeated failure: hourly
+
+    def test_a_retry_after_header_cannot_stop_polling_for_good(self):
+        error=HTTPError('https://chatgpt.com/redacted',503,'busy',{'Retry-After':'31536000000'},None)
+        collector._failed(self.store,'codex_activity:poll:test',1,error,NOW)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c,'codex_activity:poll:test')['next_attempt'],NOW+86400)
+
     def test_permanent_detail_failure_cannot_starve_unread_tasks(self):
         newest=task(1);older=task(2);older['created_at']-=100
         with self.store.connect() as c:

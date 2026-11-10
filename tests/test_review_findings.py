@@ -212,5 +212,27 @@ class ReadOnlyDatabaseTests(unittest.TestCase):
             writer.execute('ROLLBACK'); writer.close()
 
 
+class ProviderReadTests(unittest.TestCase):
+    def test_a_null_window_does_not_discard_the_reported_ones(self):
+        from llm_usage.limits import go_limits
+        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
+        store = Store(Path(folder.name)/'usage.db')
+        with patch('llm_usage.store.time.time', return_value=NOW), store.connect() as c:
+            count = go_limits(store, c, dict(usage=dict(rolling=dict(percent=40, resetsAt=NOW+600), weekly=dict(percent=10), monthly=None)), NOW)
+        self.assertEqual(count, 2)
+
+    def test_a_failed_private_copy_leaves_nothing_behind(self):
+        from llm_usage import devin
+        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
+        source = Path(folder.name)/'sessions.db'; source.write_bytes(b'not a database')
+        scratch = Path(folder.name)/'copy'; scratch.mkdir()
+        def partial(src, dst):
+            Path(dst).write_bytes(b'conversation rows'); raise OSError('disk full')
+        with patch.object(devin.tempfile, 'mkdtemp', return_value=str(scratch)), patch.object(devin.shutil, 'copyfile', side_effect=partial):
+            with self.assertRaises(OSError):
+                devin.open_db(source)
+        self.assertFalse(scratch.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

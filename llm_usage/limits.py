@@ -1,4 +1,5 @@
 """Official quota fields only; never infer reset from a subscription duration."""
+import http.client
 import json
 import math
 import os
@@ -121,7 +122,8 @@ def status_limits(store,c,route,data,checked):
 def go_limits(store,c,data,checked):
     count=0
     for key,row in data.get('usage',{}).items():
-        if key in ('rolling','weekly','monthly') and number(row.get('percent')):
+        # A window the response leaves null does not discard the windows it did report.
+        if key in ('rolling','weekly','monthly') and isinstance(row,dict) and number(row.get('percent')):
             store.limit(c,'opencode-go',key,max(0,100-row['percent']),row.get('resetsAt'),checked,'opencode-go')
             count+=1
     return count
@@ -254,7 +256,7 @@ def account_poll(store,path,state_key,source,auth_hint,read,record,interval=300)
         blocked=code in (401,403) or isinstance(exc,(PermissionError,FileNotFoundError))
         delay=min(3600,600*2**min(failures-1,3)) if code==429 else min(600,60*2**min(failures-1,4))
         if isinstance(exc,urllib.error.HTTPError):
-            delay=max(delay,retry_delay(exc.headers.get('Retry-After'),checked))
+            delay=max(delay,min(MAX_RETRY_AFTER,retry_delay(exc.headers.get('Retry-After'),checked)))
             exc.close()
         if blocked:detail=auth_hint
         elif isinstance(exc,AccountMetadataMissing):detail='기본 로그인 계정·조직 정보 확인 필요 · 기본 도구에서 계정 정보를 갱신하세요.'
@@ -286,6 +288,10 @@ def poll_devin(store,settings):
         store.save_state(c,'label:devin:daily','일간 한도');store.save_state(c,'label:devin:weekly','주간 한도')
         return n,f'{name} · 계정 사용량 조회 · 내부 경로'
     account_poll(store,path,'devin_status_poll','devin','Devin 인증 확인 필요 · Devin CLI에서 로그인 갱신 후 자동 재확인합니다.',read,record)
+
+
+# A provider's Retry-After is honoured up to a day: a bogus header must not stop polling for good.
+MAX_RETRY_AFTER=86400
 
 
 def retry_delay(value,now):
@@ -585,7 +591,8 @@ def _agy_post(servers,method,timeout=10,probe=2):
                 _agy_endpoints[pid]=(host,port)
                 return data
             except urllib.error.HTTPError as exc:last=f'HTTP {exc.code}';exc.close()
-            except (OSError,ValueError) as exc:last=type(exc).__name__
+            # A port that answers without speaking HTTP is one more wrong port, not the end of the search.
+            except (OSError,ValueError,http.client.HTTPException) as exc:last=type(exc).__name__
     raise ConnectionError(last or 'no listening port')
 
 

@@ -67,13 +67,13 @@ def _allowed(store,key,signature,now):
 
 
 def _failed(store,key,signature,exc,now):
-    from .limits import retry_delay
+    from .limits import MAX_RETRY_AFTER,retry_delay
     code,reason=_failure(exc)
     with store.connect() as c:
         old=store.state(c,key,{}) or {};failures=min(10,old.get('failures',0)+1)
         delay=min(3600,300*2**min(failures-1,4))
         if isinstance(exc,urllib.error.HTTPError):
-            delay=max(delay,retry_delay((exc.headers or {}).get('Retry-After'),now));exc.close()
+            delay=max(delay,min(MAX_RETRY_AFTER,retry_delay((exc.headers or {}).get('Retry-After'),now)));exc.close()
         store.save_state(c,key,dict(next_attempt=now+delay,blocked=code in (401,403),rate_limited=code==429,credential_mtime=signature,failures=failures))
     return reason
 
@@ -93,14 +93,19 @@ def _scan(store,account,fetch,kind,page_limit,now):
         if next_cursor and (next_cursor==cursor or next_cursor in seen):raise ValueError('repeated cursor')
         oldest=state.get('oldest')
         with store.connect() as c:
+            invalid=0
             for item in raw['items']:
-                data.record_task(c,account,item,now,kind);created=data.timestamp(item.get('created_at'))
+                # An item this collector cannot identify is skipped and counted: failing the
+                # page would reset the cursor and stop every later page at the same item.
+                try:data.record_task(c,account,item,now,kind)
+                except (ValueError,TypeError,KeyError,AttributeError):invalid+=1;continue
+                created=data.timestamp(item.get('created_at'))
                 if created:oldest=min(oldest,created) if oldest else created
             # A head read cannot prove the saved deep cursor has been exhausted.
             following=resume if index==0 and resume else next_cursor
             complete=state.get('complete',False) or not following
             state.update(cursor=following,complete=complete,checked=now,oldest=oldest,
-                         pages=state.get('pages',0)+1,error=None)
+                         pages=state.get('pages',0)+1,error=None,invalid=state.get('invalid',0)+invalid)
             if not following:state['completed_at']=now
             store.save_state(c,key,state)
         count+=len(raw['items'])
@@ -125,8 +130,11 @@ def _details(store,account,fetch,limit,now):
         except Exception as exc:
             code,reason=_failure(exc)
             if isinstance(exc,urllib.error.HTTPError):exc.close()
+            # A task deleted upstream is asked for once a day, a repeated failure hourly: the
+            # first failure alone is retried on the next pass.
+            delay=86400 if code in (404,410) else 3600 if row['detail_status']=='error' else 300
             with store.connect() as c:c.execute('''UPDATE codex_activity_tasks SET detail_status='error',
-                detail_error=?,next_detail=? WHERE id=?''',(reason,now+300,row['id']))
+                detail_error=?,next_detail=? WHERE id=?''',(reason,now+delay,row['id']))
             if code in (401,403,429):raise
 
 
