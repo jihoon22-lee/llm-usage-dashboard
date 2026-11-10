@@ -275,7 +275,6 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .bucket-summary .remaining{margin:4px 0 2px;font-variant-numeric:tabular-nums}
 .bar-wrap{position:relative}
 .bar-wrap progress{margin:6px 0}
-.pace-mark{position:absolute;top:3px;width:2px;height:11px;background:var(--ink);opacity:.6;transform:translateX(-1px);border-radius:1px}
 .bucket-reset{font-size:var(--fs-xs);color:var(--muted);margin:0}
 .bucket-detail{margin-top:6px}
 .bucket-detail>summary{font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:4px 0;list-style-position:inside}
@@ -283,7 +282,6 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .bucket-detail[open]>summary{margin-bottom:4px}
 .plan,.capacity,.quota-events{font-size:var(--fs-xs);margin-top:6px}
 .capacity small{display:block;color:var(--muted);font-size:var(--fs-xs)}
-.warn-text{color:var(--error-ink)}
 progress.level-mid::-webkit-progress-value{background:var(--meter-mid)}
 progress.level-low::-webkit-progress-value{background:var(--meter-low)}
 progress.level-mid::-moz-progress-bar{background:var(--meter-mid)}
@@ -652,7 +650,6 @@ details.source-group[open]>summary{margin-bottom:-8px}
 .na-text{color:var(--muted);font-size:var(--fs-xs)}
 /* Overview: risk-ordered strip, recommended order and the reset axis. */
 .quota-strip span small{font-size:var(--fs-xs);margin-left:4px;opacity:.8}
-.quota-strip .pick-note{display:block;font-weight:400;color:var(--muted);font-size:var(--fs-xs)}
 .reset-scale{margin-top:6px}
 .reset-axis{position:relative;height:16px}
 .reset-tick{position:absolute;top:0;font-style:normal}
@@ -692,9 +689,9 @@ kbd{font:inherit;font-size:var(--fs-xs);border:1px solid var(--border);border-bo
 .whatif .hint{margin:0}
 .capacity-history{font-size:var(--fs-xs)}
 .capacity-history small{color:var(--muted)}
-.notify-log{margin-top:10px;font-size:var(--fs-sm)}
-.notify-log ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px}
-.notify-log li span{color:var(--muted);font-variant-numeric:tabular-nums}
+#notify-log{margin-top:10px;font-size:var(--fs-sm)}
+#notify-log ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px}
+#notify-log li span{color:var(--muted);font-variant-numeric:tabular-nums}
 .offline-banner{background:var(--warning-bg);color:var(--warning-ink)}
 
 /* Settings remain readable when controls are expanded on a narrow screen. */
@@ -843,7 +840,6 @@ body:has(dialog[open]){overflow:hidden}
 .consumption-caution{color:var(--warning-ink)}
 .consumption-key{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--muted)}
 .consumption-key svg{flex:none}
-.consumption-color{display:inline-block;width:9px;height:9px;border-radius:2px;flex-shrink:0}
 #consumption-legend{gap:8px 16px;flex-wrap:wrap}
 #consumption-chart{position:relative}
 #consumption-chart>svg{display:block;width:100%;height:auto;overflow:visible;-webkit-tap-highlight-color:transparent}

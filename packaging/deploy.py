@@ -120,7 +120,7 @@ def wait(predicate,seconds):
 
 def healthy():
     try:
-        with urllib.request.urlopen('http://127.0.0.1:8766/healthz',timeout=2) as response:return response.status==200
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8766/healthz',timeout=2) as response:return response.status==200
     except OSError:return False
 
 

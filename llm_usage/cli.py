@@ -88,7 +88,7 @@ def install_account_hooks(config,script,directory):
         changed=True
     if changed:
         shutil.copy2(config,config.with_name(config.name+'.llm-usage-backup-'+str(int(time.time()))))
-        atomic_json(config,d)
+        atomic_json(Path(os.path.realpath(config)),d)
         print(f'Claude 계정 구분 훅 연결: {config}')
     return changed
 
@@ -122,7 +122,7 @@ def install_hooks(selected_windows_homes=None):
             else:command=f'/usr/bin/python3 {shlex.quote(str(wrapper))} --route {route} --directory {shlex.quote(str(directory))}'
             d['statusLine']={**old,'type':'command','command':command}
             if route=='antigravity' and not old:d['statusLine']['stack_with_default']=True
-            atomic_json(config,d)
+            atomic_json(Path(os.path.realpath(config)),d)
             print(f'상태 표시줄 연결: {config}')
 
 

@@ -103,6 +103,14 @@ class OutboxTests(Base):
         sent=self.deliver([],quiet,NOW+3700)
         self.assertEqual(len(sent),5);self.assertEqual(self.sent,['방해 금지 동안 알림 5건'])
 
+    def test_a_held_weekly_report_is_sent_whole_beside_the_digest(self):
+        self.sent=[]
+        quiet={**NTFY,'quiet':[17,19]}
+        self.deliver([(k,f'제목 {k}','본문') for k in ('low','exhausted','spike','budget')]+[('report','주간 리포트','리포트 본문')],quiet,NOW)
+        self.deliver([],quiet,NOW+3700)
+        self.assertEqual(self.sent,['방해 금지 동안 알림 4건','주간 리포트'])
+        self.assertIn('리포트 본문',self.bodies[-1])
+
     def test_failed_send_is_retried_and_expires(self):
         self.sent=[]
         self.assertEqual(self.deliver([('low','잔여 적음','본문')],NTFY,NOW,fail=True),[])

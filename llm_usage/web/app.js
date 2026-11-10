@@ -205,7 +205,7 @@ document.addEventListener('keydown',event=>{
  else if(event.key==='/'){
   const field=currentView==='settings'?$('price-search'):currentView==='usage'?(usageView==='activity'?$('activity-search'):usageView==='tokens'?$('model-search'):null):null;
   if(field){event.preventDefault();field.focus();}
- }else if(event.key==='?'){event.preventDefault();$('shortcuts').hidden=!$('shortcuts').hidden;}
+ }else if(event.key==='?'){event.preventDefault();$('shortcuts').hidden=!$('shortcuts').hidden;if(!$('shortcuts').hidden)$('shortcuts').scrollIntoView({behavior:motion(),block:'nearest'});}
 });
 // The root worker serves the offline page copy and notifications; workers registered
 // at /assets/ by earlier versions are removed.

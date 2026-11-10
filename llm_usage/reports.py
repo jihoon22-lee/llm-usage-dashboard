@@ -255,8 +255,11 @@ def _build(store,now,pricing=None):
         if row.get('est_cost') is not None:e['cost']=(e['cost'] or 0)+row['est_cost']
     before={}
     for row in previous['rows']:before[row['route']]=before.get(row['route'],0)+token_total(row)
+    # A previous week that began before the records did is no base for a change.
+    first=previous.get('first_record')
+    comparable=first is not None and first<=(monday-timedelta(days=7)).timestamp()
     for e in routes.values():
-        e['change_pct']=(e['tokens']-before[e['route']])/before[e['route']]*100 if before.get(e['route']) else None
+        e['change_pct']=(e['tokens']-before[e['route']])/before[e['route']]*100 if comparable and before.get(e['route']) else None
     # The Codex account residual is not a model or a project; it is reported on its own line.
     from .reconciliation import RESIDUAL
     top=sorted((r for r in models['rows'] if r['model']!=RESIDUAL),key=lambda r:-token_total(r))[:5]
@@ -276,7 +279,7 @@ def _build(store,now,pricing=None):
     busiest=max(current['series'],key=lambda p:sum(token_total(v) for v in p['values'].values()),default=None)
     return dict(week=day(monday),start=day(monday),end=day(next_monday-timedelta(days=1)),built=now,
                 totals=totals,previous=prior,
-                change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if prior['tokens'] else None,
+                change_pct=(totals['tokens']-prior['tokens'])/prior['tokens']*100 if comparable and prior['tokens'] else None,
                 routes=sorted(routes.values(),key=lambda e:-e['tokens']),
                 models=[dict(model=r['model'],route=r['route'],tokens=token_total(r),cost=r.get('est_cost'),advisor_calls=r.get('advisor_calls',0)) for r in top],
                 accounts=accounts,projects=[dict(project=p['project'],tokens=token_total(p),cost=p.get('cost')) for p in projects],

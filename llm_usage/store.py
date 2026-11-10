@@ -525,7 +525,8 @@ class Store:
             owner=accounts.get(row['route'])
             context=contexts.get((row['route'],row['bucket']),{})
             metadata=json.loads(context.get('data','{}'))
-            previous_account=bool(owner and (context.get('epoch')!=owner['epoch'] or (checked or 0)<owner['since']))
+            # A placeholder for a route with no reading was observed under no account.
+            previous_account=bool(owner and checked is not None and (context.get('epoch')!=owner['epoch'] or checked<owner['since']))
             row.update(account_epoch=owner['epoch'] if owner else None,identity_verified=bool(owner and owner['account_key']),
                        previous_account=previous_account,scope=metadata)
             src = sources.get(row['source'], {})

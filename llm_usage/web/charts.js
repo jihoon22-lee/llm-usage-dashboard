@@ -218,6 +218,8 @@ function costMix(data,types,tokens,tint,dot){
 function ranking(data){
  const metric=$('metric').value;
  const rowValue=r=>metric==='requests'?(r.requests||0):metric==='cost'?(r.est_cost??0):modelTotal(r);
+ // A model without a rate has no cost to rank: it follows the priced ones as 미산정, not as $0.
+ const unpriced=r=>metric==='cost'&&r.est_cost==null;
  // The Codex account residual is not a model: shares are of model-attributed use, and the
  // residual follows on a muted line (tokens only; it has no requests or cost).
  const residual=data.rows.filter(r=>r.model===RESIDUAL);
@@ -236,6 +238,7 @@ function ranking(data){
    +(v?`<span class="rank-bar rank-hatch" role="img" aria-label="${esc(residualName)} ${metricFmt(v)} · ${note}"><i data-w="${(Math.min(1,v/max)*100).toFixed(2)}" data-tip="${esc(residualName)} · ${esc(label)} · ${metricFmt(v)} · ${note}"></i></span>`:'')+'</div>';
  }).join('');
  $('ranking').innerHTML=(rows.map(r=>{const v=rowValue(r),label=routeNames[r.route]||r.route;
+  if(unpriced(r))return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span class="na-text">미산정</span></div></div>`;
   return `<div class="rank" data-scope="model:${esc(r.model)}" tabindex="0" aria-describedby="drill-hint"><div class="rank-label"><strong>${esc(r.model)} <small>${esc(label)}</small></strong><span>${metricFmt(v)} <small>${share(r)}</small></span></div><svg class="rank-bar" viewBox="0 0 1000 13" preserveAspectRatio="none" role="img" aria-label="${esc(r.model)} ${metricFmt(v)} · ${share(r)}"><rect width="${v/max*1000}" height="13" fill="${colorOf(r.route)}" data-tip="${esc(r.model)} · ${esc(label)} · ${metricFmt(v)} · ${share(r)} · 클릭하면 이 모델로 좁혀봅니다"/></svg></div>`;}).join('')+extra)||'<div class="empty">선택 기간에 사용 기록이 없습니다.</div>';
  applyGeometry($('ranking'));
 }

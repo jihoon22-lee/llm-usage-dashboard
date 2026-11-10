@@ -238,7 +238,7 @@ function renderUsage(data){
  $('usage-gaps').hidden=!gaps.length;
  $('usage-gaps').innerHTML=gaps.map(row=>`<strong>${esc(routeNames[row.route]||row.route)} · ${gapLabel(row)}</strong><span>${row.observed?'입력·출력·캐시 숫자는 보존되고 있습니다. 반복 수신과 누적값의 의미를 검증하기 전까지 차트·합계에는 포함하지 않습니다. 마지막 수신 '+when(row.observation_checked):'구독 한도와 별개로 소비량 원본이 확보되지 않아 차트·합계에 포함되지 않습니다.'}</span>`).join('');
  const periodLabel=$('period').value==='custom'
-  ?`${data.start.slice(0,10)} ~ ${new Date(Date.parse(data.end_exclusive)-864e5).toISOString().slice(0,10)}`
+  ?`${data.start.slice(0,10)} ~ ${new Date(Date.parse(data.end_exclusive)-1+9*36e5).toISOString().slice(0,10)}`
   :fullLabel('period');
  const recent=data.period==='1h';
  const range=recent?`${when(Date.parse(data.start)/1000)} → ${when(Date.parse(data.end_exclusive)/1000)} KST`:null;

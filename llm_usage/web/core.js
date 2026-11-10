@@ -122,7 +122,9 @@ async function api(path,body,retried,requestOptions={}){
   clearTimeout(timer);external?.removeEventListener('abort',forwardAbort);
   controller.signal.removeEventListener('abort',abortListener);
  }
- if(r.status>=500)window.dispatchEvent(new Event('llm-api-unavailable'));
+ // A write the app refused with its own JSON error (a failed notification test, a save it
+ // could not store) is that operation's failure, not an outage; unsaved input stays.
+ if(r.status>=500&&!(body&&d&&typeof d.error==='string'))window.dispatchEvent(new Event('llm-api-unavailable'));
  if(r.ok&&!body&&cacheablePath(path))await keepCopy(path,d);
  if(r.status===403&&body&&!retried){
   csrf='';csrf=(await api('/api/bootstrap',undefined,undefined,{...requestOptions,deadline})).csrf;

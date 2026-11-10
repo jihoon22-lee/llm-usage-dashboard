@@ -111,7 +111,7 @@ Nice=10
     run('systemctl','restart','llm-usage.service')
     for attempt in range(60):
         try:
-            with urllib.request.urlopen('http://127.0.0.1:8766/healthz',timeout=2) as response:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8766/healthz',timeout=2) as response:
                 if response.status==200:break
         except OSError:time.sleep(.25)
     else:raise RuntimeError('LLM Usage 서버 상태 점검 실패')

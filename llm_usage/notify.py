@@ -5,6 +5,7 @@ Discord/Slack-compatible webhook URL, or a Telegram bot token and chat). Their
 values are secrets: they are never written to the statistics DB, logs or API
 responses. Only transitions are sent (a quota becoming low, not every poll).
 """
+import http.client
 import ipaddress
 import json
 import re
@@ -101,7 +102,9 @@ def send(notify,title,body,timeout=10):
                 _post(f"https://api.telegram.org/bot{notify['telegram_token']}/sendMessage",
                       dict(chat_id=notify['telegram_chat'],text=f'{title}\n{body}'),timeout)
         except urllib.error.HTTPError as exc:errors[channel]=f'HTTP {exc.code}';exc.close()
-        except (OSError,ValueError) as exc:errors[channel]=type(exc).__name__
+        # http.client errors (a malformed URL, a broken status line) carry the request line,
+        # which holds the Telegram token: only the type is kept.
+        except (OSError,ValueError,http.client.HTTPException) as exc:errors[channel]=type(exc).__name__
     return errors
 
 
@@ -201,7 +204,8 @@ def quota_messages(rows,previous,low_percent,unused=None,now=None):
             messages.append(('exhausted',f'{label} 소진',f"잔여 0% · 초기화 {_when(row.get('resets'))}"+(' · 다른 계정 '+', '.join(others) if others else '')))
         elif now_state['low'] and not before['low']:
             messages.append(('low',f'{label} 잔여 {remaining:.1f}%',f"잔여 적음 기준 {low_percent}% 이하 · 초기화 {_when(row.get('resets'))}"))
-        elif before['low'] and not now_state['low'] and before.get('resets')!=now_state['resets']:
+        # The same reset can differ by a second between readings; only a new one is a recovery.
+        elif before['low'] and not now_state['low'] and abs((before.get('resets') or 0)-(now_state['resets'] or 0))>2:
             messages.append(('recovered',f'{label} 회복',f'초기화 후 잔여 {remaining:.1f}%'))
     # Buckets that are not current right now keep their last state.
     return messages,{**previous,**state}
@@ -324,7 +328,8 @@ def deliver(store,notify,messages,now):
         store.save_state(c,OUTBOX_KEY,[]);_log(c,store,log)
     queue=fresh+sending
     if not queue:return []
-    held=[m for m in fresh if m['attempts']==0]
+    # A weekly report's body is its content, so it is sent whole instead of as a digest line.
+    held=[m for m in fresh if m['attempts']==0 and m['kind']!='report']
     if len(held)>DIGEST_OVER:
         digest=dict(kind='digest',title=f'방해 금지 동안 알림 {len(held)}건',
                     body='\n'.join(f"{_when(m['ts'])} {m['title']}" for m in held),ts=now,attempts=0,parts=held)

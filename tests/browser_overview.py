@@ -185,6 +185,14 @@ with sync_playwright() as p:
     expect(page.locator('#period')).to_have_value('today')
     page.wait_for_function("()=>lastUsage&&lastUsage.period==='today'&&!lastUsage.scope")
     assert page.evaluate('total(lastUsage.totals)') == overview['today']['tokens']
+    # The week tile opens Monday to Sunday (KST) and names both ends as dates of that week.
+    page.keyboard.press('1'); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
+    page.locator('#ov-tiles .ov-tile').nth(1).click()
+    expect(page.locator('#period')).to_have_value('custom')
+    page.wait_for_function("()=>lastUsage&&lastUsage.period==='custom'")
+    monday = overview['week']['start'][:10]
+    sunday = page.evaluate("s=>new Date(Date.parse(s+'T00:00:00Z')+6*864e5).toISOString().slice(0,10)", monday)
+    expect(page.locator('#cards-period')).to_contain_text(f'{monday} ~ {sunday}')
     # A quota row opens its card on the quota tab.
     page.keyboard.press('1'); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     page.locator('#ov-quota .ov-q').filter(has_text='Codex').click()

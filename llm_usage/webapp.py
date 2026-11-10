@@ -23,6 +23,8 @@ CSP=("default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self
      "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 # Stored names like 'swe-2 (max)' carry a space and parentheses.
 MODEL_RE=re.compile(r'^[A-Za-z0-9._/() -]{1,100}$')
+# A bot token is '<id>:<secret>'; anything else would break the request URL it is sent in.
+TELEGRAM_TOKEN_RE=re.compile(r'[0-9]{1,20}:[A-Za-z0-9_-]{1,120}')
 # Serializes pricing.json read-modify-write inside this process.
 pricing_lock=threading.Lock()
 
@@ -62,7 +64,7 @@ def create_app(config=None):
         if session.get('login')!=login:
             session.clear();session.update(login=login,csrf=secrets.token_urlsafe(32));session.permanent=True
         if request.method not in ('GET','HEAD','OPTIONS'):
-            if request.headers.get('Origin')!=origin or not request.is_json or not hmac.compare_digest(request.headers.get('X-CSRF-Token',''),session['csrf']):abort(403)
+            if request.headers.get('Origin')!=origin or not request.is_json or not hmac.compare_digest(request.headers.get('X-CSRF-Token','').encode(),session['csrf'].encode()):abort(403)
 
     @app.after_request
     def headers(response):
@@ -92,6 +94,16 @@ def create_app(config=None):
 
     @app.get('/api/bootstrap')
     def bootstrap():return jsonify(csrf=session['csrf'],refresh_seconds=config.get('refresh_seconds',300))
+
+    def payload():
+        """The request's JSON, or None. Nesting too deep to parse is a bad request, not a crash."""
+        try:return request.get_json(silent=True)
+        except RecursionError:abort(400,description='요청 본문을 확인하세요.')
+
+    def json_object():
+        data=payload()
+        if not isinstance(data,dict):abort(400,description='요청 본문은 JSON 객체여야 합니다.')
+        return data
 
     def unpriced(data):
         """Models used in the period with no rate and not deliberately left unpriced."""
@@ -130,7 +142,7 @@ def create_app(config=None):
     @app.get('/api/session')
     def session_detail():
         sid=request.args.get('id','')
-        if not 0<len(sid)<=200 or not SESSION_RE.match(sid):abort(400,description='세션 ID를 확인하세요.')
+        if not 0<len(sid)<=200 or not SESSION_RE.fullmatch(sid):abort(400,description='세션 ID를 확인하세요.')
         return jsonify(store.session_detail(sid,load_pricing(config)))
 
     @app.get('/api/project')
@@ -181,7 +193,7 @@ def create_app(config=None):
 
     def manual_resource(rid=None,delete=False):
         from .resources import write_manual,Conflict
-        try:return jsonify(write_manual(store,request.get_json(silent=True),rid,delete))
+        try:return jsonify(write_manual(store,payload(),rid,delete))
         except Conflict as error:abort(409,description=str(error))
         except KeyError:abort(404,description='수동 기록을 찾을 수 없습니다.')
         except (ValueError,TypeError):abort(400,description='입력값·단위·적용 범위·연결 자원을 확인하세요.')
@@ -235,11 +247,6 @@ def create_app(config=None):
         if not config.get('config_file'):return None
         return Path(config['database']).parent/'pricing.json'
 
-    def pricing_read_path():
-        data=Path(config['database']).parent/'pricing.json'
-        if data.exists():return data
-        return Path(config['pricing_file'])
-
     def today():
         from datetime import datetime
         from .store import KST
@@ -285,7 +292,7 @@ def create_app(config=None):
 
     @app.post('/api/config/subscription-prices')
     def set_prices():
-        body=request.get_json(silent=True) or {}
+        body=json_object()
         prices=body.get('prices')
         if not isinstance(prices,dict) or len(prices)>64:abort(400,description='구독료 목록을 확인하세요.')
         clean={}
@@ -300,7 +307,8 @@ def create_app(config=None):
         at=body.get('effective_at')
         if mode not in MODES:abort(400,description='적용 시점을 확인하세요.')
         now=time.time()
-        if mode=='at' and not number(at,1,now+60):abort(400,description='적용 시각은 지금 이전이어야 합니다.')
+        if mode!='at':at=None
+        elif not number(at,1,now+60):abort(400,description='적용 시각은 지금 이전이어야 합니다.')
         def prices_with_history(current):
             before=current.get('subscription_prices') or {}
             history=clean_history(current.get('subscription_price_history'))
@@ -337,18 +345,18 @@ def create_app(config=None):
 
     @app.post('/api/config/pricing')
     def set_pricing():
-        body=request.get_json(silent=True) or {}
+        body=json_object()
         model=body.get('model')
-        if not isinstance(model,str) or not MODEL_RE.match(model):abort(400,description='모델 이름을 확인하세요.')
+        if not isinstance(model,str) or not MODEL_RE.fullmatch(model):abort(400,description='모델 이름을 확인하세요.')
         rates={}
-        cleared={key for key in ('cache_write_5m','cache_write_1h') if key in body and body[key] is None}
+        cleared={key for key in ('cached','cache_write','cache_write_5m','cache_write_1h') if key in body and body[key] is None}
         for key in ('input','cached','output','cache_write','cache_write_5m','cache_write_1h'):
             if body.get(key) is None:continue
             if not number(body[key],0,10000):abort(400,description='단가는 0~10000 범위의 숫자여야 합니다.')
             rates[key]=body[key]
         if not rates and not cleared and not body.get('delete') and not body.get('hide') and not body.get('unhide'):
             abort(400,description='단가를 입력하세요.')
-        from .pricing import BUILTIN,_read_json,entry_key
+        from .pricing import BUILTIN,_read_json,_valid,entry_key
         # 'delete' removes the user value and falls back to the builtin rate
         # (or unpriced); 'hide' suppresses builtin and lower layers alike.
         # When a read-only lower layer still defines the model, a marker must
@@ -366,20 +374,29 @@ def create_app(config=None):
             # entry; merging onto it keeps a dated history's earlier rates.
             table=load_pricing(config)
             return table.get(entry_key(model,table))
+        def edited():
+            # A rate without input and output cannot price anything and would be dropped on
+            # load: refuse it instead of reporting a save that changes nothing.
+            entry=edited_rates(effective_entry(),rates,today(),remove=cleared)
+            if not all(_valid(e) for e in (entry if isinstance(entry,list) else [entry])):
+                abort(400,description='입력·출력 단가를 함께 입력하세요.')
+            return entry
         path=pricing_write_path()
         with pricing_lock:
             if path:
                 lower=Path(config['pricing_file'])
                 lower_keys=set(config.get('pricing') or {})|set(_read_json(lower) if lower.resolve()!=path.resolve() else {})
+                # Only the web-edited file is rewritten. The config-dir file stays a lower layer
+                # of its own, so later hand edits to it keep taking effect.
                 current={}
-                read=pricing_read_path()
-                if read.exists():
-                    try:current=json.loads(read.read_text())
+                if path.exists():
+                    try:current=json.loads(path.read_text())
                     except ValueError:abort(500,description='pricing.json을 읽지 못했습니다.')
+                    if not isinstance(current,dict):abort(500,description='pricing.json을 읽지 못했습니다.')
                 if body.get('hide'):current[model]=None
                 elif body.get('unhide'):unhide(current,lower_keys)
                 elif body.get('delete'):delete(current,lower_keys)
-                else:current[model]=edited_rates(effective_entry(),rates,today(),remove=cleared)
+                else:current[model]=edited()
                 atomic_json(path,current)
             else:
                 lower_keys=set(_read_json(config.get('pricing_file') or ''))
@@ -387,12 +404,12 @@ def create_app(config=None):
                 if body.get('hide'):target[model]=None
                 elif body.get('unhide'):unhide(target,lower_keys)
                 elif body.get('delete'):delete(target,lower_keys)
-                else:target[model]=edited_rates(effective_entry(),rates,today(),remove=cleared)
+                else:target[model]=edited()
         return jsonify(model=model,deleted=bool(body.get('delete')),hidden=bool(body.get('hide')))
 
     @app.post('/api/config/thresholds')
     def set_thresholds():
-        body=request.get_json(silent=True) or {}
+        body=json_object()
         patch={}
         for key,(lo,hi) in {'stale_seconds':(60,86400),'retention_days':(1,365),'low_percent':(1,50),'quota_hide_days':(1,90),
                             'unused_percent':(10,100),'unused_hours':(1,72)}.items():
@@ -404,14 +421,14 @@ def create_app(config=None):
 
     @app.post('/api/config/refresh')
     def set_refresh():
-        value=(request.get_json(silent=True) or {}).get('refresh_seconds')
+        value=json_object().get('refresh_seconds')
         if not number(value,30,3600):abort(400,description='갱신 주기는 30~3600초 범위여야 합니다.')
         persist({'refresh_seconds':int(value)})
         return jsonify(refresh_seconds=int(value))
 
     @app.post('/api/config/project-budgets')
     def set_project_budgets():
-        budgets=(request.get_json(silent=True) or {}).get('budgets')
+        budgets=json_object().get('budgets')
         if not isinstance(budgets,dict) or len(budgets)>200:abort(400,description='프로젝트 예산 목록을 확인하세요.')
         clean={}
         for project,budget in budgets.items():
@@ -427,7 +444,7 @@ def create_app(config=None):
     @app.post('/api/config/notify')
     def set_notify():
         from .notify import CHANNEL_KEYS,EVENTS,masked,notification_url
-        body=request.get_json(silent=True) or {}
+        body=json_object()
         def change(latest):
             current=dict(latest.get('notify') or {})
             for key in CHANNEL_KEYS:
@@ -435,6 +452,8 @@ def create_app(config=None):
                 value=body[key]
                 if value in ('',None):current.pop(key,None);continue
                 if not isinstance(value,str) or len(value)>500:abort(400,description='알림 채널 값을 확인하세요.')
+                if key=='telegram_token' and not TELEGRAM_TOKEN_RE.fullmatch(value.strip()):
+                    abort(400,description='텔레그램 봇 토큰 형식을 확인하세요.')
                 if key.endswith('_url'):
                     try:notification_url(value)
                     except ValueError:abort(400,description='알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.')
@@ -466,7 +485,7 @@ def create_app(config=None):
 
     @app.post('/api/config/value-alert')
     def set_value_alert():
-        value=(request.get_json(silent=True) or {}).get('value_alert_usd')
+        value=json_object().get('value_alert_usd')
         if value is not None and not number(value,0,1000000):abort(400,description='월 환산 알림은 0~1000000 USD 범위이거나 비워 두세요.')
         persist({'value_alert_usd':value})
         return jsonify(value_alert_usd=value)
