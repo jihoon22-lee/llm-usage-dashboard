@@ -230,7 +230,7 @@ function renderLimits(data){
   return `<article id="quota-${route}" class="limit-card${selectedQuota===route?' mobile-selected':''}"><div class="limit-head"><strong>${esc(name)}</strong><small class="card-caption">잔여 · 초기화까지</small><button type="button" class="quota-close" data-close-quota="${route}">접기</button></div>${route==='codex'?'<button type="button" class="mini-btn consumption-shortcut" data-open-consumption>소비 분석 보기 →</button>':''}${body}</article>`;
  };
  $('limits').innerHTML=active.map(cardHtml).join('')
-  +(folded.length?`<details class="quota-dormant"><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)+(g.rows.length&&g.rows.every(r=>r.user_ended)?' (구독 종료)':'')).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');
+  +(folded.length?`<details class="quota-dormant" data-history="dormant"${opened.has('dormant')?' open':''}><summary>관측 중단 ${folded.length}개<small>${folded.map(g=>esc(g.name)+(g.rows.length&&g.rows.every(r=>r.user_ended)?' (구독 종료)':'')).join(' · ')}</small></summary>${folded.map(cardHtml).join('')}</details>`:'');
  fitSvgText($('limits'));applyGeometry($('limits'));
 }
 $('quota-overview').addEventListener('click',event=>{

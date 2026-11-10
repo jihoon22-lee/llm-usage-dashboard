@@ -5,6 +5,7 @@ unpriced models report no estimate instead of guessing. Users extend or
 override rates in ~/.config/llm-usage/pricing.json or the 'pricing' config map.
 """
 import json
+import math
 from pathlib import Path
 import re
 
@@ -140,9 +141,9 @@ def _merge(settings):
                 if model in BUILTIN:table[model]=BUILTIN[model]
                 else:table[model]=None
             elif rates is None:table[model]=None  # retain the barrier to parent fallback
-            elif _valid(rates):table[model]=rates
+            elif _valid(rates):table[model]=_plain(rates)
             elif isinstance(rates,list):
-                seq=sorted((e for e in rates if _valid(e)),key=lambda e:e.get('since',''))
+                seq=sorted((_plain(e) for e in rates if _valid(e)),key=lambda e:e.get('since',''))
                 if seq:table[model]=seq
     return table
 
@@ -164,13 +165,30 @@ def pricing_origins(settings):
     return origins
 
 
+RATE_KEYS=('input','cached','output','cache_write','cache_write_5m','cache_write_1h')
+
+
+def _number(value):
+    return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0
+
+
 def _valid(rates):
-    return isinstance(rates,dict) and isinstance(rates.get('input'),(int,float)) and isinstance(rates.get('output'),(int,float))
+    """Numeric input and output rates, and a number for every other rate that is set. A
+    hand-written null ('cache_write': null) means unset; text or a negative makes the entry unusable."""
+    return (isinstance(rates,dict) and _number(rates.get('input')) and _number(rates.get('output'))
+            and all(_number(rates[key]) for key in RATE_KEYS if rates.get(key) is not None))
+
+
+def _plain(rates):
+    """The entry without unset (null) rates, so every rate left in it can be multiplied."""
+    if all(rates.get(key) is not None for key in RATE_KEYS if key in rates):return rates
+    return {key:value for key,value in rates.items() if key not in RATE_KEYS or value is not None}
 
 
 def _read_json(path):
-    try:return json.loads(Path(path).read_text())
+    try:data=json.loads(Path(path).read_text())
     except (OSError,ValueError):return {}
+    return data if isinstance(data,dict) else {}
 
 
 # A snapshot suffix is a date ('-20250514', '-2026-01-01') or a non-numeric
@@ -190,7 +208,7 @@ def _snapshot_of(name,key):
     if not name.startswith(key+'-'):return False
     suffix=name[len(key)+1:]
     if DATE_SUFFIX.match(suffix):return True
-    return not VERSION_SUFFIX.match(suffix) and suffix.split('-',1)[0].lower() not in TIER_WORDS
+    return not VERSION_SUFFIX.match(suffix) and not any(part.lower() in TIER_WORDS for part in suffix.split('-'))
 
 
 def _entry_for(model,pricing):

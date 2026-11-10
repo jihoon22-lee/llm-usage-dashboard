@@ -93,6 +93,14 @@ with sync_playwright() as p:
     context.unroute('**/api/config/notify')
     page.evaluate('loadConfig()')
     expect(page.locator('#notify-save')).to_be_enabled()
+    # A write the app refused in JSON is that operation's failure: the form and its input stay.
+    context.route('**/api/notify/test',lambda route:route.fulfill(status=502,json={'error':'전송 실패: ntfy HTTP 500'}))
+    page.locator('#cfg-refresh').fill('120')
+    page.evaluate("settingsApi('/api/notify/test',{}).catch(()=>{})")
+    page.wait_for_timeout(300)
+    expect(page.locator('#notify-save')).to_be_enabled()
+    assert page.locator('#cfg-refresh').input_value()=='120'
+    context.unroute('**/api/notify/test')
     context.route('**/api/limits',lambda route:route.fulfill(status=503,json={'error':'fixture unavailable'}))
     page.evaluate('refresh()')
     expect(page.locator('#notify-save')).to_be_disabled()

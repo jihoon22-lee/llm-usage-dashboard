@@ -15,7 +15,8 @@ self.addEventListener('fetch',event=>{
    const cache=await caches.open(CACHE);
    try{
     const response=await fetch(request);
-    if(response.ok)await cache.put('/',response.clone());
+    // A JSON address opened in a tab is a navigation too; only the page itself is kept.
+    if(response.ok&&url.pathname==='/')await cache.put('/',response.clone());
     return response;
    }catch(error){
     const copy=await cache.match('/');

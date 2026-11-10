@@ -71,6 +71,14 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(monday.isoformat(),'2026-09-28T00:00:00+09:00')
 
     def test_report_totals_change_models_and_exhaustions(self):
+        # The records begin inside the previous week: it is no base for a change.
+        partial=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
+        self.assertEqual(partial['previous']['tokens'],1000)
+        self.assertIsNone(partial['change_pct'])
+        self.assertEqual({r['change_pct'] for r in partial['routes']},{None})
+        self.assertNotIn('전주 대비',reports.summary(partial))
+        with self.store.connect() as c:
+            self.store.event(c,'older',stamp('2026-09-18T01:00:00Z'),'OpenAI','codex','gpt-test',dict(uncached_input=7))
         report=reports.build(self.store,stamp('2026-10-05T01:00:00Z'),PRICING)
         self.assertEqual((report['start'],report['end']),('2026-09-28','2026-10-04'))
         self.assertEqual(report['totals']['tokens'],1500+500+300+9_999)

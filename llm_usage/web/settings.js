@@ -49,6 +49,8 @@ function settingsAvailable(available,message=''){
   for(const id of ['cfg-subs','cfg-pricing','cfg-thresholds','cfg-budgets','notify-events','notify-log'])$(id).replaceChildren();
   for(const id of ['ntfy-state','webhook-state','telegram-state'])$(id).textContent='연결 후 확인';
   $('price-save-all').hidden=true;
+  // The emptied search box no longer filters the table.
+  priceFilter.query='';
  }
 }
 for(const event of ['offline','llm-api-unavailable'])window.addEventListener(event,()=>settingsAvailable(false,'서버에 연결할 수 없어 설정을 비웠습니다. 온라인 연결 후 다시 설정을 여세요.'));
@@ -112,6 +114,8 @@ async function loadConfig(){
   .sort((a,b)=>compareText.compare(routeNames[familyOf(a)]||a,routeNames[familyOf(b)]||b)||claude.findIndex(x=>x.route===a)-claude.findIndex(x=>x.route===b));
  // One row per subscription: its monthly price and whether it has ended. Several
  // Claude accounts get a row each with a display name (emails are never shown).
+ // The chosen application of a changed price belongs to the unsaved price it was chosen for.
+ const effective=drafts.some(([key])=>key.includes('data-route'))?[$('cfg-subs-effective')?.value,$('cfg-subs-at')?.value]:null;
  $('cfg-subs').innerHTML=(routes.map(r=>{
   const name=serviceFull(r),since=ended[r]?.since,account=claude.find(x=>x.route===r);
   const plan=account?.plan_label&&account.plan_label!==accountLabel(r)?account.plan_label+' · ':'';
@@ -138,6 +142,7 @@ async function loadConfig(){
  $('cfg-valert').value=cfg.value_alert_usd??'';
  for(const k of['low','reset','ops','exp'])$('ntf-'+k).checked=storage.get('llmNotify:'+k)!=='0';
  restoreDrafts(drafts);
+ if(effective&&effective[0]){$('cfg-subs-effective').value=effective[0];$('cfg-subs-at').value=effective[1]||'';$('cfg-subs-at').hidden=effective[0]!=='at';}
 }
 $('cfg-subs').addEventListener('change',e=>{if(e.target.id==='cfg-subs-effective')$('cfg-subs-at').hidden=e.target.value!=='at';});
 $('cfg-subs').addEventListener('click',async e=>{
@@ -169,7 +174,8 @@ function priceBody(model){
  for(const k of RATE_KEYS){
   const input=$('cfg-pricing').querySelector(`input[data-model="${CSS.escape(model)}"][data-key="${k}"]`);
   if(input.value===''){
-   if(k==='cache_write_5m'||k==='cache_write_1h')body[k]=null;
+   // An emptied optional rate is removed; input and output are required and stay as stored.
+   if(k!=='input'&&k!=='output')body[k]=null;
    continue;
   }
   const v=parseFloat(input.value);

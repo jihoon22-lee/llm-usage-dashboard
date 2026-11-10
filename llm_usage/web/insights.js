@@ -107,7 +107,7 @@ function renderInsights(data){
  const cache=insights.cache;
  const saved=data.cost&&data.cost.cache_savings;
  $('cache-overview').innerHTML=`<div class="comparison-value">${percent(cache.rate)}<small>세부 요청 기록의 입력 중 캐시 읽기 비중</small></div>${saved?`<p class="hint">캐시 읽기를 일반 입력 단가로 냈다면 ${usd(saved)} 더 들었을 환산입니다(공개 단가 차이 · 실제 청구 아님).</p>`:''}`;
- const selected=$('cache-series').value;
+ const selected=cacheSeriesChoice;
  $('cache-series').innerHTML=data.labels.map(label=>`<option value="${esc(label)}">${esc(seriesLabel(label))}</option>`).join('');
  if(data.labels.includes(selected))$('cache-series').value=selected;
  $('cache-rows').innerHTML=`<table><thead><tr><th>사용 서비스</th><th>모델</th><th>캐시 활용률</th></tr></thead><tbody>${cache.rows.map(r=>`<tr><td>${esc(routeNames[r.route]||r.route)}</td><td>${esc(r.model)}</td><td>${percent(r.rate)}</td></tr>`).join('')}</tbody></table>`;
@@ -413,4 +413,6 @@ function renderCacheTrend(data){
  $('cache-trend').innerHTML=percentChart(points,seriesLabel(label)+' 캐시 활용률 추이')+'<p class="hint">구간별 입력 비중 · 입력이 없으면 — · 누적 그래프 선택과 무관합니다.</p>';
  fitSvgText($('cache-trend'));
 }
-$('cache-series').addEventListener('change',()=>{if(lastUsage)renderCacheTrend(lastUsage);});
+// Kept outside the select, which is emptied while a refresh loads.
+let cacheSeriesChoice='';
+$('cache-series').addEventListener('change',event=>{cacheSeriesChoice=event.target.value;if(lastUsage)renderCacheTrend(lastUsage);});

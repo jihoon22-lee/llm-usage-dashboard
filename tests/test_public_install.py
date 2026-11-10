@@ -94,8 +94,8 @@ class InstallerBoundaryTests(unittest.TestCase):
              patch.object(install.pwd,'getpwnam',return_value=self.owner),patch.object(install,'PROJECT',self.root),\
              patch.object(install,'UNITS',units,create=True),patch.object(install,'BACKUPS',backups,create=True),\
              patch.object(install,'run',side_effect=run),patch.object(install.socket,'socket'),\
-             patch.object(install.urllib.request,'urlopen') as urlopen,patch('os.chown'):
-            urlopen.return_value.__enter__.return_value.status=200
+             patch.object(install.urllib.request,'build_opener') as opener,patch('os.chown'):
+            opener.return_value.open.return_value.__enter__.return_value.status=200
             install.main()
         text=(units/'llm-usage-collector.service').read_text()
         self.assertIn(' -'+str(self.home/'.codex'),text)

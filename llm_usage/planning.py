@@ -13,6 +13,9 @@ def window_label(bucket):
             'seven_day_opus':'Opus 주간','seven_day_sonnet':'Sonnet 주간'}.get(bucket,bucket)
 
 
+OBSERVATION_FLAGS = ('identity_unverified', 'locked', 'reset_unparsed')
+
+
 def scope_for(row):
     meta = row.get('scope') or {}
     if meta.get('role') in ('common', 'model', 'family', 'unknown'):
@@ -40,7 +43,10 @@ def scope_for(row):
 
 def enrich(rows, now):
     for row in rows:
-        row['scope'] = scope_for(row)
+        # The derived scope names the window; what was recorded about the observation itself
+        # (an unverified account, a locked or unparsed window) stays with it.
+        observed = row.get('scope') or {}
+        row['scope'] = {**{k: observed[k] for k in OBSERVATION_FLAGS if k in observed}, **scope_for(row)}
         readings = row.get('history') or []
         row['paces'] = {}
         for name, lookback, minimum in (('recent', 1800, 15), ('baseline', 10800, 90)):

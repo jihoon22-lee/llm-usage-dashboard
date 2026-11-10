@@ -16,6 +16,12 @@ from .sqlite_ro import open_readonly
 from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
 
+# What one malformed record can raise. A value SQLite cannot bind or store (a list where a
+# session id belongs, a NaN time) fails only its own statement, so the record is counted
+# as unreadable and the rest of the source is still read.
+SQL_RECORD_ERRORS = (sqlite3.IntegrityError, sqlite3.ProgrammingError, sqlite3.InterfaceError, sqlite3.DataError)
+RECORD_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OverflowError, *SQL_RECORD_ERRORS)
+
 PARSER_VERSION=3
 
 
@@ -161,7 +167,7 @@ def collect_file(store,path,route):
                 if not line.endswith(b'\n'):
                     f.seek(start);break
                 try:parse_line(store,c,route,json.loads(line),state)
-                except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+                except RECORD_ERRORS as exc:
                     store.import_error(c,key,start,type(exc).__name__)
             if state.get('_dirty'):
                 store.rebuild_codex(c,state.pop('_dirty'),
@@ -218,7 +224,7 @@ def collect_opencode(store,path):
                                     session=sid,project=project_label(directory),
                                     agent_kind='sub' if parent_id else 'main')
                     c.execute('DELETE FROM import_errors WHERE source=? AND record=?',(key,mid))
-                except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
+                except RECORD_ERRORS as exc:
                     store.import_error(c,key,mid,type(exc).__name__)
             # Retry a bounded batch even if a repaired row retains its old time_updated.
             retries=c.execute('SELECT record FROM import_errors WHERE source=? ORDER BY checked LIMIT 200',(key,)).fetchall()
@@ -265,8 +271,12 @@ def collect_local(store,settings,*,include_derived=True):
                 paths=record_files(root)
                 count=len(paths)
                 for path in changed_files(store,root,paths):
-                    try:collect_file(store,path,route)
-                    except (OSError,EOFError,ValueError,RecordReadError) as exc:
+                    try:
+                        collect_file(store,path,route)
+                        # The file was read: an earlier whole-file failure (a locked or
+                        # briefly unreadable file) is over.
+                        with store.connect() as c:c.execute("DELETE FROM import_errors WHERE source=? AND record='file'",('file:'+str(path),))
+                    except (OSError,EOFError,ValueError,RecordReadError,*SQL_RECORD_ERRORS) as exc:
                         with store.connect() as c:store.import_error(c,'file:'+str(path),'file',type(exc).__name__)
                     # A full parser upgrade can span several minutes. This marks
                     # committed progress, while status remains explicitly collecting.
