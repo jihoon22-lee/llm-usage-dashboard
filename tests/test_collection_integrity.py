@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from llm_usage.collect import collect_file, sd_notify
+from llm_usage.collect import collect_file, collect_local, sd_notify
 from llm_usage.insights import pace_lookback, quota_forecast, quota_plan
 from llm_usage.sqlite_ro import open_readonly
 from llm_usage.store import Store, project_label, repository_root, stamp
@@ -96,6 +96,30 @@ class RewrittenLogTests(unittest.TestCase):
         with patch('llm_usage.collect.parse_line',wraps=__import__('llm_usage.collect',fromlist=['parse_line']).parse_line) as parse:
             collect_file(self.store,self.path,'claude-code')
         self.assertEqual(parse.call_count,1)
+
+
+class DeeplyNestedRecordTests(unittest.TestCase):
+    """A line nested deeper than the JSON parser follows is one unreadable record."""
+    DEEP='{"type":"user","content":'+'['*200000+']'*200000+'}'
+
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name);self.store=Store(self.root/'usage.db')
+        self.records=self.root/'projects'/'p';self.records.mkdir(parents=True)
+
+    def test_the_line_is_counted_and_the_file_and_the_files_after_it_are_read(self):
+        with self.assertRaises(RecursionError):json.loads(self.DEEP)
+        (self.records/'a.jsonl').write_text(json.dumps(claude('m1',5))+'\n'+self.DEEP+'\n'+json.dumps(claude('m2',7))+'\n')
+        (self.records/'b.jsonl').write_text(json.dumps(claude('m3',11))+'\n')
+        settings=dict(database=str(self.root/'usage.db'),status_inboxes=[],homes=[],
+                      sources=[dict(name='records',route='claude-code',kind='jsonl',path=str(self.root/'projects'))])
+        collect_local(self.store,settings,include_derived=False)
+        with self.store.connect() as c:
+            self.assertEqual(sorted(r[0] for r in c.execute('SELECT output FROM events')),[5,7,11])
+            self.assertEqual([tuple(r) for r in c.execute('SELECT source,kind FROM import_errors')],
+                             [('file:'+str(self.records/'a.jsonl'),'RecursionError')])
+            source=c.execute("SELECT status,detail FROM sources WHERE name='records'").fetchone()
+        self.assertEqual(source['status'],'partial');self.assertIn('해석 실패 1건',source['detail'])
 
 
 class ProjectLabelTests(unittest.TestCase):

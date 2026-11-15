@@ -205,7 +205,8 @@ def handler(store,token):
                 outcome=ingest(store,data)
                 response={'partialSuccess':{'rejectedLogRecords':str(outcome['invalid']),
                                            'errorMessage':'Invalid usage records'} } if outcome['invalid'] else {}
-            except (ValueError,TypeError,AttributeError,OSError):self.send_error(400);return
+            # RecursionError: a body nested too deep to parse is a bad request, not a crash.
+            except (ValueError,TypeError,AttributeError,OSError,RecursionError):self.send_error(400);return
             body=json.dumps(response).encode();self.send_response(200)
             self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)))
             self.end_headers();self.wfile.write(body)

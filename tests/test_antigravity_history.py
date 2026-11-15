@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from llm_usage.antigravity import collect_database,collect_databases,message,InvalidProtobuf
+from llm_usage.antigravity import collect_database,collect_databases,message,repair_efforts,InvalidProtobuf
 from llm_usage.collect import model_provider
 from llm_usage.store import Store,stamp,DETAILS
 
@@ -72,6 +72,23 @@ class AntigravityHistoryTests(unittest.TestCase):
         detail=self.store.session_detail(session)
         self.assertEqual(detail['requests'],2);self.assertIsNone(detail['project'])
         self.assertEqual(self.store.usage(period='all',sections='insights')['sessionless_requests'],0)
+
+    def test_effort_named_by_the_model_survives_a_reread_and_is_restored_once(self):
+        named=[(0,generator(usage(),name='claude-sonnet-5-5-high'))]
+        self.write([(0,metadata(usage(output=4,thinking=1),self.when,complete=False))],named);self.collect()
+        self.assertEqual([(e['model'],e['effort']) for e in self.events()],[('claude-sonnet-5-5-high','high')])
+        # The conversation changed: the request is saved again, as a whole new row.
+        self.write([(0,metadata(usage(),self.when))]);self.collect()
+        self.assertEqual([(e['output'],e['effort']) for e in self.events()],[(20,'high')])
+        self.assertEqual([(e['model'],e['effort'],e['requests']) for e in self.store.usage(period='all')['efforts']],
+                         [('claude-sonnet-5-5','high',1)])
+        # Rows that lost it before are restored once, without their conversation being read.
+        with self.store.connect() as c:c.execute("UPDATE events SET effort=NULL WHERE route='antigravity'")
+        repair_efforts(self.store)
+        self.assertEqual([e['effort'] for e in self.events()],['high'])
+        with self.store.connect() as c:c.execute("UPDATE events SET effort=NULL WHERE route='antigravity'")
+        repair_efforts(self.store)
+        self.assertEqual([e['effort'] for e in self.events()],[None])
 
     def test_request_steps_not_aggregated_generator_cache_and_thinking(self):
         first=usage();second=usage('response-2',input=30,cached=200,output=40,creation=0,thinking=8)

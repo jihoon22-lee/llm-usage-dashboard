@@ -11,15 +11,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from email.utils import parsedate_to_datetime
-from pathlib import Path
 
 from .store import identity, project_label, stamp
 
 API='https://api.anthropic.com'
 SESSIONS_BETA='ccr-byoc-2025-07-29'
 MAX_PAGES=100
-PARSER_VERSION=4
+# 5 keeps the request's reasoning effort, which the entries carry beside the response.
+PARSER_VERSION=5
 
 
 class IncompletePages(ValueError):
@@ -30,11 +29,10 @@ class IncompletePages(ValueError):
 
 def _backoff(store,exc,pause,key='claude-cloud:retry'):
     if not isinstance(exc,urllib.error.HTTPError) or exc.code not in (401,403,429):return
+    from .limits import MAX_RETRY_AFTER,retry_delay
     delay=min(3600,300*2**min(pause.get('failures',0),4))
-    retry=exc.headers.get('Retry-After') if exc.headers else None
-    if retry:
-        try:delay=max(delay,int(retry) if retry.isdigit() else parsedate_to_datetime(retry).timestamp()-time.time())
-        except (ValueError,TypeError,OverflowError):pass
+    # As for the account polls: a bogus header must not stop the cloud read for good.
+    if exc.headers:delay=max(delay,min(MAX_RETRY_AFTER,retry_delay(exc.headers.get('Retry-After'),time.time())))
     with store.connect() as c:store.save_state(c,key,dict(next_attempt=time.time()+delay,failures=pause.get('failures',0)+1))
 
 
@@ -87,7 +85,7 @@ def _numeric_entries(entries):
     for e in entries:
         d=e.get('payload') or {}
         if d.get('type') not in ('assistant','result'):continue
-        payload={k:d[k] for k in ('type','sessionId','session_id','timestamp','isSidechain','parent_tool_use_id','modelUsage','requestId','request_id','uuid') if k in d}
+        payload={k:d[k] for k in ('type','sessionId','session_id','timestamp','isSidechain','parent_tool_use_id','modelUsage','requestId','request_id','uuid','effort') if k in d}
         if d.get('message'):
             payload['message']={k:d['message'][k] for k in ('id','model','usage') if k in d['message']}
         yield dict(created_at=e.get('created_at'),payload=payload)
@@ -102,6 +100,20 @@ def _batch(fetch,headers,item,cursor=None,endpoint='events'):
     return entries,None
 
 
+def _errors(item):
+    return 'claude-cloud:'+str(item['id'])
+
+
+def _record(endpoint,index,payload):
+    """What names a skipped entry: its own identity where it has one, so the same entry met
+    in both reads of a session, or read again, counts once."""
+    payload=payload if isinstance(payload,dict) else {}
+    message=payload.get('message')
+    for value in (message.get('id') if isinstance(message,dict) else None,payload.get('uuid')):
+        if isinstance(value,str) and value:return value[:100]
+    return f'{endpoint}:{index}'
+
+
 def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events',account_key=None,entries=None,account='claude-code'):
     from .reconciliation import aliases,link,snapshot,number
     project=_project(item);count=0
@@ -109,9 +121,11 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
     session_ids={d.get('sessionId') or d.get('session_id') for e in entries if (d:=e.get('payload') or {}).get('type')=='assistant'}-{None}
     # One entry this parser cannot read is counted against the session and skipped: the
     # session's other requests are still stored, as with a bad line in a local transcript.
-    errors='claude-cloud:'+str(item['id'])
-    c.execute('DELETE FROM import_errors WHERE source=?',(errors,))
+    # The count is kept across the session's two reads and its resumed batches; a read of
+    # the whole session from its start clears it first (collect_claude_cloud).
+    errors=_errors(item)
     for index,entry in enumerate(entries):
+        d=None
         try:
             d=(entry or {}).get('payload') or {}
             if d.get('type')=='result' and d.get('modelUsage'):
@@ -138,7 +152,7 @@ def _ingest(store,c,fetch,headers,item,model_provider,endpoint='teleport-events'
             count+=ingest_message(store,c,'claude-code',d,session=sid,project=project,account=account,
                                   source='claude-cloud:'+endpoint,finality='provisional' if endpoint=='events' else 'final')
         except (ValueError,TypeError,KeyError,AttributeError,OverflowError) as exc:
-            store.import_error(c,errors,index,type(exc).__name__)
+            store.import_error(c,errors,_record(endpoint,index,d),type(exc).__name__)
     from .claude_usage import summary
     summary(store,c)
     return count
@@ -234,6 +248,9 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
             scan_updated=state.get('scan_updated',item.get('updated_at')) if state.get('cursor') or state.get('teleport_cursor') else item.get('updated_at')
             entries,teleport_cursor=_batch(fetch,headers,item,state.get('teleport_cursor'),'teleport-events')
             with store.connect() as c:
+                # Read from its start again: what it could not read before is counted anew.
+                if not state.get('teleport_cursor') and not state.get('cursor'):
+                    c.execute('DELETE FROM import_errors WHERE source=?',(_errors(item),))
                 _ingest(store,c,fetch,headers,item,model_provider,account_key=account_key,entries=entries,account=route)
                 if teleport_cursor:
                     store.save_state(c,key,dict(updated=scan_updated,scan_updated=scan_updated,
@@ -274,13 +291,19 @@ def collect_claude_cloud(store,settings,fetch=None,account=None):
             missing+=1
             with store.connect() as c:store.save_state(c,key,dict(updated=item.get('updated_at'),missing=True,parser=PARSER_VERSION,checked=time.time()))
         except Exception as exc:failed+=1;errors.append(type(exc).__name__)
+    with store.connect() as c:
+        # Entries skipped in this account's sessions, as a local source counts its bad lines.
+        current={_errors(item) for item in sessions};prefix='claude-cloud:'
+        unreadable=sum(n for name,n in c.execute('SELECT source,COUNT(*) FROM import_errors WHERE substr(source,1,?)=? GROUP BY source',
+                                                 (len(prefix),prefix)) if name in current)
     detail=(f'클라우드 세션 {len(sessions)}개 확인 · 원격 기록 API(읽기 전용)'+(f' · 기록 없음 {missing}개' if missing else '')
             +(f' · 읽기 실패 {failed}개, 다음 수집에서 재시도' if failed else '')
+            +(f' · 해석 실패 {unreadable}건' if unreadable else '')
             +(f' · 과거 이벤트 이어 읽기 {backfilling}개' if backfilling else '')
             +(' · '+','.join(sorted(set(errors))) if errors else ''))
     with store.connect() as c:
         if not failed:store.save_state(c,retry,{})
-        store.source(c,source,'partial' if failed or backfilling else 'ok',detail)
+        store.source(c,source,'partial' if failed or backfilling or unreadable else 'ok',detail)
         store.source(c,supplement,
                      'unavailable' if not sessions or unavailable+missing==len(sessions) else 'partial' if unavailable or missing or failed or backfilling else 'ok',
                      f'추가 누계·상세 API · 미제공 {unavailable}세션 · 기존 transcript 수집과 별도'
