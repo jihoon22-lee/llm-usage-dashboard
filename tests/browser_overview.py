@@ -103,6 +103,16 @@ with sync_playwright() as p:
     page = open_page(context)
     assert page.goto(origin + '/').status == 200
     loaded(page)
+    # The four views are the main navigation: heading-size targets in a strip that is not a
+    # scroll container (one pixel of overflow there showed both scrollbars on Windows).
+    strip = page.evaluate(
+        "(()=>{const t=document.querySelector('#tabs'),c=getComputedStyle(t);"
+        "return [c.overflowX,c.overflowY,t.scrollHeight-t.clientHeight,t.scrollWidth-t.clientWidth]})()"
+    )
+    assert strip == ['visible', 'visible', 0, 0], strip
+    assert page.locator('#tab-overview').evaluate(
+        "b=>parseFloat(getComputedStyle(b).fontSize)>=16&&b.getBoundingClientRect().height>=48"
+    )
     # 개요 is the first tab, the default view and a bare URL.
     expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     expect(page.locator('#view-quota')).to_be_hidden()
@@ -296,6 +306,9 @@ with sync_playwright() as p:
     tabs = page.locator('#tabs [role=tab]')
     expect(tabs).to_have_count(4)
     assert page.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].every(t=>t.scrollWidth<=t.clientWidth+1)")
+    assert page.evaluate(
+        "(()=>{const t=document.querySelector('#tabs');return t.scrollHeight<=t.clientHeight&&t.scrollWidth<=t.clientWidth})()"
+    )
     assert page.locator('#ov-chart svg').evaluate('s=>s.getBoundingClientRect().right<=innerWidth')
     page.screenshot(path=str(output / 'overview-mobile.png'), full_page=True)
     context.close()
