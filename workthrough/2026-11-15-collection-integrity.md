@@ -17,6 +17,7 @@
 
 - 회귀 검사 6개(신규 4, 확장 2)는 수정 전 코드에서 모두 실패하고 수정 후 통과한다: `tests/test_antigravity_history.py`, `tests/test_cloud_usage.py`, `tests/test_collection_integrity.py`, `tests/test_reconciliation.py`.
 - `.venv/bin/python -m unittest discover -s tests -q`: 630개 통과.
+- `.venv/bin/python tests/verify_record_totals.py`(운영 DB 읽기 전용, 배포 중인 0.14.0이 수집한 상태): 결과 `partial`. 모든 구간에서 누락·불일치 이벤트는 0건이고, Codex 시각 모호 세션 59개·읽지 못한 Codex 기록 3건·대기 파일 11개·Claude 세부값 불일치 895건이 `partial`의 사유다. 이 수정은 아직 배포되지 않았으므로 수정의 효과가 아니라 수정 전 기준선이다.
 - 여기까지는 fixture 검증이다. 운영에는 배포하지 않았고, 실제 데이터에서의 효과(지워진 Antigravity 행 복구, 클라우드 세션의 추론 수준 수신)는 배포 후 첫 수집 주기에 확인해야 한다.
 
 ## 남은 제약
