@@ -126,3 +126,58 @@ def ingest_line(store, c, d, state):
     if c.execute('SELECT 1 FROM events WHERE id=?', (key,)).fetchone():
         c.execute('INSERT OR REPLACE INTO usage_origins VALUES (?,?,?)', (key, ORIGIN, 'final'))
     return 1
+
+
+ACCOUNT_SETTING = 'aside_claude_account'
+ACCOUNT_SOURCE = 'Aside 계정'
+
+
+def attribute(store, settings):
+    """Give Aside's Claude requests the account Aside is signed in with.
+
+    Aside's records do not say which Claude account they used, so with several accounts
+    they would stay 계정 미확인. `aside_claude_account` in config.json names the account's
+    route ('claude-code' for the original account, 'claude-code:<id>' for another). The
+    requests get that account as evidence at their own time and the account resolver
+    assigns them, as it does for hook records. The setting describes every Aside request:
+    a login changed later is not told apart from the earlier one."""
+    from .claude_attribution import add_evidence
+
+    route = settings.get(ACCOUNT_SETTING)
+    with store.connect() as c:
+        if not route:
+            _status(c, None)
+            return 0
+        known = isinstance(route, str)
+        row = c.execute('SELECT account_key FROM claude_accounts WHERE route=?', (route,)).fetchone() if known else None
+        if not row or not row[0]:
+            _status(c, store)
+            return 0
+        _status(c, None)
+        key = row[0]
+        # Evidence of another account at the same moment would make the request ambiguous.
+        c.execute("DELETE FROM claude_evidence WHERE kind=? AND account_key<>?", (ORIGIN, key))
+        points = [
+            (session, ts, key, ORIGIN)
+            for session, ts in c.execute(
+                "SELECT session,ts FROM events WHERE route='claude-code' AND account IS NOT ? "
+                "AND id IN (SELECT event_id FROM usage_origins WHERE source=?)",
+                (route, ORIGIN),
+            ).fetchall()
+        ]
+        add_evidence(c, points)
+        return len(points)
+
+
+def _status(c, store):
+    """Say so when the configured account is not one this dashboard knows; clear it otherwise."""
+    if store is not None:
+        store.source_changed(
+            c,
+            ACCOUNT_SOURCE,
+            'error',
+            f'{ACCOUNT_SETTING} 설정의 Claude 계정을 찾지 못했습니다 · Aside의 Claude 요청은 계정 미확인으로 남습니다.',
+        )
+    elif c.execute('SELECT 1 FROM sources WHERE name=?', (ACCOUNT_SOURCE,)).fetchone():
+        c.execute('DELETE FROM sources WHERE name=?', (ACCOUNT_SOURCE,))
+        c.execute('DELETE FROM source_health WHERE name=?', (ACCOUNT_SOURCE,))
