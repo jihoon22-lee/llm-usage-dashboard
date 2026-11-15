@@ -10,7 +10,7 @@ from llm_usage import aside
 from llm_usage.collect import collect_local
 from llm_usage.store import Store, identity, stamp
 
-SECRET = 'CONVERSATION-TEXT-MUST-NOT-BE-STORED'
+CONVERSATION = 'CONVERSATION-TEXT-MUST-NOT-BE-STORED'
 T0 = stamp('2026-11-09T03:00:00Z')
 
 
@@ -19,7 +19,7 @@ def response(rid, provider='openai-codex', model='gpt-test', at=0, **usage):
     counts['totalTokens'] = sum(counts[k] for k in ('input', 'output', 'cacheRead', 'cacheWrite'))
     return {
         'role': 'assistant',
-        'content': [{'type': 'text', 'text': SECRET}],
+        'content': [{'type': 'text', 'text': CONVERSATION}],
         'api': 'fixture',
         'provider': provider,
         'model': model,
@@ -61,9 +61,9 @@ class AsideTests(unittest.TestCase):
         self.write(
             '2026-11-09_abc',
             [
-                {'role': 'user', 'content': SECRET, 'timestamp': 1},
+                {'role': 'user', 'content': CONVERSATION, 'timestamp': 1},
                 response('resp_1', reasoning=5),
-                {'role': 'toolResult', 'content': SECRET, 'toolName': 'browser', 'timestamp': 2},
+                {'role': 'toolResult', 'content': CONVERSATION, 'toolName': 'browser', 'timestamp': 2},
                 response('msg_1', 'claude-code', 'claude-test', at=60, cacheWrite=300, cacheWrite1h=100, reasoning=8),
                 response('other', 'openrouter', 'some-model', at=120),  # not a subscription tracked here
             ],
@@ -105,7 +105,7 @@ class AsideTests(unittest.TestCase):
         self.assertEqual([tuple(r) for r in origins], [('aside', 2)])
         self.assertEqual(self.source(), ('ok', '1개 기록 파일 확인 · 해석 실패 0건'))
         with self.store.connect() as c:
-            self.assertNotIn(SECRET, '\n'.join(c.iterdump()))
+            self.assertNotIn(CONVERSATION, '\n'.join(c.iterdump()))
         self.assertTrue(self.store.rollup_matches())
 
     def test_a_replayed_response_counts_once_and_new_lines_are_read_incrementally(self):
