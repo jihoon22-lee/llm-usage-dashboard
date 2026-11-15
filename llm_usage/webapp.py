@@ -112,13 +112,13 @@ def create_app(config=None):
         return sorted({r['model'] for r in data.get('rows') or [] if r.get('est_cost') is None and r.get('requests')
                        and r['model'] not in NO_PUBLIC_PRICE and not hidden(r['model'],pricing)})
 
-    def refused(error,description):
+    def refused(what,error,description):
         """Answer 400 for a value error raised below. Bad input and a fault of our own raise the
-        same types there, so where it was raised is logged first: one line, without the
-        message or any request data."""
+        same types there, so where it was raised is logged first: one line that names the
+        request by `what` (a fixed word), without the message or anything the client sent."""
         import traceback
         frame=traceback.extract_tb(error.__traceback__)[-1]
-        app.logger.warning('%s refused: %s at %s:%d',request.path,type(error).__name__,Path(frame.filename).name,frame.lineno)
+        app.logger.warning('%s request refused: %s at %s:%d',what,type(error).__name__,Path(frame.filename).name,frame.lineno)
         abort(400,description=description)
 
     def residual_label():
@@ -140,7 +140,7 @@ def create_app(config=None):
             # The residual's name is a display setting, not part of the cached usage body.
             return jsonify({**data,'unpriced_models':unpriced(data),'project_budgets':config.get('project_budgets') or {},
                             'residual_label':residual_label()} if 'rows' in data else data)
-        except (ValueError,TypeError,OverflowError) as error:refused(error,'기간 또는 집계 단위를 확인하세요.')
+        except (ValueError,TypeError,OverflowError) as error:refused('usage',error,'기간 또는 집계 단위를 확인하세요.')
 
     @app.get('/api/overview')
     def overview():
@@ -185,7 +185,7 @@ def create_app(config=None):
             return jsonify(activity(store,period=request.args.get('period','7d'),start=request.args.get('start'),
                 end=request.args.get('end'),kind=request.args.get('kind',''),state=request.args.get('state',''),
                 search=request.args.get('search',''),page=request.args.get('page',1)))
-        except (ValueError,TypeError,OverflowError) as error:refused(error,'작업 기간 또는 필터를 확인하세요.')
+        except (ValueError,TypeError,OverflowError) as error:refused('codex activity',error,'작업 기간 또는 필터를 확인하세요.')
 
     @app.get('/api/codex/activity/<key>')
     def codex_activity_detail(key):
@@ -205,7 +205,7 @@ def create_app(config=None):
         try:return jsonify(write_manual(store,payload(),rid,delete))
         except Conflict as error:abort(409,description=str(error))
         except KeyError:abort(404,description='수동 기록을 찾을 수 없습니다.')
-        except (ValueError,TypeError) as error:refused(error,'입력값·단위·적용 범위·연결 자원을 확인하세요.')
+        except (ValueError,TypeError) as error:refused('manual resource',error,'입력값·단위·적용 범위·연결 자원을 확인하세요.')
 
     @app.post('/api/resources/manual')
     def add_resource():return manual_resource()

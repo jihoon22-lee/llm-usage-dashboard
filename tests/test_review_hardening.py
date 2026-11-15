@@ -159,7 +159,7 @@ class WebRefusalTests(Base):
                                       environ_overrides={'REMOTE_ADDR': '', 'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(len(logs.output), 1)
-        self.assertRegex(logs.output[0], r'/api/usage refused: ValueError at store\.py:\d+$')
+        self.assertRegex(logs.output[0], r'usage request refused: ValueError at store\.py:\d+$')
         self.assertNotIn('PRIVATE-INPUT', logs.output[0])
 
 
