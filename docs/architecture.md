@@ -46,6 +46,33 @@ Claude 선불 잔액과 초기화권 조회는 정상 15분 간격이며 각각 
 일반 사용량 응답의 `iguana_necktie`는 클라우드 세션 전용 프로모션으로 별도 저장합니다. 원본 달러 금액과 만료를 보존하고 범용 선불 잔액·지출 한도에 더하지 않습니다. 초기화권의 `ineligible_reason=surface`는 빈 grants가 있어도 미확인으로 처리합니다. 설치된 CLI 버전의 User-Agent와 클라이언트 플랫폼 헤더를 사용하며 내부 응답 형식에 의존합니다.
 인증 발급·갱신은 기존 도구가 담당합니다. 상세 인증 경로를 공개 예제에 넣지 마세요.
 
+### Codex 클라우드·리뷰 조회로 확인한 범위
+
+2026년 10월 개인 Pro 계정에서 기존 Codex CLI 인증으로 읽기 조회만 해서 확인한 결과입니다. 내부 경로이며, 경로가 있거나 HTTP 200을 받았다는 것이 공식 외부 연동 지원을 뜻하지 않습니다.
+
+| 조회 | 받은 것 | 판단할 수 있는 범위 |
+|---|---|---|
+| App Server `account/usage/read` | 계정 summary와 일별 토큰 | 계정 총량. 작업·모델·입출력 배분은 없음 |
+| 작업 목록 기본·`all`·`archived` | 빈 목록 | 자동 리뷰가 없다는 뜻이 아님 |
+| 작업 목록 `task_filter=code_review` | 리뷰 목록과 cursor | 작업·PR·생성/갱신 시각·상태 |
+| 리뷰 상세 | 모델·작업 이력. 토큰 필드 없음 | 토큰 수신의 근거가 아님 |
+| 리뷰의 실제 스레드 ID로 공식 RPC 조회 | `threadUsage=null` | 작업별 토큰은 미수신 |
+| 구형 `thread_usage/query`·`thread-estimates/query` | HTTP 403 | 이 인증으로 쓸 수 없음. 권한을 바꿔 우회하지 않음 |
+| 웹의 `thread_usage/query_v2` | 스레드별 `partial`/`unavailable`, 5시간·주간 한도 소비율, 크레딧, 모델·추론 강도·속도 | 일부 작업의 한도 소비. 입력·출력·캐시 토큰은 없음 |
+| 웹의 `daily-token-usage-breakdown` | `units=percent`의 일별 분해(출처·모델·제품 화면) | 한도 소비 분해. 토큰 수가 아님 |
+| 플랜 한도 이력 | `coverage_complete=false`, `approximate=true` | 불완전한 근사값 |
+
+해석할 때 지키는 기준입니다.
+
+- 소비율과 `credits`는 원본 토큰이나 결제 금액이 아닙니다. 경로 이름의 `token`이 아니라 응답의 `units`를 따르고, 소비율을 토큰으로 환산하거나 계정 차액을 리뷰에 배정하지 않습니다.
+- 작업 목록은 `task_filter`별로 따로 읽습니다. `all`이 비어도 `code_review`에는 기록이 있을 수 있습니다.
+- task ID와 실행 스레드 ID는 다른 식별자입니다. 상세의 `current_assistant_turn`과 `current_diff_task_turn`은 같은 실행을 두 번 나타낼 수 있어 따로 세지 않습니다.
+- 요청한 모델, 화면에서 고른 값, 실제 실행 모델(`model_version`)을 구분합니다.
+- 실패한 리뷰도 한도를 소비합니다. 취소돼 스레드가 없는 작업, `unavailable`인 작업을 소비 0으로 채우지 않습니다. 오래 기다린다고 미제공이 모두 채워지지도 않았습니다.
+- 서로 다른 분해(기능별, 모델별, 제품 화면별)의 합은 날짜에 따라 맞지 않았습니다. 분해끼리 더하거나 차이를 특정 출처에 배정하지 않습니다.
+
+작업별 원본 토큰과 전체 ChatGPT·dot 세션 목록은 확보하지 못했습니다. 참고한 공식 문서: [App Server의 계정 토큰 조회](https://learn.chatgpt.com/docs/app-server#7-token-usage-chatgpt), [Codex CLI의 cloud 명령](https://learn.chatgpt.com/docs/cli/reference#codex-cloud), [사용량 분석 지표 해석](https://learn.chatgpt.com/docs/enterprise/usage-insights), [Codex telemetry](https://learn.chatgpt.com/docs/config-file/config-advanced#observability-and-telemetry).
+
 ## 자원·관측 데이터
 
 기존 events·usage_hourly·limits·limit_history는 보존합니다. 추가 테이블은 resource_accounts(불투명 계정 식별·관측 구간), quota_context(한도 적용 범위), resource_items(자동/수동 자원·수정 버전), resource_history(수치 관측)입니다. 반복 초기화가 안전한 추가 테이블 방식이며 기존 사용량을 다시 쓰지 않습니다.

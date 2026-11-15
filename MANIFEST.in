@@ -2,7 +2,6 @@ include README.md LICENSE pyproject.toml
 recursive-include llm_usage *.py *.js *.css *.html *.json *.svg *.png
 prune tests
 prune docs
-prune workthrough
 prune packaging
 prune scripts
 prune .github
