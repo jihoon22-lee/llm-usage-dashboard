@@ -4,7 +4,7 @@ The fixture comes from Store.limits() of this checkout, so the API marking and t
 are checked together. --preview-assets serves this checkout's web assets.
 """
 
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page, artifact_directory
 import argparse
 import sys
 import tempfile

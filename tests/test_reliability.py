@@ -57,7 +57,7 @@ class ReliabilityTests(unittest.TestCase):
     def test_existing_points_repaired_without_original_files(self):
         with self.store.connect() as c:
             for i, inp in enumerate([100, 200, 100, 200]):
-                sid = self.point(c, 'saved', i, inp, inp // 10)
+                self.point(c, 'saved', i, inp, inp // 10)
             self.store.save_state(c, 'normalized_version', 3)
         self.assertTrue(prepare_normalization(self.store, {'sources': []}))
         self.assertEqual(self.store.usage(period='all')['totals']['uncached_input'], 400)

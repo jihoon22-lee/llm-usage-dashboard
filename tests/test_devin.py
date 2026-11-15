@@ -5,12 +5,11 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
 from llm_usage.devin import collect_database, collect_databases, model_name, roots
-from llm_usage.limits import devin_limits, poll_devin
+from llm_usage.limits import poll_devin
 from llm_usage.verify import reconcile
 from llm_usage.store import Store
 

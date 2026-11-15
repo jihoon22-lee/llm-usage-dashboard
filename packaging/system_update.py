@@ -20,7 +20,6 @@ replaced are put back and the services restarted from them.
 import argparse
 import os
 from pathlib import Path
-import pwd
 import re
 import shutil
 import subprocess

@@ -5,7 +5,6 @@ no provider request, credit purchase, redemption or notification is performed.
 """
 
 import argparse
-import json
 import re
 import tempfile
 import time
@@ -16,7 +15,7 @@ from browser_support import ORIGIN, Sock, watch_csp, artifact_directory
 from playwright.sync_api import sync_playwright, expect
 from llm_usage.store import Store
 from llm_usage.limits import codex_limits, claude_limits
-from llm_usage.resources import observe_account, claude_balance, claude_resets, write_manual
+from llm_usage.resources import observe_account, claude_balance, claude_resets
 from llm_usage.webapp import create_app
 
 parser = argparse.ArgumentParser()

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from llm_usage.collect import collect_file, collect_local, sd_notify
 from llm_usage.insights import pace_lookback, quota_forecast, quota_plan
 from llm_usage.sqlite_ro import open_readonly
-from llm_usage.store import Store, project_label, repository_root, stamp
+from llm_usage.store import Store, project_label, repository_root
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'packaging'))
 from system_update import set_service_keys  # noqa: E402

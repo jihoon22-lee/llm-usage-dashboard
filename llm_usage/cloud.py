@@ -167,7 +167,7 @@ def _ingest(
     entries=None,
     account='claude-code',
 ):
-    from .reconciliation import aliases, link, snapshot, number
+    from .reconciliation import snapshot, number
 
     project = _project(item)
     count = 0

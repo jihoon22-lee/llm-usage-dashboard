@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import pwd
 import shutil
 import socket
 import subprocess

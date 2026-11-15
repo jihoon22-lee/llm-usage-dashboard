@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import time
 
-from .store import identity, TOKENS
+from .store import identity
 from .reconciliation import aliases, link, number
 
 MAX_BODY = 2 * 1024 * 1024

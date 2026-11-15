@@ -3,7 +3,7 @@
 import math
 
 from .claude_accounts import is_claude
-from .insights import quota_pace, window_seconds
+from .insights import quota_pace
 
 ROUTE_NAMES = {
     'codex': 'Codex',

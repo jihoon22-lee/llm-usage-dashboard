@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import pwd
 from pathlib import Path
 import sys
 import tempfile
@@ -63,7 +64,7 @@ class InstallerBoundaryTests(unittest.TestCase):
                     )
                     stack.enter_context(
                         patch.object(
-                            module.pwd,
+                            pwd,
                             'getpwnam',
                             side_effect=KeyError() if name == 'missing' else None,
                             return_value=account,
@@ -88,7 +89,7 @@ class InstallerBoundaryTests(unittest.TestCase):
                     stack.enter_context(patch.object(os, 'geteuid', return_value=0))
                     stack.enter_context(
                         patch.object(
-                            module.pwd, 'getpwnam', return_value=SimpleNamespace(**{**vars(self.owner), 'pw_dir': home})
+                            pwd, 'getpwnam', return_value=SimpleNamespace(**{**vars(self.owner), 'pw_dir': home})
                         )
                     )
                     stack.enter_context(patch.object(module, 'PROJECT', project))
@@ -151,7 +152,7 @@ class InstallerBoundaryTests(unittest.TestCase):
         with (
             patch.object(sys, 'argv', ['script', '--owner', 'fixture']),
             patch.object(os, 'geteuid', return_value=0),
-            patch.object(install.pwd, 'getpwnam', return_value=self.owner),
+            patch.object(pwd, 'getpwnam', return_value=self.owner),
             patch.object(install, 'PROJECT', self.root),
             patch.object(install, 'UNITS', units, create=True),
             patch.object(install, 'BACKUPS', backups, create=True),
@@ -197,7 +198,7 @@ class InstallerBoundaryTests(unittest.TestCase):
         with (
             patch.object(sys, 'argv', ['script', '--owner', 'fixture']),
             patch.object(os, 'geteuid', return_value=0),
-            patch.object(install.pwd, 'getpwnam', return_value=self.owner),
+            patch.object(pwd, 'getpwnam', return_value=self.owner),
             patch.object(install, 'PROJECT', self.root),
             patch.object(install, 'UNITS', units, create=True),
             patch.object(install, 'BACKUPS', backups, create=True),

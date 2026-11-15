@@ -1,6 +1,5 @@
 """Advisor ownership, detail coverage and cache pricing must survive replay."""
 
-import copy
 import json
 from pathlib import Path
 import tempfile
@@ -12,7 +11,7 @@ from llm_usage.collect import collect_file, model_provider, prepare_normalizatio
 from llm_usage.insights import token_total
 from llm_usage.pricing import estimate
 from llm_usage.reconciliation import supplements
-from llm_usage.store import Store, identity, stamp
+from llm_usage.store import Store, stamp
 
 NOW = stamp('2026-10-23T03:00:00Z')
 RATES = {

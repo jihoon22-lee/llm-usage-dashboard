@@ -1,5 +1,4 @@
 from contextlib import closing
-import io
 import json
 import os
 from pathlib import Path
@@ -1088,7 +1087,6 @@ class BackupTests(unittest.TestCase):
             self.assertEqual(list((root / 'backups').glob('*.tmp')), [])
 
     def test_prune_keeps_recent_and_mondays(self):
-        import gzip
         from llm_usage.backup import _prune
 
         with tempfile.TemporaryDirectory() as td:

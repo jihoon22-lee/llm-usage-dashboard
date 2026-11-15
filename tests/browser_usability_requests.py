@@ -1,6 +1,6 @@
 """Query races, recoverable failures and bounded requests using synthetic responses."""
 
-from browser_support import fixture_page, fixture_json, ORIGIN, watch_csp
+from browser_support import fixture_page, fixture_json, ORIGIN
 from playwright.sync_api import sync_playwright, expect
 
 

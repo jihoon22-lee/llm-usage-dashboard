@@ -55,6 +55,7 @@
 - 상태줄 수신 방식은 대시보드가 강제로 계정 조회하는 방식과 구분한다. TUI·원격·headless에서 실제 수신 가능 여부를 확인하며, 수신하지 못한 상태를 숨기지 않는다.
 - 의존성은 독립 checkout에서 uv 0.12.23의 `uv sync --locked`로 준비한다. 운영 서비스는 `packaging/deploy.py`가 릴리스마다 그 lock으로 만든 `releases/<commit>/.venv`로 실행한다. 릴리스 환경을 직접 동기화·수정하지 않으며, 의존성이 바뀐 버전도 사용자가 실제 운영 배포를 명시적으로 요청한 경우에만 배포기로 전환·재시작·운영 검증을 수행한다. 기본 checkout의 `.venv`는 배포 도구를 실행하고 새 릴리스 환경의 Python을 정하므로 다른 Python으로 다시 만들지 않는다. pyproject.toml과 uv.lock을 함께 관리한다.
 - 로직 변경의 기본 검증: `.venv/bin/python -m unittest discover -s tests -q`.
+- Python 변경: `uvx ruff@0.17.5 check .`와 `uvx ruff@0.17.5 format --check .`(CI의 `lint`와 같은 버전·설정). 배치는 포매터에 맡기고 손으로 줄을 합치지 않는다.
 - 집계 변경: 적합한 fixture와 `.venv/bin/python tests/verify_record_totals.py`의 원본 대조. 불완전한 이력과 카운터 초기화 사례는 따로 확인한다.
 - UI 변경: `llm_usage/web/*.js` 전체에 `node --check`, `node --test 'tests/js/*.test.mjs'`, Playwright가 설치된 Python으로 `tests/browser_smoke.py`. fixture 검증과 실제 인증/수동 갱신 검증을 구분한다.
 - API의 데이터 경로와 사용자 인터페이스에 영향을 주는 코드 변경은 해당 검증을 실행한다. AGENTS.md 등 문서만 수정할 때는 내용·링크·diff 검사로 충분하다.

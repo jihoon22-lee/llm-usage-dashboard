@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import subprocess
@@ -266,7 +267,7 @@ class UnitUpdateTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, 'argv', ['system_update.py', '--owner', 'owner', *argv]))
             stack.enter_context(patch.object(os, 'geteuid', return_value=0))
-            stack.enter_context(patch.object(update.pwd, 'getpwnam', return_value=owner))
+            stack.enter_context(patch.object(pwd, 'getpwnam', return_value=owner))
             for name, value in (
                 ('PROJECT', self.project),
                 ('WEB', self.web),

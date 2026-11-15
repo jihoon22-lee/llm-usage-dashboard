@@ -1,5 +1,4 @@
 from contextlib import closing
-import json
 from pathlib import Path
 import shutil
 import sqlite3

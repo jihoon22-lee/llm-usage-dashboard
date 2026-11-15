@@ -1,6 +1,6 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
 
-from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
+from browser_support import CSP_HEADERS, watch_csp, fixture_page
 import argparse
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit

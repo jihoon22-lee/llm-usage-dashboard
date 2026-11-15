@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from llm_usage import codex_activity as activity
 from llm_usage import codex_activity_collect as collector
-from llm_usage.store import Store, identity, stamp
+from llm_usage.store import Store, stamp
 from llm_usage.webapp import create_app
 
 NOW = stamp('2026-10-24T03:00:00Z')

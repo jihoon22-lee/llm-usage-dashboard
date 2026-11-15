@@ -350,7 +350,7 @@ def collect(store, settings, fetch=None, now=None, page_limit=3, detail_limit=12
         return
     try:
         account, headers, signature = authentication(settings)
-    except Exception as exc:
+    except Exception:
         with store.connect() as c:
             store.save_state(c, 'codex_activity:account', dict(key=None, status='unavailable', checked=now))
             for source in data.SOURCES:

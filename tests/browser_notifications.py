@@ -1,6 +1,6 @@
 """Real worker lifecycle plus failure isolation, with disposable synthetic API snapshots."""
 
-from browser_support import CSP_HEADERS, watch_csp, fixture_client, Sock
+from browser_support import watch_csp, fixture_client, Sock
 from playwright.sync_api import sync_playwright, expect
 from browser_support import fixture_page, ORIGIN
 import time

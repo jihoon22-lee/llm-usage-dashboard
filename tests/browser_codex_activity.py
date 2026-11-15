@@ -1,7 +1,6 @@
 """Consumption navigation, real Flask projections and mobile layouts with synthetic data."""
 
 import argparse
-import json
 from pathlib import Path
 import socket
 import tempfile
