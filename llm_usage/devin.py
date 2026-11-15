@@ -14,14 +14,14 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-from .store import identity, project_label
+from .store import EFFORT_LEVELS, identity, project_label
 
 DB_RELS = ('.local/share/devin/cli/sessions.db', 'AppData/Roaming/devin/cli/sessions.db')
 
 # generation_model is a compound id: model name plus trailing reasoning level or
 # mode token ('swe-2-max', 'swe-1-6-fast', 'claude-opus-5-high'). Split it so the
 # stored model reads as the model with its level, e.g. 'swe-2 (max)'.
-MODEL_VARIANTS = frozenset({'low', 'medium', 'high', 'max', 'fast'})
+MODEL_VARIANTS = frozenset({*EFFORT_LEVELS[1:], 'fast'})
 
 
 def model_name(generation_model):

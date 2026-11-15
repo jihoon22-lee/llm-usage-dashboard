@@ -35,6 +35,21 @@ class EffortTests(unittest.TestCase):
         self.assertEqual([model_effort(m) for m in ('swe-2 (max)', 'claude-sonnet-5-5-high', 'gemini-3.1-pro-low', 'gpt-6-astra', 'gemini-3.8-flash-n', None)],
                          ['max', 'high', 'low', None, None, None])
 
+    def test_an_effort_word_ending_a_model_name_counts_only_where_the_route_names_efforts(self):
+        tokens = dict(uncached_input=10, output=1)
+        with self.store.connect() as c:
+            self.store.turn_effort(c, 'turns', NOW-7200, 'low')
+            self.store.event(c, 'c1', NOW-3600, 'OpenAI', 'codex', 'gpt-x-codex-max', tokens, session='turns')
+            self.store.event(c, 'c2', NOW-3600, 'OpenAI', 'codex', 'gpt-x-codex-max', tokens, session='no-turn')
+            self.store.event(c, 'o1', NOW-3600, 'OpenAI', 'opencode-go', 'gpt-x-codex-max', tokens)
+            self.store.event(c, 'd1', NOW-3600, 'Cognition', 'devin', 'swe-x (max)', tokens)
+        self.assertEqual({k: v[0] for k, v in self.efforts().items()}, {'c1': 'low', 'c2': None, 'o1': None, 'd1': 'max'})
+        usage = self.store.usage(period='today', sections='core', now=NOW)
+        self.assertEqual({(e['route'], e['model'], e['effort']) for e in usage['efforts']},
+                         {('codex', 'gpt-x-codex-max', 'low'), ('codex', 'gpt-x-codex-max', None),
+                          ('opencode-go', 'gpt-x-codex-max', None), ('devin', 'swe-x', 'max')})
+        self.assertTrue(self.store.rollup_matches())
+
     def test_claude_records_state_effort_and_speed_and_a_replay_without_them_keeps_them(self):
         with self.store.connect() as c:
             ingest_message(self.store, c, 'claude-code', claude('m1', 'xhigh', speed='fast'))

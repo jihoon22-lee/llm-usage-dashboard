@@ -71,7 +71,7 @@ class NotifyTests(unittest.TestCase):
         return dict(low_percent=15,limits=[dict(route='claude-code',bucket='five_hour',remaining=remaining,resets=resets,status=status)])
 
     def run_eval(self,limits,config=None,now=NOW,**kw):
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=lambda r,timeout:(self.sent.append((r.full_url,json.loads(r.data))),Response())[1]):
+        with patch('llm_usage.notify._open',side_effect=lambda r,timeout:(self.sent.append((r.full_url,json.loads(r.data))),Response())[1]):
             return notify.evaluate(self.store,config if config is not None else {'ntfy_url':CHANNELS['ntfy_url']},now,limits,**kw)
 
     def test_transitions_are_sent_once_and_first_sight_only_records(self):
@@ -204,7 +204,7 @@ class NotifyTests(unittest.TestCase):
             captured.append((request.full_url,json.loads(request.data)))
             if 'telegram' in request.full_url:raise OSError('boom BOT-SECRET')
             return Response()
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=opener):
+        with patch('llm_usage.notify._open',side_effect=opener):
             errors=notify.send(CHANNELS,'제목','본문')
         self.assertEqual([u for u,_ in captured],['https://ntfy.example','https://hooks.example/abc/SECRET','https://api.telegram.org/botBOT-SECRET/sendMessage'])
         self.assertEqual(captured[1][1],{'content':'**제목**\n본문','text':'**제목**\n본문'})
@@ -216,7 +216,7 @@ class NotifyTests(unittest.TestCase):
     def test_delivery_outcome_is_a_source_without_secrets(self):
         self.sent=[]
         self.run_eval(self.limits(50))
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=OSError('down')):
+        with patch('llm_usage.notify._open',side_effect=OSError('down')):
             notify.evaluate(self.store,{'webhook_url':CHANNELS['webhook_url']},NOW,self.limits(10))
         with self.store.connect() as c:
             row=dict(c.execute("SELECT status,detail FROM sources WHERE name='외부 알림'").fetchone())
@@ -233,7 +233,7 @@ class NotifyTests(unittest.TestCase):
         self.run_eval(None,now=NOW+41*60,sources=[dict(name='codex',status='ok')])
         self.assertEqual(self.run_eval(None,now=NOW+80*60,sources=failing),[])
         with self.store.connect() as c:self.store.save_state(c,'collector',dict(status='idle',checked=NOW-25*60))
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=lambda r,timeout:Response()):
+        with patch('llm_usage.notify._open',side_effect=lambda r,timeout:Response()):
             sent=notify.collector_started(self.store,{'ntfy_url':CHANNELS['ntfy_url']},NOW)
         self.assertIn('약 25분',sent[0][2])
 
@@ -338,9 +338,9 @@ class WebSignalTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root/'local.json').read_text())['notify']['ntfy_url'],CHANNELS['ntfy_url'])
         self.assertEqual(self.post('/api/config/notify',{'webhook_url':'http://plain'}).status_code,400)
         self.assertEqual(self.post('/api/config/notify',{'quiet':[5,5]}).status_code,400)
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=lambda r,timeout:Response()):
+        with patch('llm_usage.notify._open',side_effect=lambda r,timeout:Response()):
             self.assertEqual(self.post('/api/notify/test',{}).get_json(),{'channels':['ntfy'],'errors':{}})
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=OSError('down')):
+        with patch('llm_usage.notify._open',side_effect=OSError('down')):
             failed=self.post('/api/notify/test',{})
         self.assertEqual((failed.status_code,failed.get_json()['error']),(502,'전송 실패: ntfy OSError'))
         self.post('/api/config/notify',{'ntfy_url':''})

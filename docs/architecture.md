@@ -15,7 +15,7 @@ flowchart LR
 
 ## 역할과 집계
 
-로컬 기록·계정 한도는 기본 5분, 상태줄 수신함은 2초 루프에서 확인합니다. 최초 원본 수집은 더 오래 걸릴 수 있습니다.
+로컬 기록·계정 한도는 기본 5분, 상태줄 수신함은 2초 루프에서 확인합니다. 최초 원본 수집은 더 오래 걸릴 수 있습니다. 수집기 heartbeat는 수집을 마칠 때와 대기 중 30초마다 기록합니다.
 웹은 수집 요청 ID를 기록하고 수집기는 완료 ID와 소스별 결과를 갱신합니다. Resource Guard는 선택적 통합입니다.
 collect/antigravity/devin/limits/statusline은 원본·한도, store는 이벤트·상태·한도·롤업, pricing은 단가 이력, webapp은 인증·조회·설정 API를 담당합니다.
 resources는 자원·계정 관측과 수동 기록을 담당합니다. 브라우저 observations/resources 모듈은 quota/app보다 먼저 로드하며 관측 시계·오프라인 경과·자원 갱신을 유지합니다.

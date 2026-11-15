@@ -78,10 +78,17 @@ def masked(notify):
                 quiet=notify.get('quiet'))
 
 
+def _open(request,timeout):
+    """Like every other outbound call, a redirect is not followed: it would repeat the request
+    as a GET without the message, and the answer would read as a delivery."""
+    from .limits import NoRedirect
+    return urllib.request.build_opener(NoRedirect).open(request,timeout=timeout)
+
+
 def _post(url,payload,timeout):
     data=json.dumps(payload,ensure_ascii=False).encode()
     request=urllib.request.Request(url,data=data,headers={'Content-Type':'application/json'})
-    with urllib.request.urlopen(request,timeout=timeout) as response:response.read(256)
+    with _open(request,timeout=timeout) as response:response.read(256)
 
 
 def send(notify,title,body,timeout=10):
@@ -360,9 +367,10 @@ def deliver(store,notify,messages,now):
     return sent
 
 
-def record_failure(store,exc):
-    """An exception in evaluation is shown, not swallowed; collection continues."""
-    with store.connect() as c:store.source(c,SOURCE,'error',f'알림 판단 실패 ({type(exc).__name__})')
+def record_failure(store,exc,what='알림 판단'):
+    """An exception in evaluation is shown, not swallowed; collection continues. `what`
+    names the step that failed (the weekly report and the monthly settlement run beside it)."""
+    with store.connect() as c:store.source(c,SOURCE,'error',f'{what} 실패 ({type(exc).__name__})')
 
 
 def collector_started(store,notify,now=None):

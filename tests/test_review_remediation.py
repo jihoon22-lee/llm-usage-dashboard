@@ -79,7 +79,7 @@ class OutboxTests(Base):
             if fail:raise OSError('down')
             payload=json.loads(request.data);self.sent.append(payload['title'])
             self.bodies=getattr(self,'bodies',[])+[payload['message']];return Response()
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=opener):
+        with patch('llm_usage.notify._open',side_effect=opener):
             return notify.deliver(self.store,config,messages,now)
 
     def test_quiet_hours_hold_then_send_after(self):
@@ -292,7 +292,7 @@ class FeatureTests(Base):
         from types import SimpleNamespace
         from llm_usage.webapp import create_app
         app=create_app(dict(database=self.store.path,origin='https://pc.example',secret_key='t',allowed_logins=['owner']))
-        with patch('llm_usage.notify.urllib.request.urlopen',side_effect=lambda r,timeout:Response()):
+        with patch('llm_usage.notify._open',side_effect=lambda r,timeout:Response()):
             notify.deliver(self.store,{'ntfy_url':'https://ntfy.example/SECRET-TOPIC'},[('low','잔여 적음','본문')],NOW)
         r=app.test_client().get('/api/notify/log',base_url='https://pc.example',headers={'Tailscale-User-Login':'owner'},
                                 environ_overrides={'gunicorn.socket':SimpleNamespace(family=socket.AF_UNIX)})

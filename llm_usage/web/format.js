@@ -211,7 +211,7 @@ const sourceName=name=>{if(CODEX_SOURCE_NAMES[name])return CODEX_SOURCE_NAMES[na
 // The source kind without the account suffix: 'claude-oauth:<hash>' → 'claude-oauth'.
 const sourceBase=name=>String(name||'').replace(/:[0-9a-f]{12}$/,'');
 const SOURCE_GROUPS=[['Claude',/claude/i],['Codex',/codex/i],['Antigravity',/antigravity/i],['Devin',/devin/i],['OpenCode',/opencode/i],
- ['운영',/^(수집기|일일 백업|원본 대조|외부 알림|데이터베이스)$/],['내부 작업',/^(normalization|session-backfill)$/]];
+ ['운영',/^(수집기|일일 백업|원본 대조|외부 알림|웹 설정|데이터베이스)$/],['내부 작업',/^(normalization|session-backfill)$/]];
 const SOURCE_RANK={error:0,unavailable:1,partial:2,stale:3,ok:4,fresh:4,idle:5,ended:5};
 const SOURCE_HINTS={error:'수집에 실패했습니다. 다음 주기에 다시 시도하며, 계속되면 상세 문구의 원인을 확인하세요.',
  unavailable:'경로·구독·실행 중인 앱이 없어 지금은 수집하지 않습니다.',

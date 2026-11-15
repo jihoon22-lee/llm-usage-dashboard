@@ -47,7 +47,7 @@ def fixture(folder):
         for name in ('codex','claude-oauth'):store.source(c,name,'ok','',now-60)
         store.save_state(c,'collector',dict(status='idle',checked=now-30))
         store.save_state(c,'last_local',now-60)
-    with patch('llm_usage.notify.urllib.request.urlopen',side_effect=OSError('down')):
+    with patch('llm_usage.notify._open',side_effect=OSError('down')):
         notify.deliver(store,{'ntfy_url':'https://ntfy.example/topic'},[('low','Codex 주간 잔여 12%','본문')],now)
     return store
 
