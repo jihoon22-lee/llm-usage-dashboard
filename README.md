@@ -37,6 +37,7 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 | Antigravity | CLI/앱 SQLite | 상태줄·실행 중인 WSL 앱 | 내부 스키마/RPC 변경에 영향받음 |
 | OpenCode Go | 로컬 SQLite | 계정 usage 경로 | 구독 계정의 실제 한도 수신 미검증 |
 | Devin CLI | 로컬 SQLite | 기존 CLI 계정 경로 | 내부 API, Cloud 세션 미지원 |
+| Aside | 세션 JSONL(`.aside`) | 없음(Codex·Claude 한도에 포함) | ChatGPT(Codex)·Claude 구독으로 보낸 요청만, 비공개 형식 |
 
 Codex 부분 응답에서 계정 ID가 빠져도 저장된 계정 유형·이메일 기반 revision이 일치하면 기존 계정 합계를 유지합니다. 이는 인증 토큰 일치 검사가 아니며, 다른 계정 ID나 변경된 revision은 별도 계정으로 처리합니다. Claude 보조 `events` API의 404는 보조 조회만 세션 변경 또는 24시간 뒤에 재시도하며, 최근 15분 내 갱신된 세션의 본문 조회는 계속합니다. 두 경계 조건은 합성 응답으로 검증했으며 실제 계정 장애 재현은 수행하지 않았습니다.
 

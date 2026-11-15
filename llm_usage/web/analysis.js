@@ -302,7 +302,7 @@ function renderReconciliation(r){
   +(r.conflicts?.length?`<span class="reconciliation-warning">충돌 ${fmt(r.conflicts.length)}건</span>`:'')
   +'<span class="reconciliation-toggle">상세 보기</span></summary><div class="reconciliation-detail">'
   +`<p>요청 기록 ${compact(r.recorded_tokens)} + 서버 누계 보완 ${compact(r.supplemental_tokens)} 토큰</p>`
-  +(r.origin_tokens?`<p>세부 기록 출처 · 로컬 ${compact(r.origin_tokens.local||0)} · 클라우드 ${compact(r.origin_tokens.cloud||0)} · telemetry ${compact(r.origin_tokens.telemetry||0)} 토큰</p>`:'')
+  +(r.origin_tokens?`<p>세부 기록 출처 · 로컬 ${compact(r.origin_tokens.local||0)} · 클라우드 ${compact(r.origin_tokens.cloud||0)} · telemetry ${compact(r.origin_tokens.telemetry||0)}${r.origin_tokens.aside?` · Aside ${compact(r.origin_tokens.aside)}`:''} 토큰</p>`:'')
   +(r.unallocated_tokens?`<p>날짜 미배분 ${compact(r.unallocated_tokens)} 토큰은 기간 합계에 포함되며 일별 차트에는 배분하지 않습니다.</p>`:'')
   +intervals(r.unallocated_intervals,'합계 포함 · 날짜 미배분')
   +intervals(r.overlapping_intervals,'합계 제외 · 기간 경계에 걸친 구간')

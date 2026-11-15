@@ -38,6 +38,9 @@ events와 usage_hourly는 같은 트랜잭션의 트리거로 유지합니다. �
 | OpenCode Go | opencode.db, Go usage 경로 | 토큰 수집; 당시 계정 구독 오류로 한도 실수신 미확인 |
 | Antigravity | CLI/앱 conversations DB, 상태줄·WSL RPC | CLI 1.1.28/language server 2.19.1 원본 확인; 앱 실행과 내부 스키마 의존 |
 | Devin CLI | sessions.db, 기존 CLI 계정 상태 경로 | 로컬 요청·일/주간 한도 실수신; Cloud 미지원, 당시 Windows DB 빈 스키마 |
+| Aside | `.aside/u/<프로필>/sessions/*/messages.jsonl`, 자체 한도 없음 | Aside 1.26.1115의 세션 기록으로 확인; 비공개 형식, 구독 외 경로(API 키 등)의 요청은 읽지 않음 |
+
+Aside는 에이전트가 ChatGPT(Codex)·Claude 구독으로 모델을 직접 부르는 브라우저입니다. 그 요청은 Codex·Claude Code 기록 폴더에 남지 않으므로 선택한 홈의 Aside 세션 파일에서 모델·토큰·추론 수준·시각만 읽어, 쓰인 구독의 경로(`codex`, `claude-code`)에 저장합니다. 응답 ID로 한 번만 세고(압축·분기 뒤 같은 응답이 파일에 다시 나옵니다), 프로젝트는 `Aside` 하나로 묶으며, 기록 출처는 `Aside`로 구분합니다. Codex 쪽은 계정 일별 합계에 이미 들어 있던 사용이라 `로컬 미기록`이 그만큼 줄어듭니다. Claude 쪽은 어느 계정의 로그인인지 기록에 없어, 계정이 여러 개면 계정 구분 규칙에 따라 `계정 미확인`이 될 수 있습니다. Aside 안에서 chatgpt.com·claude.ai 웹 채팅을 쓴 것은 토큰 기록이 없어 수집하지 못합니다.
 
 Antigravity의 loopback RPC는 자체 서명 인증서를 사용하는 로컬 서버에만 연결하며 최소 TLS 1.2를 요구합니다.
 Antigravity는 RetrieveUserQuotaSummary를 우선하고 GetUserStatus로 대체할 수 있습니다. 응답에 없는 창은 만들지 않습니다. 일부 생략된 proto3 float 0은 확인된 스키마 의미대로 처리합니다.

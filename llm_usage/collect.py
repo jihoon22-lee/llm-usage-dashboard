@@ -84,6 +84,11 @@ def retire_legacy_sources(store):
 
 
 def parse_line(store, c, route, d, state):
+    if route == 'aside':
+        from .aside import ingest_line
+
+        ingest_line(store, c, d, state)
+        return
     typ = d.get('type')
     p = d.get('payload', {})
     if route == 'codex':
@@ -241,6 +246,11 @@ def collect_file(store, path, route):
             offset = 0
             state = {}
             c.execute('DELETE FROM import_errors WHERE source=?', (key,))
+        if route == 'aside':
+            # The lines do not name their session: it is the folder the file sits in.
+            from .aside import session_id
+
+            state['session'] = session_id(path)
         with open_record(path) as f:
             f.seek(offset)
             while True:
@@ -410,9 +420,11 @@ def collect_opencode(store, path):
 def local_sources(store, settings):
     from .claude_accounts import observed_homes, transcript_sources
 
+    from .aside import sources as aside_sources
+
     with store.connect() as c:
         known = observed_homes(store, c)
-    return transcript_sources(settings, known)
+    return transcript_sources(settings, known) + aside_sources(settings)
 
 
 def collect_local(store, settings, *, include_derived=True):
