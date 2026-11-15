@@ -38,7 +38,7 @@ def failed(result):
         or dev['source_errors']
         or any(
             (result.get(section) or {}).get(k, 0)
-            for section in ('codex_original', 'claude', 'opencode')
+            for section in ('codex_original', 'claude', 'opencode', 'aside')
             for k in ('missing_events', 'mismatched_events', 'source_errors', 'source_conflicts')
         )
         or any(
@@ -60,7 +60,7 @@ def partial(result):
     return bool(
         any(
             (result.get(s) or {}).get(k, 0)
-            for s in ('codex_original', 'claude', 'opencode')
+            for s in ('codex_original', 'claude', 'opencode', 'aside')
             for k in (
                 'unreadable_records',
                 'pending_files',

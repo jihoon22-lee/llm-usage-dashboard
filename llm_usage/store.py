@@ -2537,7 +2537,7 @@ class Store:
             from .verify import partial
 
             bad = not verify.get('ok')
-            sections = ('antigravity', 'devin', 'codex_original', 'claude', 'opencode')
+            sections = ('antigravity', 'devin', 'codex_original', 'claude', 'opencode', 'aside')
             misses = sum((verify.get(s) or {}).get('missing_events', 0) for s in sections)
             mismatch = verify.get('codex', {}).get('mismatches', 0) + sum(
                 (verify.get(s) or {}).get('mismatched_events', 0) for s in sections

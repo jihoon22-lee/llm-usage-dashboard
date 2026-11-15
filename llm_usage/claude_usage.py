@@ -41,13 +41,30 @@ def components(usage):
         try:
             five, hour = counter(five), counter(hour)
             if five + hour != values['cache_creation']:
-                raise ValueError('cache detail total differs')
+                five, hour = call_split(usage, values['cache_creation'])
             values.update(cache_creation_5m=five, cache_creation_1h=hour, cache_ttl_observed=1)
         except ValueError:
             values.update(cache_creation_unknown=values['cache_creation'], _cache_error=True)
     else:
         values['cache_creation_unknown'] = values['cache_creation']
     return values
+
+
+def call_split(usage, total):
+    """The cache split of a response that made several model calls (an advisor consulted
+    between them): the top-level split then holds only the first call's, while the total
+    adds every call. The calls' own splits, added up, must give that total."""
+    calls = [p for p in usage.get('iterations') or [] if isinstance(p, dict) and p.get('type') == 'message']
+    five = hour = 0
+    for part in calls:
+        ttl = part.get('cache_creation')
+        if not isinstance(ttl, dict):
+            raise ValueError('invalid cache details')
+        five += counter(ttl.get('ephemeral_5m_input_tokens'))
+        hour += counter(ttl.get('ephemeral_1h_input_tokens'))
+    if not calls or five + hour != total:
+        raise ValueError('cache detail total differs')
+    return five, hour
 
 
 def detail_status(store, c, key, values):

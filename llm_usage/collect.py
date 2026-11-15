@@ -83,6 +83,30 @@ def retire_legacy_sources(store):
         store.save_state(c, 'legacy-sources-v1', True)
 
 
+def reread_claude_cache_splits(store):
+    """Once: read again, from the start, the Claude files of the responses whose cache split
+    was left unknown because only the first model call's split sat at the top (several calls
+    in one response). Only those sessions' files: a parser version would re-read every file."""
+    with store.connect() as c:
+        if store.state(c, 'claude-cache-calls-v1'):
+            return
+        sessions = {
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT e.session FROM import_errors i JOIN events e ON i.record=e.id || ':cache' "
+                "WHERE i.source='claude-details' AND e.route LIKE 'claude-code%' AND e.session IS NOT NULL"
+            )
+        }
+        # A Claude session's files are `<session>.jsonl` and those under `<session>/`.
+        for key, data in c.execute("SELECT key,data FROM state WHERE key LIKE 'file:%'").fetchall():
+            if any(s in key for s in sessions):
+                checkpoint = json.loads(data)
+                if isinstance(checkpoint, dict):
+                    checkpoint['parser_version'] = 0
+                    store.save_state(c, key, checkpoint)
+        store.save_state(c, 'claude-cache-calls-v1', True)
+
+
 def parse_line(store, c, route, d, state):
     if route == 'aside':
         from .aside import ingest_line
@@ -1025,6 +1049,7 @@ def run(settings, once=False):
             fcntl.flock(handle, fcntl.LOCK_EX)
         repair_provider_labels(store)
         retire_legacy_sources(store)
+        reread_claude_cache_splits(store)
         store.rebuild_rollup()
         last_local = last_limits = last_accounts = 0
         with store.connect() as c:

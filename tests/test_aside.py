@@ -4,11 +4,13 @@ itself are stored under those subscriptions' routes, once each, and nothing but 
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from llm_usage import aside
 from llm_usage.collect import collect_local
 from llm_usage.store import Store, identity, stamp
+from llm_usage.verify import failed, partial, reconcile
 
 CONVERSATION = 'CONVERSATION-TEXT-MUST-NOT-BE-STORED'
 T0 = stamp('2026-11-09T03:00:00Z')
@@ -136,6 +138,48 @@ class AsideTests(unittest.TestCase):
         # Reasoning above the output is refused as well: three lines are counted, one is stored.
         self.assertEqual([e['output'] for e in self.events()], [20])
         self.assertEqual(self.source(), ('partial', '1개 기록 파일 확인 · 해석 실패 3건'))
+
+    def test_daily_check_reads_the_session_files_apart_from_the_collector(self):
+        self.write(
+            's1',
+            [
+                response('resp_1', reasoning=5),
+                response('msg_1', 'claude-code', 'claude-test', at=60, cacheWrite=300, cacheWrite1h=100),
+                response('resp_1', reasoning=5),  # replayed after a compaction: one request
+                response(None, at=90),
+                response('other', 'openrouter', 'some-model', at=120),
+            ],
+        )
+        self.write('s2', [response('resp_1', reasoning=5)])  # a branch: the response again, in another folder
+        self.collect()
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual(
+            {k: result['aside'][k] for k in ('source_files', 'requests', 'matched_requests', 'missing_events')},
+            {'source_files': 2, 'requests': 3, 'matched_requests': 3, 'missing_events': 0},
+        )
+        self.assertFalse(failed(result))
+        self.assertFalse(partial(result))
+        # Lines written after the collector's checkpoint wait for it, not counted as missing.
+        self.write('s1', [response('resp_2', at=150)], mode='a')
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual((result['aside']['pending_files'], result['aside']['missing_events']), (1, 0))
+        self.assertTrue(partial(result))
+        self.collect()
+        # A stored request that is lost, or that disagrees with its line, fails the check.
+        with self.store.connect() as c:
+            c.execute('DELETE FROM events WHERE id=?', (identity('claude-code', 'msg_1'),))
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual((result['aside']['missing_events'], result['aside']['mismatched_events']), (1, 0))
+        self.assertTrue(failed(result))
+        with self.store.connect() as c:
+            c.execute("UPDATE events SET output=output-1 WHERE route='codex' AND output>0")
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual(result['aside']['mismatched_events'], 3)
+        with self.store.connect() as c:
+            self.store.save_state(c, 'verify', dict(ts=time.time(), ok=not failed(result), **result))
+        source = next(s for s in self.store.usage(period='all')['sources'] if s['name'] == '원본 대조')
+        self.assertEqual(source['status'], 'error')
+        self.assertIn('누락 1건 · 불일치 3건', source['detail'])
 
     def test_claude_requests_take_the_account_the_setting_names(self):
         from unittest.mock import patch
