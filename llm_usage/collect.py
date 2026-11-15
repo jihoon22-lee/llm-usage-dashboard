@@ -1078,6 +1078,10 @@ def run(settings, once=False):
                         resolve(store, c)
                     from .claude_attribution import refresh as attribute_accounts
 
+                    from .aside import attribute as attribute_aside
+
+                    # Before the resolver: it assigns the requests this marks.
+                    attribute_aside(store, current_settings)
                     attribute_accounts(store, current_settings, evidence=False)
                 last_local = time.time()
             if once or manual or now - last_limits >= 300:

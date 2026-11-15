@@ -137,6 +137,48 @@ class AsideTests(unittest.TestCase):
         self.assertEqual([e['output'] for e in self.events()], [20])
         self.assertEqual(self.source(), ('partial', '1개 기록 파일 확인 · 해석 실패 3건'))
 
+    def test_claude_requests_take_the_account_the_setting_names(self):
+        from unittest.mock import patch
+
+        from llm_usage import claude_attribution
+        from llm_usage.claude_accounts import UNKNOWN
+
+        first, second = 'a' * 64, 'b' * 64
+        other = 'claude-code:' + second[:12]
+        self.write('s1', [response('msg_1', 'claude-code', 'claude-test'), response('resp_1', at=5)])
+        self.collect()
+        with self.store.connect() as c:
+            c.executemany(
+                'INSERT INTO claude_accounts VALUES (?,?,?,?,?)',
+                [('claude-code', first, 1, 1, '{}'), (other, second, 1, 1, '{}')],
+            )
+            self.store.save_state(c, 'claude_primary_account', first)
+            c.execute("UPDATE events SET account=? WHERE route='claude-code'", (UNKNOWN,))  # as the resolver left it
+
+        def resolve(settings):
+            marked = aside.attribute(self.store, settings)
+            with patch.object(claude_attribution, 'home_candidates', return_value=[]):
+                claude_attribution._resolve(self.store, settings)
+            with self.store.connect() as c:
+                return marked, dict(c.execute('SELECT route,account FROM events'))
+
+        # No setting: nothing is claimed. The Codex request is never touched.
+        self.assertEqual(resolve(self.settings), (0, {'claude-code': UNKNOWN, 'codex': None}))
+        self.assertEqual(
+            resolve({**self.settings, 'aside_claude_account': 'claude-code'}),
+            (1, {'claude-code': 'claude-code', 'codex': None}),
+        )
+        self.assertEqual(resolve({**self.settings, 'aside_claude_account': 'claude-code'})[0], 0)  # settled
+        # Another login: the earlier evidence goes, so the request is not ambiguous.
+        self.assertEqual(resolve({**self.settings, 'aside_claude_account': other})[1]['claude-code'], other)
+        # An account this dashboard does not know is said, and nothing is claimed.
+        self.assertEqual(resolve({**self.settings, 'aside_claude_account': 'claude-code:000000000000'})[0], 0)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='Aside 계정'").fetchone()[0], 'error')
+        resolve({**self.settings, 'aside_claude_account': other})
+        with self.store.connect() as c:
+            self.assertIsNone(c.execute("SELECT 1 FROM sources WHERE name='Aside 계정'").fetchone())
+
     def test_only_selected_homes_and_explicit_sources_are_read(self):
         self.write('s1', [response('resp_1')])
         other = self.root / 'elsewhere' / 'sessions'
