@@ -180,7 +180,11 @@ def pricing_origins(settings):
     decision = {}
     for index, layer in enumerate(pricing_layers(settings)):
         for model, value in layer.items():
-            decision[model] = (index, value)
+            # As in _merge: an entry that cannot be used decides nothing, so the row is not
+            # labelled with a layer whose rates are not the ones applied.
+            usable = value is None or value == 'builtin' or _valid(value)
+            if usable or (isinstance(value, list) and any(_valid(e) for e in value)):
+                decision[model] = (index, value)
     origins = {}
     for model, (index, value) in decision.items():
         if value is None:
@@ -207,6 +211,8 @@ def _valid(rates):
         and _number(rates.get('input'))
         and _number(rates.get('output'))
         and all(_number(rates[key]) for key in RATE_KEYS if rates.get(key) is not None)
+        # A dated entry's start is a 'YYYY-MM-DD' text; a number or null there cannot be ordered.
+        and ('since' not in rates or isinstance(rates['since'], str))
     )
 
 

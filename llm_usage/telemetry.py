@@ -279,6 +279,10 @@ def ingest(store, data, now=None):
 
 def handler(store, token):
     class Handler(BaseHTTPRequestHandler):
+        # Applies from the first byte, before the token is checked: a connection that sends
+        # nothing is closed instead of holding a thread.
+        timeout = 10
+
         def log_message(self, *args):
             pass
 

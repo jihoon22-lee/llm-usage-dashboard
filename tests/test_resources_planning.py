@@ -270,6 +270,18 @@ class ResourcesPlanningTests(unittest.TestCase):
                 row['resets'] = self.now + 1800
         self.assertEqual(decide(data, 'codex')['state'], 'reset_pending')
 
+    def test_another_window_resetting_sooner_does_not_hide_a_shortage(self):
+        data = self.paced()
+        for row in data['limits']:
+            if row['bucket'] == 'codex · 300분':
+                row['remaining'] = 90
+                row['resets'] = self.now + 1800
+        # The 5-hour window resets in half an hour; the weekly one (12% left at 8%/h) still
+        # runs out in an hour and a half, inside the two planned hours.
+        result = decide(data, 'codex')
+        self.assertEqual((result['state'], result['bottleneck']), ('shortage', 'codex · 10080분'))
+        self.assertAlmostEqual(result['seconds'], 5400, delta=60)
+
     def test_specific_model_zero_does_not_hide_usable_other_model(self):
         for minute in range(30, -1, -5):
             with self.store.connect() as c:

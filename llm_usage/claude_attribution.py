@@ -426,6 +426,8 @@ def _resolve(store, settings, limit=None):
 def summarize(store, c, accounts):
     """Status row of account attribution, shown once a second Claude account exists."""
     if accounts < 2:
+        # No row is shown for one account, so an earlier failure must not outlive its cause.
+        c.execute("DELETE FROM sources WHERE name='claude-accounts' AND status='error'")
         return
     hooks = c.execute("SELECT COUNT(*),MAX(ts) FROM claude_evidence WHERE kind LIKE 'hook:%'").fetchone()
     unknown = c.execute(
@@ -455,11 +457,14 @@ def refresh(store, settings, *, evidence=True):
         # The status row needs counting queries; refresh it on change or once a minute.
         if changed or errors or time.time() - _summarized.get(store.path, 0) >= 60:
             with store.connect() as c:
-                summarize(store, c, accounts)
+                # Either the failure or the summary: writing both each pass would renew the
+                # row's last success while the hook records stay unreadable.
                 if errors:
                     store.source_changed(
                         c, 'claude-accounts', 'error', '훅 기록 파일을 읽지 못했습니다 · 기존 계정 구분은 유지합니다.'
                     )
+                else:
+                    summarize(store, c, accounts)
             _summarized[store.path] = time.time()
         return changed
     except Exception as exc:  # never stops collection
