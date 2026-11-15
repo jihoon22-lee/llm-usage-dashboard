@@ -104,9 +104,46 @@ class ClaudeCloudTests(unittest.TestCase):
                       {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5), bad, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]})
         self.run_collect(api)
         self.assertEqual([r['output'] for r in self.rows()], [5, 7])
+        # Both reads of the session (transcript, then supplement) meet the entry: it stays
+        # counted after the second one, once, and the source says so.
         with self.store.connect() as c:
             self.assertEqual([tuple(r) for r in c.execute("SELECT source,record,kind FROM import_errors WHERE source LIKE 'claude-cloud:%'")],
-                             [('claude-cloud:session_cloud', '1', 'ValueError')])
+                             [('claude-cloud:session_cloud', 'msg_bad', 'ValueError')])
+            source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
+        self.assertEqual(source['status'], 'partial')
+        self.assertIn('해석 실패 1건', source['detail'])
+        # The session changed and is read from its start: what is readable now is no error.
+        api = FakeApi([[session('session_cloud', updated='2026-10-12T10:30:00Z')]],
+                      {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5), assistant('msg_bad', '2026-10-12T09:30:30Z', 6)]]})
+        self.run_collect(api)
+        self.assertEqual([r['output'] for r in self.rows()], [5, 6, 7])
+        with self.store.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM import_errors WHERE source LIKE 'claude-cloud:%'").fetchone()[0], 0)
+            source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
+        self.assertEqual(source['status'], 'ok')
+        self.assertNotIn('해석 실패', source['detail'])
+
+    def test_cloud_effort_is_kept_like_a_local_transcript_line(self):
+        entry = assistant('msg_1', '2026-10-12T09:30:00Z', 40)
+        entry['payload']['effort'] = 'high'
+        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[entry, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]})
+        self.run_collect(api)
+        self.assertEqual([r['effort'] for r in self.rows()], ['high', None])
+
+    def test_a_bogus_retry_after_cannot_stop_the_cloud_read_for_good(self):
+        def limited(url, headers):
+            raise HTTPError(url, 429, 'Too Many Requests', {'Retry-After': '4000000000'}, None)
+        self.run_collect(limited)
+        with self.store.connect() as c:
+            pause = self.store.state(c, 'claude-cloud:retry')
+        self.assertEqual(pause['next_attempt'], NOW + 86400)
+        def brief(url, headers):
+            raise HTTPError(url, 429, 'Too Many Requests', {'Retry-After': '900'}, None)
+        with self.store.connect() as c:
+            self.store.save_state(c, 'claude-cloud:retry', {})
+        self.run_collect(brief)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c, 'claude-cloud:retry')['next_attempt'], NOW + 900)
 
     def test_cloud_reasoning_is_kept_like_a_local_transcript_line(self):
         message = assistant('msg_1', '2026-10-12T09:30:00Z', 40)

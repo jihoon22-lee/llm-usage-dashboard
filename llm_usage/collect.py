@@ -20,7 +20,9 @@ from .store import Store, identity, project_label, stamp
 # session id belongs, a NaN time) fails only its own statement, so the record is counted
 # as unreadable and the rest of the source is still read.
 SQL_RECORD_ERRORS = (sqlite3.IntegrityError, sqlite3.ProgrammingError, sqlite3.InterfaceError, sqlite3.DataError)
-RECORD_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OverflowError, *SQL_RECORD_ERRORS)
+# RecursionError: a line nested deeper than the JSON parser follows is one unreadable record
+# too, not a reason to stop reading its file and every file after it.
+RECORD_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, *SQL_RECORD_ERRORS)
 
 # 4 reads the reasoning effort (Codex turn settings, Claude responses) from records read before.
 PARSER_VERSION=4

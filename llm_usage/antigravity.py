@@ -13,7 +13,7 @@ import re
 import sqlite3
 
 from .sqlite_ro import open_readonly
-from .store import TOKENS, identity
+from .store import TOKENS, identity, model_effort
 
 # 2: requests carry their conversation as an opaque session identity.
 PARSER_VERSION=3
@@ -160,12 +160,27 @@ def save_request(store,c,aliases,record):
     c.execute('INSERT OR REPLACE INTO antigravity_requests VALUES (?,?,?,?,?)',
               (key,best['ts'],best['model'],json.dumps(best,sort_keys=True),int(conflict)))
     # Unlike component-wise MAX, this retains a real snapshot and its output split.
-    # Explicit columns keep the nullable session/project/agent_kind fields NULL.
     # Explicit columns keep the project NULL (the conversation DB records no workspace).
-    c.execute('INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,agent_kind,reasoning_observed) '
-              'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    # REPLACE writes a whole new row, so the effort the model name states is written with it.
+    c.execute('INSERT OR REPLACE INTO events (id,ts,provider,route,model,uncached_input,cached_input,output,cache_creation,reasoning,session,agent_kind,reasoning_observed,effort) '
+              'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
               (key,best['ts'],best['provider'],'antigravity',best['model'],*(best[k] for k in TOKENS),
-               best.get('session'),'main' if best.get('session') else None,best.get('reasoning_observed',0)))
+               best.get('session'),'main' if best.get('session') else None,best.get('reasoning_observed',0),
+               model_effort(best['model'])))
+
+
+def repair_efforts(store):
+    """Once: requests saved again before the effort was written with them lost it, also
+    for conversations whose database is gone or unchanged and so is never read again."""
+    with store.connect() as c:
+        if store.state(c,'antigravity-effort-v1'):return
+        changed=0
+        for (model,) in c.execute("SELECT DISTINCT model FROM events WHERE route='antigravity' AND effort IS NULL").fetchall():
+            if model_effort(model):
+                changed+=c.execute("UPDATE events SET effort=? WHERE route='antigravity' AND model=? AND effort IS NULL",
+                                   (model_effort(model),model)).rowcount
+        store.save_state(c,'antigravity-effort-v1',True)
+        if changed:store.bump_data_version(c)
 
 
 def signature(path):
@@ -236,6 +251,7 @@ def roots(settings):
 
 
 def collect_databases(store,settings,provider_for):
+    repair_efforts(store)
     files=0;failed=0;missing=0;parse_errors=0
     for name,root,optional in roots(settings):
         try:

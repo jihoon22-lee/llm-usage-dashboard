@@ -349,6 +349,11 @@ class ReconciliationTests(unittest.TestCase):
                 client=http.client.HTTPConnection(*server.server_address,timeout=3)
                 client.request('POST','/v1/logs',body='{}',headers=headers)
                 response=client.getresponse();self.assertEqual(response.status,status);response.read();client.close()
+            # A body nested too deep to parse is refused like any other malformed one.
+            client=http.client.HTTPConnection(*server.server_address,timeout=10)
+            client.request('POST','/v1/logs',body='{"resourceLogs":'+'['*200000+']'*200000+'}',
+                           headers={'Authorization':'Bearer fixture-token','Content-Type':'application/json'})
+            response=client.getresponse();self.assertEqual(response.status,400);response.read();client.close()
         finally:server.shutdown();server.server_close();worker.join(timeout=3)
 
     def test_real_cloud_shape_parent_tool_and_model_usage(self):
