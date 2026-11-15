@@ -259,7 +259,8 @@ function renderEfforts(data){
  // A request often costs under a cent: keep three decimals there instead of rounding to $0.
  const perRequest=v=>v<0.1?'$'+v.toFixed(3):usd(v);
  const cells=e=>`<td>${e.effort?esc(e.effort):'<span class="na-text">미기록</span>'}</td><td>${tableNumber(e.requests)}</td><td>${per(e.tokens,e)}</td><td>${per(e.output,e)}</td>`
-  +`<td>${e.reasoning_observed&&e.output?percent(e.reasoning/e.output*100):'<span class="na-text">미제공</span>'}</td><td>${e.cost==null?'—':perRequest(e.cost/e.requests)}</td>`;
+  // Reasoning is known for the requests that reported it only; with some missing the share is a floor.
+  +`<td>${e.reasoning_observed&&e.output?percent(e.reasoning/e.output*100)+(e.reasoning_observed<e.requests?`<small data-tip="추론 값을 받은 요청만의 합을 전체 출력으로 나눈 값이라 실제보다 낮을 수 있습니다">수신 ${fmt(e.reasoning_observed)}건</small>`:''):'<span class="na-text">미제공</span>'}</td><td>${e.cost==null?'—':perRequest(e.cost/e.requests)}</td>`;
  box.innerHTML=`<div class="table-wrap"><table class="effort-table"><thead><tr><th scope="col">모델</th><th scope="col">추론 수준</th><th scope="col">요청</th><th scope="col">요청당 토큰</th><th scope="col">요청당 출력</th><th scope="col">출력 중 추론</th><th scope="col">요청당 비용</th></tr></thead><tbody>`
   +shown.map(rows=>rows.sort((a,b)=>rank(a)-rank(b)).map((e,i)=>`<tr${i?'':' class="effort-first"'}>${i?'<td></td>':`<td rowspan="1">${esc(e.model)}<small>${esc(routeNames[e.route]||e.route)}</small></td>`}${cells(e)}</tr>`).join('')).join('')
   +'</tbody></table></div>';

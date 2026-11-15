@@ -35,7 +35,24 @@ def _read_json(path):
 def with_local(data):
     """Overlay the web-edited keys stored in local.json on a config mapping."""
     local = _read_json(local_path(data)) if data.get('database') else {}
+    if not isinstance(local, dict):
+        local = {}
     return {**data, **{key: local[key] for key in LOCAL_KEYS if key in local}}
+
+
+def local_problem(data):
+    """Why local.json cannot be used (the error's type), or None. Reading falls back to
+    the base settings then, which must be said: alerts, prices and ended subscriptions
+    set in the web UI stop applying. A missing file is not a problem."""
+    if not data.get('database'):
+        return None
+    try:
+        value = json.loads(local_path(data).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        return type(exc).__name__
+    return None if isinstance(value, dict) else 'NotAnObject'
 
 
 def settings():

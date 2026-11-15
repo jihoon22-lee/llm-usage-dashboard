@@ -10,7 +10,7 @@ import time
 import tempfile
 from pathlib import Path
 
-from .config import local_path, with_local
+from .config import local_path, local_problem, with_local
 from .limits import codex_limits, poll_limits, status_limits
 from .sqlite_ro import open_readonly
 from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
@@ -627,6 +627,22 @@ def write_summaries(store,settings):
 
 DAY=86400
 RETRY_AFTER_FAILURE=3600
+# The idle loop turns every 2 seconds; its heartbeat is written this often. The page calls
+# the collector stopped after stale_seconds (60 at the least), a restart notice after 10 minutes.
+HEARTBEAT_SECONDS=30
+LOCAL_SETTINGS_SOURCE='웹 설정'
+
+
+def report_local_settings(store,settings):
+    """Say so when local.json cannot be read: the collector then runs on the base settings."""
+    problem=local_problem(settings)
+    with store.connect() as c:
+        if problem:
+            store.source_changed(c,LOCAL_SETTINGS_SOURCE,'error',
+                                 f'local.json을 읽지 못했습니다 ({problem}) · 웹에서 바꾼 알림·구독료·종료 구독 설정이 적용되지 않습니다.')
+        elif c.execute('SELECT 1 FROM sources WHERE name=?',(LOCAL_SETTINGS_SOURCE,)).fetchone():
+            c.execute('DELETE FROM sources WHERE name=?',(LOCAL_SETTINGS_SOURCE,))
+            c.execute('DELETE FROM source_health WHERE name=?',(LOCAL_SETTINGS_SOURCE,))
 
 
 def sd_notify(message):
@@ -677,7 +693,7 @@ def run(settings,once=False):
         from .verify import VERIFY_FORMAT
         last_backup,backup_ok=backup.get('ts',0),backup.get('ok',True)
         last_verify,verify_ok=verify.get('ts',0) if verify.get('format')==VERIFY_FORMAT else 0,verify.get('ok',True)
-        local_seen=False
+        local_seen=False;last_beat=0
         from .notify import collector_started,evaluate as notify_evaluate,record_failure as notify_failure
         try:collector_started(store,with_local(settings).get('notify'))
         except Exception as exc:notify_failure(store,exc)  # never stops collection
@@ -699,7 +715,8 @@ def run(settings,once=False):
                 completed=store.state(c,'refresh_completed_id',0)
             now=time.time()
             manual=request>completed
-            if once or manual or now-last_local>=300:
+            collecting=once or manual or now-last_local>=300
+            if collecting:
                 with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now,checked=now))
                 if prepare_normalization(store,settings):
                     backfill_attribution(store,settings)
@@ -715,12 +732,15 @@ def run(settings,once=False):
                 collect_activity(store,current_settings)
                 last_limits=time.time()
                 if current_settings.get('statusline_summary'):write_summaries(store,current_settings)
+                report_local_settings(store,settings)
                 if not once:
+                    from .pricing import load_pricing
+                    from .reconciliation import held
+                    current=time.time();local=with_local(settings)
+                    # Three steps that fail apart: a broken one is named and never keeps the
+                    # other two, or collection, from running.
                     try:
                         from .signals import usage_spike
-                        current=time.time()
-                        from .pricing import load_pricing
-                        local=with_local(settings)
                         with store.connect() as c:
                             spike=usage_spike(c,current)
                             sources=[dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
@@ -728,19 +748,21 @@ def run(settings,once=False):
                         from .config import ended_routes
                         notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local),local.get('claude_account_names')),
                                         spike,sources,month,local.get('project_budgets'))
-                        from .reports import ensure_report,summary as report_summary
-                        from .monthly import ensure_months
-                        from .reconciliation import held
-                        pricing=load_pricing(local)
-                        # The weekly and monthly checks read the same supplements.
-                        with held():
-                            weekly=ensure_report(store,current,pricing)
+                    except Exception as exc:notify_failure(store,exc)
+                    # The weekly and monthly checks read the same supplements.
+                    with held():
+                        try:
+                            from .reports import ensure_report,summary as report_summary
+                            weekly=ensure_report(store,current,load_pricing(local))
                             if weekly:
                                 from .notify import deliver
                                 deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label'),local.get('claude_account_names')))],current)
-                            ensure_months(store,current,pricing,local.get('subscription_prices'),local.get('ended_subscriptions'),
+                        except Exception as exc:notify_failure(store,exc,'주간 리포트 생성')
+                        try:
+                            from .monthly import ensure_months
+                            ensure_months(store,current,load_pricing(local),local.get('subscription_prices'),local.get('ended_subscriptions'),
                                           local.get('subscription_price_history'))
-                    except Exception as exc:notify_failure(store,exc)  # never stops collection
+                        except Exception as exc:notify_failure(store,exc,'월 정산 생성')
             sd_notify('WATCHDOG=1')
             if not once and due(last_backup,backup_ok,now):
                 from .backup import backup_now
@@ -761,11 +783,15 @@ def run(settings,once=False):
                     rollup_ok=store.rollup_matches()
                     if not rollup_ok:store.rebuild_rollup()
                     outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
-                except Exception as e:outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=False,error=str(e))
+                except Exception as e:
+                    from .backup import error_text
+                    outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=False,error=error_text(e))
                 with store.connect() as c:store.save_state(c,'verify',outcome)
                 last_verify=time.time();verify_ok=bool(outcome.get('ok'))
             with store.connect() as c:
-                store.save_state(c,'collector',dict(status='idle',checked=time.time()))
+                # After a pass, and twice a minute while idle: not a write every two seconds.
+                if collecting or manual or time.time()-last_beat>=HEARTBEAT_SECONDS:
+                    last_beat=time.time();store.save_state(c,'collector',dict(status='idle',checked=last_beat))
                 # A request arriving during these calls stays pending for the next loop.
                 if manual:
                     store.save_state(c,'refresh_completed_id',request)

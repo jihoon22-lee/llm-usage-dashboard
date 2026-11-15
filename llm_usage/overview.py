@@ -205,8 +205,12 @@ def _subscription_facts(prices, usage, month):
     tokens = {}
     for row in usage['rows']:
         tokens[row['route']] = tokens.get(row['route'], 0) + token_total(row)
-    for part in usage.get('claude_split') or []:
-        tokens[part['account']] = part['tokens']
+    if usage.get('claude_split') is not None:
+        # Several Claude accounts: each is its own subscription, as the usage tab values them.
+        # The service total is no account's use, least of all an idle original account's.
+        tokens.pop('claude-code', None)
+        for part in usage['claude_split']:
+            tokens[part['account']] = part['tokens']
     missing = {gap['route'] for gap in usage.get('unavailable_routes') or []}
     for route, price in sorted((prices or {}).items()):
         if price and not tokens.get(route):

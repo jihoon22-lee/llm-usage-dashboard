@@ -104,8 +104,10 @@ def _scan(store,account,fetch,kind,page_limit,now):
             # A head read cannot prove the saved deep cursor has been exhausted.
             following=resume if index==0 and resume else next_cursor
             complete=state.get('complete',False) or not following
+            # Skipped items of this pass: the head page is read again every pass, so a
+            # running total would count one unreadable item without end.
             state.update(cursor=following,complete=complete,checked=now,oldest=oldest,
-                         pages=state.get('pages',0)+1,error=None,invalid=state.get('invalid',0)+invalid)
+                         pages=state.get('pages',0)+1,error=None,invalid=(state.get('invalid',0) if index else 0)+invalid)
             if not following:state['completed_at']=now
             store.save_state(c,key,state)
         count+=len(raw['items'])

@@ -39,6 +39,11 @@ def clean_label(value):
     return value.lower() if isinstance(value, str) and re.fullmatch(r'[A-Za-z]{2,12}', value) else None
 
 
+# Only these routes name the effort in the model. Elsewhere such an ending is part of the
+# model's own name ('gpt-5.1-codex-max'), so it is neither read as an effort nor cut off.
+NAMED_EFFORT_ROUTES = ('devin', 'antigravity')
+
+
 def model_effort(model):
     """The effort a model name carries ('swe-2 (max)', 'claude-sonnet-5-5-high'), if any."""
     found = _EFFORT_SUFFIX.search(model or '')
@@ -228,8 +233,10 @@ class Store:
             c.execute('CREATE TABLE IF NOT EXISTS session_effort (session TEXT NOT NULL, ts REAL NOT NULL, effort TEXT NOT NULL, PRIMARY KEY(session,ts))')
             if 'effort' in added_text:
                 # Routes that name the effort in the model (Devin, Antigravity) have it already.
-                for (model,) in c.execute('SELECT DISTINCT model FROM events').fetchall():
-                    if model_effort(model):c.execute('UPDATE events SET effort=? WHERE model=?',(model_effort(model),model))
+                marks=','.join('?' for _ in NAMED_EFFORT_ROUTES)
+                for (model,) in c.execute(f'SELECT DISTINCT model FROM events WHERE route IN ({marks})',NAMED_EFFORT_ROUTES).fetchall():
+                    if model_effort(model):
+                        c.execute(f'UPDATE events SET effort=? WHERE model=? AND route IN ({marks})',(model_effort(model),model,*NAMED_EFFORT_ROUTES))
             added_details=set()
             for column in (*DETAILS,'requests'):
                 if column not in {r['name'] for r in c.execute('PRAGMA table_info(events)')}:
@@ -337,7 +344,7 @@ class Store:
         # Streaming snapshots are monotonic maxima per globally stable request ID.
         numbers = [max(0, int(values.get(k) or 0)) for k in TOKENS]
         if not any(numbers) and not allow_empty:return
-        effort=clean_label(effort) or model_effort(model)
+        effort=clean_label(effort) or (model_effort(model) if route in NAMED_EFFORT_ROUTES else None)
         if effort is None and session and route.startswith('codex'):
             turn=c.execute('SELECT effort FROM session_effort WHERE session=? AND ts<=? ORDER BY ts DESC LIMIT 1',(session,ts)).fetchone()
             effort=turn[0] if turn else None
@@ -1263,10 +1270,11 @@ class Store:
         # The same use by reasoning effort. A token costs the same at any effort; what differs
         # is how many a request uses, so each level reports its volume per request.
         efforts={}
-        for r in c.execute('SELECT route,model,effort,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
-                           ' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY route,model,effort,day',
-                           (a.timestamp(),b.timestamp(),*scope_args)):
-            row=dict(r);name=_EFFORT_SUFFIX.sub('',row['model'])
+        # The insights sections do not show it: their request skips the scan.
+        for r in (c.execute('SELECT route,model,effort,date(ts,\'unixepoch\',\'+9 hours\') AS day,'+sums+','+rcount+
+                            ' FROM '+R+' WHERE ts>=? AND ts<?'+scope_sql+' GROUP BY route,model,effort,day',
+                            (a.timestamp(),b.timestamp(),*scope_args)) if sections!='insights' else ()):
+            row=dict(r);name=_EFFORT_SUFFIX.sub('',row['model']) if row['route'] in NAMED_EFFORT_ROUTES else row['model']
             e=efforts.setdefault((row['route'],name,row['effort']),dict(route=row['route'],model=name,effort=row['effort'],requests=0,
                                  tokens=0,output=0,reasoning=0,reasoning_observed=0,cost=None))
             e['requests']+=row['requests'];e['tokens']+=token_total(row)

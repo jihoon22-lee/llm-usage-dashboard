@@ -260,12 +260,18 @@ def deploy_release(target,rollback_to,label,database):
     problem=restart(*before,database)
     if problem is None:
         prune();print(f'배포 완료: {label} (릴리스 {target.name[:12]})');return True
+    restored=None
     if rollback_to is not None:
         switch(rollback_to)
-        if problem!='denied':restart(started('llm-usage.service'),started('llm-usage-collector.service'),database)
+        if problem!='denied':restored=restart(started('llm-usage.service'),started('llm-usage-collector.service'),database)
     if problem=='denied':
         sys.exit('재시작 권한이 없어 릴리스를 되돌렸습니다. sudo .venv/bin/python packaging/system_update.py --owner $USER 를 먼저 실행하세요.')
-    sys.exit(f'배포 확인 실패({problem}): 이전 릴리스 {rollback_to.name[:12] if rollback_to else "없음"}로 되돌렸습니다.')
+    if rollback_to is None:sys.exit(f'배포 확인 실패({problem}): 되돌릴 이전 릴리스가 없습니다. 서비스 상태를 확인하세요.')
+    # The link is back either way; whether the services run the previous release is a separate fact.
+    if restored is not None:
+        sys.exit(f'배포 확인 실패({problem}): current 링크는 이전 릴리스 {rollback_to.name[:12]}로 되돌렸지만 '
+                 f'그 릴리스의 재시작도 확인되지 않았습니다({restored}). 서비스 상태를 직접 확인하세요.')
+    sys.exit(f'배포 확인 실패({problem}): 이전 릴리스 {rollback_to.name[:12]}로 되돌렸습니다.')
 
 
 def smoke_origin(value):

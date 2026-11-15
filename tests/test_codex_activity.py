@@ -138,6 +138,10 @@ class ActivityTests(unittest.TestCase):
             state=self.store.state(c,'codex_activity:scan:'+self.account+':code_review')
             stored=c.execute('SELECT COUNT(*) FROM codex_activity_tasks').fetchone()[0]
         self.assertEqual((stored,state['invalid'],state['complete'],state['error']),(2,1,True,None))
+        # The head page is read again on every pass: the same item is not counted again.
+        collector._scan(self.store,self.account,api,'code_review',2,NOW+301)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c,'codex_activity:scan:'+self.account+':code_review')['invalid'],1)
 
     def test_failed_details_are_asked_for_less_often(self):
         with self.store.connect() as c:

@@ -15,6 +15,18 @@ KEEP_DAILY = 7
 KEEP_WEEKLY = 4  # additionally retain Monday snapshots for this many weeks
 
 
+class BackupCheckFailed(RuntimeError):
+    pass
+
+
+def error_text(exc):
+    """What failed, as the status page may show it: the error's type and, for a file
+    error, the system's reason. The message itself can carry paths and is left out."""
+    if isinstance(exc, OSError) and exc.strerror:
+        return f'{type(exc).__name__}: {exc.strerror}'
+    return type(exc).__name__
+
+
 def backup_now(database):
     database = Path(database)
     backups = database.parent / 'backups'
@@ -32,7 +44,7 @@ def backup_now(database):
             src.backup(dst)
             ok = dst.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
         if not ok:
-            raise RuntimeError('quick_check failed')
+            raise BackupCheckFailed('quick_check failed')
         with tmp.open('rb') as raw, gzip.open(gz_tmp, 'wb') as out:
             out.writelines(raw)
         os.replace(gz_tmp, target)
@@ -46,7 +58,7 @@ def backup_now(database):
         _prune(backups)
         return dict(ts=time.time(), file=target.name, size=target.stat().st_size, ok=True)
     except Exception as e:
-        return dict(ts=time.time(), ok=False, error=str(e))
+        return dict(ts=time.time(), ok=False, error=error_text(e))
     finally:
         for path in partial:
             path.unlink(missing_ok=True)

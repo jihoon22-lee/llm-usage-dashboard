@@ -174,6 +174,15 @@ with sync_playwright() as p:
     # The fixture's records state no reasoning effort: the panel says so instead of listing zeros.
     expect(page.locator('#efforts')).to_contain_text('추론 수준이 기록된 요청이 없습니다')
     assert page.locator('#group option[value=effort]').count() == 1
+    # With records that state it: the reasoning share names how many requests it comes from
+    # only where some did not report it.
+    page.evaluate("""renderEfforts({period:'30d',efforts:[
+        {route:'codex',model:'gpt-test',effort:'high',requests:10,tokens:5000,output:1000,reasoning:100,reasoning_observed:4,cost:null},
+        {route:'codex',model:'gpt-test',effort:'low',requests:5,tokens:900,output:200,reasoning:20,reasoning_observed:5,cost:null}]})""")
+    shares = page.locator('#efforts tbody tr td:nth-last-child(2)')
+    expect(shares.nth(0)).to_have_text('10.0%')
+    expect(shares.nth(1)).to_contain_text('10.0%'); expect(shares.nth(1).locator('small')).to_have_text('수신 4건')
+    page.evaluate('renderEfforts(lastUsage)')
     page.go_back(); expect(page.locator('#tab-overview')).to_have_attribute('aria-selected', 'true')
     # Ranked rows carry their estimate, and the cost fact opens its model over the same 30 days.
     expect(page.locator('#ov-models .rank-cost').first).to_have_text('· '+page.evaluate('usd(lastOverview.models[0].cost)'))
