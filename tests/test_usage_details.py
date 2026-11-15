@@ -4,14 +4,21 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from llm_usage.claude_usage import components
 from llm_usage.cloud import _ingest
-from llm_usage.collect import collect_file, model_provider, prepare_normalization
+from llm_usage.collect import (
+    PARSER_VERSION,
+    collect_file,
+    model_provider,
+    prepare_normalization,
+    reread_claude_cache_splits,
+)
 from llm_usage.insights import token_total
 from llm_usage.pricing import estimate
 from llm_usage.reconciliation import supplements
-from llm_usage.store import Store, stamp
+from llm_usage.store import Store, identity, stamp
 
 NOW = stamp('2026-10-23T03:00:00Z')
 RATES = {
@@ -42,6 +49,32 @@ def message():
             id='parent', model='claude-parent', content=[dict(type='text', text='NEVER-PERSIST-CONTENT')], usage=usage
         ),
     )
+
+
+def calls_message():
+    """A response that called the model twice around an advisor: the top-level split is the
+    first call's only, as Claude Code writes it, while the total adds both calls."""
+    value = message()
+    usage = value['message']['usage']
+    usage['cache_creation'] = dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=10)
+    usage['iterations'] = [
+        dict(
+            type='message',
+            input_tokens=50,
+            output_tokens=10,
+            cache_creation_input_tokens=10,
+            cache_creation=dict(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=10),
+        ),
+        dict(type='advisor_message', model='claude-advisor', input_tokens=300, output_tokens=50),
+        dict(
+            type='message',
+            input_tokens=50,
+            output_tokens=30,
+            cache_creation_input_tokens=20,
+            cache_creation=dict(ephemeral_5m_input_tokens=20, ephemeral_1h_input_tokens=0),
+        ),
+    ]
+    return value
 
 
 class DetailTests(unittest.TestCase):
@@ -191,6 +224,72 @@ class DetailTests(unittest.TestCase):
                 c.execute("SELECT COUNT(*) FROM import_errors WHERE source='claude-details'").fetchone()[0], 0
             )
         self.assertEqual(token_total(self.store.usage(period='all', now=NOW)['totals']), 520)
+
+    def test_split_of_a_response_with_several_calls_is_the_calls_added_up(self):
+        self.assertEqual(self.collect(calls_message()), 0)
+        row = self.parent()
+        self.assertEqual(
+            (
+                row['cache_creation_5m'],
+                row['cache_creation_1h'],
+                row['cache_creation_unknown'],
+                row['cache_ttl_observed'],
+            ),
+            (20, 10, 0, 1),
+        )
+        with self.store.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM import_errors').fetchone()[0], 0)
+        # Calls that do not add up to the total leave the split unknown, as before.
+        value = calls_message()
+        value['message']['id'] = 'other'
+        value['message']['usage']['iterations'][2]['cache_creation']['ephemeral_5m_input_tokens'] = 19
+        self.collect(value, 'other.jsonl')
+        with self.store.connect() as c:
+            row = c.execute("SELECT * FROM events WHERE id=?", (identity('claude-code', 'other'),)).fetchone()
+            self.assertEqual((row['cache_creation_unknown'], row['cache_ttl_observed']), (30, 0))
+            self.assertEqual(c.execute("SELECT kind FROM import_errors").fetchall()[0][0], 'cacheComponentMismatch')
+
+    def test_split_left_unknown_by_an_older_reading_is_recovered_by_the_one_time_reread(self):
+        path = self.root / 'session-a.jsonl'
+        untouched = self.root / 'session-b.jsonl'
+        other = message()
+        other['sessionId'] = 'session-b'
+        other['message']['id'] = 'b'
+        untouched.write_text(json.dumps(other) + '\n')
+        value = calls_message()
+        value['sessionId'] = 'session-a'
+        path.write_text(json.dumps(value) + '\n')
+        # The reading before this release could not use the calls' splits.
+        with patch('llm_usage.claude_usage.call_split', side_effect=ValueError('old reading')):
+            collect_file(self.store, path, 'claude-code')
+        collect_file(self.store, untouched, 'claude-code')
+        self.assertEqual(self.parent()['cache_creation_unknown'], 30)
+        reread_claude_cache_splits(self.store)
+        with self.store.connect() as c:
+            marks = {
+                k: self.store.state(c, k)['parser_version'] for k in ('file:' + str(path), 'file:' + str(untouched))
+            }
+        self.assertEqual(marks, {'file:' + str(path): 0, 'file:' + str(untouched): PARSER_VERSION})
+        collect_file(self.store, path, 'claude-code')
+        with self.store.connect() as c:
+            row = c.execute('SELECT * FROM events WHERE id=?', (identity('claude-code', 'parent'),)).fetchone()
+            self.assertEqual(
+                (row['cache_creation_5m'], row['cache_creation_1h'], row['cache_creation_unknown']), (20, 10, 0)
+            )
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM import_errors").fetchone()[0], 0)
+            hourly = c.execute(
+                'SELECT SUM(cache_creation_5m),SUM(cache_creation_1h),SUM(cache_creation_unknown) FROM usage_hourly'
+            ).fetchone()
+            # session-b's own split (10 five-minute, 20 one-hour) is unchanged.
+            self.assertEqual(tuple(hourly), (20 + 10, 10 + 20, 0))
+        # Once only.
+        with self.store.connect() as c:
+            self.store.save_state(
+                c, 'file:' + str(path), dict(self.store.state(c, 'file:' + str(path)), parser_version=PARSER_VERSION)
+            )
+        reread_claude_cache_splits(self.store)
+        with self.store.connect() as c:
+            self.assertEqual(self.store.state(c, 'file:' + str(path))['parser_version'], PARSER_VERSION)
 
     def test_old_reasoning_field_and_old_custom_cache_rate_keep_working(self):
         values = components(

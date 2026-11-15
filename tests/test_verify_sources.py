@@ -15,7 +15,7 @@ from llm_usage.store import Store, identity
 from llm_usage.verify import failed, partial, reconcile
 from llm_usage.verify_sources import reconcile_sources
 from test_native_usage import meta, model, response, usage
-from test_usage_details import message
+from test_usage_details import calls_message, message
 
 
 class OriginalSourceTests(unittest.TestCase):
@@ -117,6 +117,16 @@ class OriginalSourceTests(unittest.TestCase):
         self.assertEqual(result['claude']['matched_requests'], 2)
         self.assertFalse(failed(result))
         self.assertTrue(partial(result))
+
+    def test_split_of_a_response_with_several_calls_is_checked_against_the_calls(self):
+        self.source([calls_message()], 'claude-code')
+        result = reconcile(self.store.path, self.cfg)
+        claude = result['claude']
+        self.assertEqual((claude['detail_inconsistent_records'], claude['matched_requests']), (0, 2))
+        self.assertFalse(partial(result))
+        with self.store.connect() as c:
+            c.execute('UPDATE events SET cache_creation_5m=0, cache_creation_1h=30 WHERE parent_id IS NULL')
+        self.assertEqual(reconcile(self.store.path, self.cfg)['claude']['mismatched_events'], 1)
 
     def test_bad_json_in_committed_prefix_is_visible_as_partial(self):
         path = self.source([meta(), model(), response('one', usage(100, 20))])
