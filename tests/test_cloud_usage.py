@@ -1,5 +1,6 @@
 """Usage that never reaches a local record file: Claude Code cloud sessions and
 Codex account activity outside this PC (ChatGPT agents such as dot, Codex cloud)."""
+
 import json
 from pathlib import Path
 import sys
@@ -19,22 +20,56 @@ SECRET = 'TRANSCRIPT-TEXT-MUST-NOT-BE-STORED'
 
 
 def session(sid, kind='anthropic_cloud', updated='2026-10-12T10:00:00Z', repo='agent-browser'):
-    return {'id': sid, 'environment_kind': kind, 'updated_at': updated, 'created_at': '2026-10-12T09:00:00Z',
-            'title': SECRET, 'session_context': {'sources': [{'type': 'git_repository', 'url': f'https://github.com/me/{repo}'}]}}
+    return {
+        'id': sid,
+        'environment_kind': kind,
+        'updated_at': updated,
+        'created_at': '2026-10-12T09:00:00Z',
+        'title': SECRET,
+        'session_context': {'sources': [{'type': 'git_repository', 'url': f'https://github.com/me/{repo}'}]},
+    }
 
 
 def assistant(mid, ts, output, sidechain=False, model='claude-opus-5-5'):
-    return {'event_id': mid + ts, 'payload': {'type': 'assistant', 'sessionId': 'inner-1', 'isSidechain': sidechain,
-            'timestamp': ts, 'message': {'id': mid, 'model': model, 'content': [{'type': 'text', 'text': SECRET}],
-            'usage': {'input_tokens': 2, 'cache_read_input_tokens': 100, 'cache_creation_input_tokens': 10,
-                      'output_tokens': output}}}}
+    return {
+        'event_id': mid + ts,
+        'payload': {
+            'type': 'assistant',
+            'sessionId': 'inner-1',
+            'isSidechain': sidechain,
+            'timestamp': ts,
+            'message': {
+                'id': mid,
+                'model': model,
+                'content': [{'type': 'text', 'text': SECRET}],
+                'usage': {
+                    'input_tokens': 2,
+                    'cache_read_input_tokens': 100,
+                    'cache_creation_input_tokens': 10,
+                    'output_tokens': output,
+                },
+            },
+        },
+    }
 
 
 def result(ts, messages, output, model='claude-opus-5-5'):
     """The session's cumulative modelUsage after `messages` assistant() requests."""
-    return {'created_at': ts, 'payload': {'type': 'result', 'session_id': 'inner-1', 'modelUsage': {model: {
-        'inputTokens': 2 * messages, 'cacheReadInputTokens': 100 * messages, 'cacheCreationInputTokens': 10 * messages,
-        'outputTokens': output}}}}
+    return {
+        'created_at': ts,
+        'payload': {
+            'type': 'result',
+            'session_id': 'inner-1',
+            'modelUsage': {
+                model: {
+                    'inputTokens': 2 * messages,
+                    'cacheReadInputTokens': 100 * messages,
+                    'cacheCreationInputTokens': 10 * messages,
+                    'outputTokens': output,
+                }
+            },
+        },
+    }
 
 
 class FakeApi:
@@ -58,12 +93,18 @@ class FakeApi:
 
 class ClaudeCloudTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        root = Path(self.tmp.name); self.store = Store(root / 'usage.db')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.store = Store(root / 'usage.db')
         (root / '.claude').mkdir()
         self.auth = root / '.claude' / '.credentials.json'
-        self.auth.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE', 'expiresAt': (NOW + 3600) * 1000}}))
-        (root / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'user-1', 'organizationUuid': 'org-1'}}))
+        self.auth.write_text(
+            json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE', 'expiresAt': (NOW + 3600) * 1000}})
+        )
+        (root / '.claude.json').write_text(
+            json.dumps({'oauthAccount': {'accountUuid': 'user-1', 'organizationUuid': 'org-1'}})
+        )
         self.config = {'claude_auth': str(self.auth)}
 
     def run_collect(self, api, account=None):
@@ -75,17 +116,31 @@ class ClaudeCloudTests(unittest.TestCase):
             return [dict(r) for r in c.execute('SELECT * FROM events ORDER BY ts')]
 
     def test_cloud_messages_are_counted_once_and_bridge_sessions_are_left_to_local_files(self):
-        api = FakeApi([[session('session_cloud'), session('session_bridge', kind='bridge')]],
-                      {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5),
-                                          assistant('msg_1', '2026-10-12T09:30:00Z', 40),
-                                          assistant('msg_2', '2026-10-12T09:31:00Z', 7, sidechain=True)]]})
+        api = FakeApi(
+            [[session('session_cloud'), session('session_bridge', kind='bridge')]],
+            {
+                'session_cloud': [
+                    [
+                        assistant('msg_1', '2026-10-12T09:30:00Z', 5),
+                        assistant('msg_1', '2026-10-12T09:30:00Z', 40),
+                        assistant('msg_2', '2026-10-12T09:31:00Z', 7, sidechain=True),
+                    ]
+                ]
+            },
+        )
         self.run_collect(api)
         rows = self.rows()
-        self.assertEqual([(r['id'], r['output'], r['route'], r['agent_kind']) for r in rows],
-                         [(identity('claude-code', 'msg_1'), 40, 'claude-code', 'main'),
-                          (identity('claude-code', 'msg_2'), 7, 'claude-code', 'sub')])
+        self.assertEqual(
+            [(r['id'], r['output'], r['route'], r['agent_kind']) for r in rows],
+            [
+                (identity('claude-code', 'msg_1'), 40, 'claude-code', 'main'),
+                (identity('claude-code', 'msg_2'), 7, 'claude-code', 'sub'),
+            ],
+        )
         self.assertEqual((rows[0]['uncached_input'], rows[0]['cached_input'], rows[0]['cache_creation']), (2, 100, 10))
-        self.assertEqual((rows[0]['provider'], rows[0]['project'], rows[0]['session']), ('Anthropic', 'agent-browser', 'inner-1'))
+        self.assertEqual(
+            (rows[0]['provider'], rows[0]['project'], rows[0]['session']), ('Anthropic', 'agent-browser', 'inner-1')
+        )
         self.assertFalse(any('session_bridge' in url for url, _ in api.calls))
         headers = api.calls[0][1]
         self.assertEqual((headers['x-organization-uuid'], headers['anthropic-version']), ('org-1', '2023-06-01'))
@@ -100,25 +155,46 @@ class ClaudeCloudTests(unittest.TestCase):
     def test_one_unreadable_cloud_entry_is_counted_and_the_rest_is_kept(self):
         bad = assistant('msg_bad', '2026-10-12T09:30:30Z', 5)
         bad['payload']['message']['usage']['output_tokens'] = 5.5
-        api = FakeApi([[session('session_cloud')]],
-                      {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5), bad, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]})
+        api = FakeApi(
+            [[session('session_cloud')]],
+            {
+                'session_cloud': [
+                    [assistant('msg_1', '2026-10-12T09:30:00Z', 5), bad, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]
+                ]
+            },
+        )
         self.run_collect(api)
         self.assertEqual([r['output'] for r in self.rows()], [5, 7])
         # Both reads of the session (transcript, then supplement) meet the entry: it stays
         # counted after the second one, once, and the source says so.
         with self.store.connect() as c:
-            self.assertEqual([tuple(r) for r in c.execute("SELECT source,record,kind FROM import_errors WHERE source LIKE 'claude-cloud:%'")],
-                             [('claude-cloud:session_cloud', 'msg_bad', 'ValueError')])
+            self.assertEqual(
+                [
+                    tuple(r)
+                    for r in c.execute(
+                        "SELECT source,record,kind FROM import_errors WHERE source LIKE 'claude-cloud:%'"
+                    )
+                ],
+                [('claude-cloud:session_cloud', 'msg_bad', 'ValueError')],
+            )
             source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
         self.assertEqual(source['status'], 'partial')
         self.assertIn('해석 실패 1건', source['detail'])
         # The session changed and is read from its start: what is readable now is no error.
-        api = FakeApi([[session('session_cloud', updated='2026-10-12T10:30:00Z')]],
-                      {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 5), assistant('msg_bad', '2026-10-12T09:30:30Z', 6)]]})
+        api = FakeApi(
+            [[session('session_cloud', updated='2026-10-12T10:30:00Z')]],
+            {
+                'session_cloud': [
+                    [assistant('msg_1', '2026-10-12T09:30:00Z', 5), assistant('msg_bad', '2026-10-12T09:30:30Z', 6)]
+                ]
+            },
+        )
         self.run_collect(api)
         self.assertEqual([r['output'] for r in self.rows()], [5, 6, 7])
         with self.store.connect() as c:
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM import_errors WHERE source LIKE 'claude-cloud:%'").fetchone()[0], 0)
+            self.assertEqual(
+                c.execute("SELECT COUNT(*) FROM import_errors WHERE source LIKE 'claude-cloud:%'").fetchone()[0], 0
+            )
             source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
         self.assertEqual(source['status'], 'ok')
         self.assertNotIn('해석 실패', source['detail'])
@@ -126,19 +202,24 @@ class ClaudeCloudTests(unittest.TestCase):
     def test_cloud_effort_is_kept_like_a_local_transcript_line(self):
         entry = assistant('msg_1', '2026-10-12T09:30:00Z', 40)
         entry['payload']['effort'] = 'high'
-        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[entry, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]})
+        api = FakeApi(
+            [[session('session_cloud')]], {'session_cloud': [[entry, assistant('msg_2', '2026-10-12T09:31:00Z', 7)]]}
+        )
         self.run_collect(api)
         self.assertEqual([r['effort'] for r in self.rows()], ['high', None])
 
     def test_a_bogus_retry_after_cannot_stop_the_cloud_read_for_good(self):
         def limited(url, headers):
             raise HTTPError(url, 429, 'Too Many Requests', {'Retry-After': '4000000000'}, None)
+
         self.run_collect(limited)
         with self.store.connect() as c:
             pause = self.store.state(c, 'claude-cloud:retry')
         self.assertEqual(pause['next_attempt'], NOW + 86400)
+
         def brief(url, headers):
             raise HTTPError(url, 429, 'Too Many Requests', {'Retry-After': '900'}, None)
+
         with self.store.connect() as c:
             self.store.save_state(c, 'claude-cloud:retry', {})
         self.run_collect(brief)
@@ -153,15 +234,32 @@ class ClaudeCloudTests(unittest.TestCase):
 
     def test_a_message_already_read_from_a_local_transcript_is_not_added_twice(self):
         with self.store.connect() as c:
-            self.store.event(c, identity('claude-code', 'msg_1'), NOW - 3600, 'Anthropic', 'claude-code', 'claude-opus-5-5',
-                             dict(uncached_input=2, cached_input=100, output=40, cache_creation=10), session='inner-1')
-        self.run_collect(FakeApi([[session('session_cloud')]], {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 40)]]}))
+            self.store.event(
+                c,
+                identity('claude-code', 'msg_1'),
+                NOW - 3600,
+                'Anthropic',
+                'claude-code',
+                'claude-opus-5-5',
+                dict(uncached_input=2, cached_input=100, output=40, cache_creation=10),
+                session='inner-1',
+            )
+        self.run_collect(
+            FakeApi([[session('session_cloud')]], {'session_cloud': [[assistant('msg_1', '2026-10-12T09:30:00Z', 40)]]})
+        )
         self.assertEqual(len(self.rows()), 1)
 
     def test_pages_are_followed_and_an_unchanged_session_is_not_read_again(self):
-        api = FakeApi([[session('session_a')], [session('session_b', updated='2026-10-12T10:05:00Z')]],
-                      {'session_a': [[assistant('msg_a1', '2026-10-12T09:30:00Z', 3)], [assistant('msg_a2', '2026-10-12T09:40:00Z', 4)]],
-                       'session_b': [[assistant('msg_b1', '2026-10-12T09:50:00Z', 5)]]})
+        api = FakeApi(
+            [[session('session_a')], [session('session_b', updated='2026-10-12T10:05:00Z')]],
+            {
+                'session_a': [
+                    [assistant('msg_a1', '2026-10-12T09:30:00Z', 3)],
+                    [assistant('msg_a2', '2026-10-12T09:40:00Z', 4)],
+                ],
+                'session_b': [[assistant('msg_b1', '2026-10-12T09:50:00Z', 5)]],
+            },
+        )
         self.run_collect(api)
         self.assertEqual(len(self.rows()), 3)
         reads = len([u for u, _ in api.calls if '/teleport-events' in u])
@@ -174,27 +272,52 @@ class ClaudeCloudTests(unittest.TestCase):
 
     def test_parser_upgrade_restarts_both_partial_streams_before_accepting_new_version(self):
         from llm_usage.cloud import PARSER_VERSION
-        first=assistant('first','2026-10-12T09:30:00Z',40)
-        first['payload']['message']['usage'].update(output_tokens_details=dict(thinking_tokens=10),
-            cache_creation=dict(ephemeral_5m_input_tokens=5,ephemeral_1h_input_tokens=5),
-            iterations=[dict(type='advisor_message',model='claude-advisor',input_tokens=10,output_tokens=2)])
+
+        first = assistant('first', '2026-10-12T09:30:00Z', 40)
+        first['payload']['message']['usage'].update(
+            output_tokens_details=dict(thinking_tokens=10),
+            cache_creation=dict(ephemeral_5m_input_tokens=5, ephemeral_1h_input_tokens=5),
+            iterations=[dict(type='advisor_message', model='claude-advisor', input_tokens=10, output_tokens=2)],
+        )
         with self.store.connect() as c:
-            self.store.event(c,identity('claude-code','first'),NOW-5400,'Anthropic','claude-code','claude-opus-5-5',
-                             dict(uncached_input=2,cached_input=100,cache_creation=10,output=40),session='inner-1')
-            self.store.save_state(c,'claude-cloud:partial',dict(parser=PARSER_VERSION-1,cursor='next',teleport_cursor='next',
-                updated='2026-10-12T10:00:00Z',scan_updated='2026-10-12T10:00:00Z',checked=NOW-60))
-        api=FakeApi([[session('partial')]],{'partial':[[first],[assistant('last','2026-10-12T09:40:00Z',4)]]})
+            self.store.event(
+                c,
+                identity('claude-code', 'first'),
+                NOW - 5400,
+                'Anthropic',
+                'claude-code',
+                'claude-opus-5-5',
+                dict(uncached_input=2, cached_input=100, cache_creation=10, output=40),
+                session='inner-1',
+            )
+            self.store.save_state(
+                c,
+                'claude-cloud:partial',
+                dict(
+                    parser=PARSER_VERSION - 1,
+                    cursor='next',
+                    teleport_cursor='next',
+                    updated='2026-10-12T10:00:00Z',
+                    scan_updated='2026-10-12T10:00:00Z',
+                    checked=NOW - 60,
+                ),
+            )
+        api = FakeApi([[session('partial')]], {'partial': [[first], [assistant('last', '2026-10-12T09:40:00Z', 4)]]})
         self.run_collect(api)
-        rows=self.rows();parent=next(row for row in rows if row['id']==identity('claude-code','first'))
-        self.assertEqual((parent['reasoning'],parent['cache_creation_1h']),(10,5))
-        self.assertEqual(sum(row['advisor_calls'] for row in rows),1)
-        for endpoint in ('teleport-events','events'):
-            reads=[url for url,_ in api.calls if '/'+endpoint+'?' in url]
-            self.assertNotIn('cursor=',reads[0])
-        self.run_collect(api);self.assertEqual(self.rows(),rows)
+        rows = self.rows()
+        parent = next(row for row in rows if row['id'] == identity('claude-code', 'first'))
+        self.assertEqual((parent['reasoning'], parent['cache_creation_1h']), (10, 5))
+        self.assertEqual(sum(row['advisor_calls'] for row in rows), 1)
+        for endpoint in ('teleport-events', 'events'):
+            reads = [url for url, _ in api.calls if '/' + endpoint + '?' in url]
+            self.assertNotIn('cursor=', reads[0])
+        self.run_collect(api)
+        self.assertEqual(self.rows(), rows)
 
     def test_expired_login_is_reported_without_a_request(self):
-        self.auth.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE', 'expiresAt': (NOW - 1) * 1000}}))
+        self.auth.write_text(
+            json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE', 'expiresAt': (NOW - 1) * 1000}})
+        )
         api = FakeApi([[session('session_cloud')]], {})
         self.run_collect(api)
         self.assertEqual(api.calls, [])
@@ -202,8 +325,10 @@ class ClaudeCloudTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0], 'error')
 
     def test_one_failing_session_keeps_the_others_and_retries_later(self):
-        api = FakeApi([[session('session_a'), session('session_b')]],
-                      {'session_b': [[assistant('msg_b1', '2026-10-12T09:50:00Z', 5)]]})
+        api = FakeApi(
+            [[session('session_a'), session('session_b')]],
+            {'session_b': [[assistant('msg_b1', '2026-10-12T09:50:00Z', 5)]]},
+        )
         self.run_collect(api)
         self.assertEqual(len(self.rows()), 1)
         with self.store.connect() as c:
@@ -220,102 +345,141 @@ class ClaudeCloudTests(unittest.TestCase):
         self.assertEqual(len([u for u, _ in api.calls if '/teleport-events' in u]), 1)
         with self.store.connect() as c:
             source = c.execute("SELECT status,detail FROM sources WHERE name='claude-cloud'").fetchone()
-        self.assertEqual(source['status'], 'ok'); self.assertIn('기록 없음 1개', source['detail'])
-
+        self.assertEqual(source['status'], 'ok')
+        self.assertIn('기록 없음 1개', source['detail'])
 
     def test_optional_404_does_not_delay_active_transcript_or_extend_retry(self):
-        api=FakeApi([[session('active',updated='2026-10-12T10:59:00Z')]],
-                    {'active':[[assistant('late','2026-10-12T10:59:00Z',20)]]})
-        optional=[]
-        def fetch(url,headers):
+        api = FakeApi(
+            [[session('active', updated='2026-10-12T10:59:00Z')]],
+            {'active': [[assistant('late', '2026-10-12T10:59:00Z', 20)]]},
+        )
+        optional = []
+
+        def fetch(url, headers):
             if '/events?' in url:
                 optional.append(url)
-                raise HTTPError(url,404,'Unavailable',{},None)
-            return api(url,headers)
+                raise HTTPError(url, 404, 'Unavailable', {}, None)
+            return api(url, headers)
+
         self.run_collect(fetch)
-        api.events['active'][0]=[assistant('late','2026-10-12T10:59:00Z',40)]
+        api.events['active'][0] = [assistant('late', '2026-10-12T10:59:00Z', 40)]
         self.run_collect(fetch)
-        self.assertEqual(self.rows()[0]['output'],40)
-        self.assertEqual(len(optional),1)
+        self.assertEqual(self.rows()[0]['output'], 40)
+        self.assertEqual(len(optional), 1)
         with self.store.connect() as c:
-            self.assertEqual(self.store.state(c,'claude-cloud:active')['supplement_retry_at'],NOW+86400)
+            self.assertEqual(self.store.state(c, 'claude-cloud:active')['supplement_retry_at'], NOW + 86400)
         # Successful transcript polling must not postpone the supplemental retry.
-        self.auth.write_text(json.dumps({'claudeAiOauth':{'accessToken':'TEST-ONLY-PRIVATE'}}))
-        with patch('llm_usage.cloud.time.time',return_value=NOW+600):
-            collect_claude_cloud(self.store,self.config,fetch=fetch)
-        with patch('llm_usage.cloud.time.time',return_value=NOW+86400):
-            collect_claude_cloud(self.store,self.config,fetch=fetch)
-        self.assertEqual(len(optional),2)
+        self.auth.write_text(json.dumps({'claudeAiOauth': {'accessToken': 'TEST-ONLY-PRIVATE'}}))
+        with patch('llm_usage.cloud.time.time', return_value=NOW + 600):
+            collect_claude_cloud(self.store, self.config, fetch=fetch)
+        with patch('llm_usage.cloud.time.time', return_value=NOW + 86400):
+            collect_claude_cloud(self.store, self.config, fetch=fetch)
+        self.assertEqual(len(optional), 2)
         # Session changes allow early supplement recovery and clear its status.
-        api.sessions[0][0]['updated_at']='2026-10-13T11:01:00Z'
-        with patch('llm_usage.cloud.time.time',return_value=NOW+86460):
-            collect_claude_cloud(self.store,self.config,fetch=api)
+        api.sessions[0][0]['updated_at'] = '2026-10-13T11:01:00Z'
+        with patch('llm_usage.cloud.time.time', return_value=NOW + 86460):
+            collect_claude_cloud(self.store, self.config, fetch=api)
         with self.store.connect() as c:
-            self.assertFalse(self.store.state(c,'claude-cloud:active').get('supplement_unavailable'))
-            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0],'ok')
+            self.assertFalse(self.store.state(c, 'claude-cloud:active').get('supplement_unavailable'))
+            self.assertEqual(
+                c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0], 'ok'
+            )
 
     def test_legacy_optional_404_checkpoint_rechecks_active_transcript(self):
-        item=session('legacy',updated='2026-10-12T10:59:00Z')
+        item = session('legacy', updated='2026-10-12T10:59:00Z')
         from llm_usage.cloud import PARSER_VERSION
+
         with self.store.connect() as c:
-            self.store.save_state(c,'claude-cloud:legacy',dict(updated=item['updated_at'],
-                supplement_unavailable=True,parser=PARSER_VERSION,checked=NOW-60))
-        api=FakeApi([[item]],{'legacy':[[assistant('late','2026-10-12T10:59:00Z',40)]]})
+            self.store.save_state(
+                c,
+                'claude-cloud:legacy',
+                dict(updated=item['updated_at'], supplement_unavailable=True, parser=PARSER_VERSION, checked=NOW - 60),
+            )
+        api = FakeApi([[item]], {'legacy': [[assistant('late', '2026-10-12T10:59:00Z', 40)]]})
         self.run_collect(api)
-        self.assertEqual(self.rows()[0]['output'],40)
-        self.assertFalse(any('/events?' in url for url,_ in api.calls))
+        self.assertEqual(self.rows()[0]['output'], 40)
+        self.assertFalse(any('/events?' in url for url, _ in api.calls))
         with self.store.connect() as c:
-            self.assertEqual(self.store.state(c,'claude-cloud:legacy')['supplement_retry_at'],NOW-60+86400)
+            self.assertEqual(self.store.state(c, 'claude-cloud:legacy')['supplement_retry_at'], NOW - 60 + 86400)
 
     def test_missing_optional_endpoint_keeps_transcript_checkpoint_and_separate_status(self):
-        api=FakeApi([[session('optional')]],{'optional':[[assistant('kept','2026-10-12T09:30:00Z',20)]]})
-        calls=[]
-        def fetch(url,headers):
+        api = FakeApi([[session('optional')]], {'optional': [[assistant('kept', '2026-10-12T09:30:00Z', 20)]]})
+        calls = []
+
+        def fetch(url, headers):
             calls.append(url)
-            if '/events?' in url:raise HTTPError(url,404,'Unavailable',{},None)
-            return api(url,headers)
+            if '/events?' in url:
+                raise HTTPError(url, 404, 'Unavailable', {}, None)
+            return api(url, headers)
+
         self.run_collect(fetch)
         with self.store.connect() as c:
-            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0],'ok')
-            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0],'unavailable')
-            self.assertTrue(self.store.state(c,'claude-cloud:optional')['supplement_unavailable'])
-        self.assertEqual(len(self.rows()),1)
-        count=len([u for u in calls if '/code/sessions/' in u])
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0], 'ok')
+            self.assertEqual(
+                c.execute("SELECT status FROM sources WHERE name='claude-cloud-supplement'").fetchone()[0],
+                'unavailable',
+            )
+            self.assertTrue(self.store.state(c, 'claude-cloud:optional')['supplement_unavailable'])
+        self.assertEqual(len(self.rows()), 1)
+        count = len([u for u in calls if '/code/sessions/' in u])
         self.run_collect(fetch)
-        self.assertEqual(len([u for u in calls if '/code/sessions/' in u]),count)
-        api.sessions[0][0]['updated_at']='2026-10-12T11:59:00Z'
+        self.assertEqual(len([u for u in calls if '/code/sessions/' in u]), count)
+        api.sessions[0][0]['updated_at'] = '2026-10-12T11:59:00Z'
         self.run_collect(fetch)
-        self.assertGreater(len([u for u in calls if '/code/sessions/' in u]),count)
+        self.assertGreater(len([u for u in calls if '/code/sessions/' in u]), count)
 
     def test_transcript_beyond_100_pages_resumes_without_false_completion(self):
-        from urllib.parse import parse_qs,urlparse
-        calls=[]
-        def fetch(url,headers):
-            if '/v1/sessions?' in url:return {'data':[session('large')]}
-            if '/teleport-events?' not in url:return {'data':[]}
-            cursor=int(parse_qs(urlparse(url).query).get('cursor',['0'])[0]);calls.append(cursor)
-            return {'data':[assistant('page-'+str(cursor),'2026-10-12T09:30:00Z',1)],
-                    'next_cursor':str(cursor+1) if cursor<100 else None}
+        from urllib.parse import parse_qs, urlparse
+
+        calls = []
+
+        def fetch(url, headers):
+            if '/v1/sessions?' in url:
+                return {'data': [session('large')]}
+            if '/teleport-events?' not in url:
+                return {'data': []}
+            cursor = int(parse_qs(urlparse(url).query).get('cursor', ['0'])[0])
+            calls.append(cursor)
+            return {
+                'data': [assistant('page-' + str(cursor), '2026-10-12T09:30:00Z', 1)],
+                'next_cursor': str(cursor + 1) if cursor < 100 else None,
+            }
+
         for _ in range(5):
             self.run_collect(fetch)
             with self.store.connect() as c:
-                self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0],'partial')
-                self.assertTrue(self.store.state(c,'claude-cloud:large')['teleport_cursor'])
+                self.assertEqual(
+                    c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0], 'partial'
+                )
+                self.assertTrue(self.store.state(c, 'claude-cloud:large')['teleport_cursor'])
         self.run_collect(fetch)
-        self.assertEqual(calls,list(range(101)))
-        self.assertEqual(len(self.rows()),101)
+        self.assertEqual(calls, list(range(101)))
+        self.assertEqual(len(self.rows()), 101)
         self.run_collect(fetch)
-        self.assertEqual(len(calls),101)
+        self.assertEqual(len(calls), 101)
         with self.store.connect() as c:
-            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0],'ok')
+            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='claude-cloud'").fetchone()[0], 'ok')
 
     def test_a_result_read_by_both_endpoints_is_one_aggregate(self):
         from llm_usage.reconciliation import supplements
-        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[
-            assistant('msg_1', '2026-10-12T09:30:00Z', 40), result('2026-10-12T09:35:00Z', 1, 100),
-            assistant('msg_2', '2026-10-12T09:40:00Z', 10), result('2026-10-12T09:45:00Z', 2, 200)]]})
+
+        api = FakeApi(
+            [[session('session_cloud')]],
+            {
+                'session_cloud': [
+                    [
+                        assistant('msg_1', '2026-10-12T09:30:00Z', 40),
+                        result('2026-10-12T09:35:00Z', 1, 100),
+                        assistant('msg_2', '2026-10-12T09:40:00Z', 10),
+                        result('2026-10-12T09:45:00Z', 2, 200),
+                    ]
+                ]
+            },
+        )
         self.run_collect(api)
-        self.assertTrue(any('/teleport-events?' in u for u, _ in api.calls) and any('/events?' in u for u, _ in api.calls))
+        self.assertTrue(
+            any('/teleport-events?' in u for u, _ in api.calls) and any('/events?' in u for u, _ in api.calls)
+        )
         with self.store.connect() as c:
             rows = [tuple(r) for r in c.execute('SELECT tokens,account_key FROM usage_evidence ORDER BY end')]
             entries, conflicts = supplements(c)
@@ -327,15 +491,31 @@ class ClaudeCloudTests(unittest.TestCase):
 
     def test_a_second_account_teleport_aggregate_is_that_account_s(self):
         from llm_usage.reconciliation import supplements
-        home = Path(self.tmp.name) / 'second'; home.mkdir()
+
+        home = Path(self.tmp.name) / 'second'
+        home.mkdir()
         (home / '.credentials.json').write_text(self.auth.read_text())
-        (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': 'user-2', 'organizationUuid': 'org-2'}}))
-        account = dict(route='claude-code:second', home=dict(credentials=str(home / '.credentials.json'), account_file=str(home / '.claude.json')))
-        api = FakeApi([[session('session_cloud')]], {'session_cloud': [[
-            assistant('msg_1', '2026-10-12T09:30:00Z', 40), result('2026-10-12T09:35:00Z', 1, 100)]]})
+        (home / '.claude.json').write_text(
+            json.dumps({'oauthAccount': {'accountUuid': 'user-2', 'organizationUuid': 'org-2'}})
+        )
+        account = dict(
+            route='claude-code:second',
+            home=dict(credentials=str(home / '.credentials.json'), account_file=str(home / '.claude.json')),
+        )
+        api = FakeApi(
+            [[session('session_cloud')]],
+            {
+                'session_cloud': [
+                    [assistant('msg_1', '2026-10-12T09:30:00Z', 40), result('2026-10-12T09:35:00Z', 1, 100)]
+                ]
+            },
+        )
+
         def teleport_only(url, headers):
-            if '/events?' in url:raise HTTPError(url, 404, 'Unavailable', {}, None)
+            if '/events?' in url:
+                raise HTTPError(url, 404, 'Unavailable', {}, None)
             return api(url, headers)
+
         self.run_collect(teleport_only, account)
         with self.store.connect() as c:
             keys = [r[0] for r in c.execute('SELECT account_key FROM usage_evidence')]
@@ -345,26 +525,60 @@ class ClaudeCloudTests(unittest.TestCase):
 
     def test_aggregates_stored_without_the_reading_account_are_repaired_once(self):
         from llm_usage.reconciliation import link, snapshot, supplements
+
         first, second = identity('claude-account', 'org-1'), identity('claude-account', 'org-2')
         start = stamp('2026-10-12T09:00:00Z')
+
         def aggregate(c, scope, minute, tokens, key=None):
-            snapshot(self.store, c, source='claude-cloud', scope_id='claude:' + scope, route='claude-code', provider='Anthropic',
-                     model='claude-test', start=start, end=start + 60 * minute, tokens=tokens, account_key=key,
-                     parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens))
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:' + scope,
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                start=start,
+                end=start + 60 * minute,
+                tokens=tokens,
+                account_key=key,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens),
+            )
+
         with self.store.connect() as c:
             self.store.save_state(c, 'claude_cloud_account:' + second, 'claude-code:second')
             # Read by both endpoints while only one passed its key.
-            aggregate(c, 'twin', 10, 50); aggregate(c, 'twin', 10, 50, first)
+            aggregate(c, 'twin', 10, 50)
+            aggregate(c, 'twin', 10, 50, first)
             # A later result of a session whose other results carry a key.
-            aggregate(c, 'later', 10, 50, first); aggregate(c, 'later', 20, 80)
+            aggregate(c, 'later', 10, 50, first)
+            aggregate(c, 'later', 20, 80)
             # Read by the second login only, whose cloud copies of the records name it.
-            self.store.event(c, 'cloud-read', start + 300, 'Anthropic', 'claude-code', 'claude-test', dict(output=5),
-                             session='read', account='claude-code:second')
+            self.store.event(
+                c,
+                'cloud-read',
+                start + 300,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=5),
+                session='read',
+                account='claude-code:second',
+            )
             link(c, 'claude:read', 'cloud-read', 'claude-cloud:teleport-events')
             aggregate(c, 'read', 10, 30)
             # The account of a local copy is attributed, so it proves nothing about the reader.
-            self.store.event(c, 'local-copy', start + 300, 'Anthropic', 'claude-code', 'claude-test', dict(output=5),
-                             session='local', account='claude-code:second')
+            self.store.event(
+                c,
+                'local-copy',
+                start + 300,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=5),
+                session='local',
+                account='claude-code:second',
+            )
             link(c, 'claude:local', 'local-copy', 'local')
             aggregate(c, 'local', 10, 30)
             before = self.store.state(c, 'data_version')
@@ -374,13 +588,29 @@ class ClaudeCloudTests(unittest.TestCase):
             rows = [dict(r) for r in c.execute('SELECT * FROM usage_evidence')]
             accounts = sorted((e['scope_id'], e['tokens'], e['account']) for e in supplements(c)[0])
             after = self.store.state(c, 'data_version')
-        self.assertEqual(sorted((r['scope_id'], r['end'] - start, r['account_key'] or '-') for r in rows),
-                         [('claude:later', 600, first), ('claude:later', 1200, first), ('claude:local', 600, '-'),
-                          ('claude:read', 600, second), ('claude:twin', 600, first)])
-        self.assertTrue(all(r['id'] == identity(r['source'], r['scope_id'], r['model'], r['end'], r['account_key']) for r in rows))
-        self.assertEqual(accounts, [('claude:later', 30, 'claude-code'), ('claude:later', 50, 'claude-code'),
-                                    ('claude:local', 25, 'claude-code'), ('claude:read', 25, 'claude-code:second'),
-                                    ('claude:twin', 50, 'claude-code')])
+        self.assertEqual(
+            sorted((r['scope_id'], r['end'] - start, r['account_key'] or '-') for r in rows),
+            [
+                ('claude:later', 600, first),
+                ('claude:later', 1200, first),
+                ('claude:local', 600, '-'),
+                ('claude:read', 600, second),
+                ('claude:twin', 600, first),
+            ],
+        )
+        self.assertTrue(
+            all(r['id'] == identity(r['source'], r['scope_id'], r['model'], r['end'], r['account_key']) for r in rows)
+        )
+        self.assertEqual(
+            accounts,
+            [
+                ('claude:later', 30, 'claude-code'),
+                ('claude:later', 50, 'claude-code'),
+                ('claude:local', 25, 'claude-code'),
+                ('claude:read', 25, 'claude-code:second'),
+                ('claude:twin', 50, 'claude-code'),
+            ],
+        )
         self.assertGreater(after, before)
         self.run_collect(api)
         with self.store.connect() as c:
@@ -393,12 +623,18 @@ def utc(day, hour=12):
 
 class CodexAccountUsageTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name); self.store = Store(self.root / 'usage.db')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.store = Store(self.root / 'usage.db')
 
     def fake_app_server(self, usage_reply):
         server = self.root / 'fake-codex'
-        server.write_text('#!' + sys.executable + '\n' + textwrap.dedent('''
+        server.write_text(
+            '#!'
+            + sys.executable
+            + '\n'
+            + textwrap.dedent('''
             import json,sys
             for line in sys.stdin:
                 msg=json.loads(line)
@@ -406,12 +642,15 @@ class CodexAccountUsageTests(unittest.TestCase):
                 elif msg.get('method')=='account/rateLimits/read':print(json.dumps({'id':msg['id'],'result':{'rateLimits':{}}}),flush=True)
                 elif msg.get('method')=='account/usage/read':
                     USAGE
-            ''').replace('USAGE', usage_reply))
+            ''').replace('USAGE', usage_reply)
+        )
         server.chmod(0o755)
         return str(server)
 
     def test_account_usage_is_read_in_the_same_app_server_session(self):
-        server = self.fake_app_server("print(json.dumps({'id':msg['id'],'result':{'summary':{},'dailyUsageBuckets':[{'startDate':'2026-10-11','tokens':9}]}}),flush=True)")
+        server = self.fake_app_server(
+            "print(json.dumps({'id':msg['id'],'result':{'summary':{},'dailyUsageBuckets':[{'startDate':'2026-10-11','tokens':9}]}}),flush=True)"
+        )
         extra = {'account/usage/read': None}
         self.assertEqual(read_codex(server, timeout=5, extra=extra), {'rateLimits': {}})
         self.assertEqual(extra['account/usage/read']['dailyUsageBuckets'], [{'startDate': '2026-10-11', 'tokens': 9}])
@@ -426,212 +665,307 @@ class CodexAccountUsageTests(unittest.TestCase):
 
     def test_gap_is_account_total_minus_local_openai_records_per_utc_day(self):
         with self.store.connect() as c:
-            for key, ts, route, out in [('a', utc('2026-10-11'), 'codex', 300), ('b', utc('2026-10-11', 23), 'codex', 100),
-                                        ('c', utc('2026-10-11'), 'codex:ollama', 5000), ('d', utc('2026-10-12', 1), 'codex', 900),
-                                        ('e', utc('2026-10-11'), 'claude-code', 7000)]:
+            for key, ts, route, out in [
+                ('a', utc('2026-10-11'), 'codex', 300),
+                ('b', utc('2026-10-11', 23), 'codex', 100),
+                ('c', utc('2026-10-11'), 'codex:ollama', 5000),
+                ('d', utc('2026-10-12', 1), 'codex', 900),
+                ('e', utc('2026-10-11'), 'claude-code', 7000),
+            ]:
                 self.store.event(c, key, ts, 'OpenAI', route, 'gpt', dict(output=out))
-            self.store.account_tokens(c, 'codex', [{'startDate': '2026-10-11', 'tokens': 1000},
-                                                   {'startDate': '2026-10-12', 'tokens': 600}], NOW)
+            self.store.account_tokens(
+                c,
+                'codex',
+                [{'startDate': '2026-10-11', 'tokens': 1000}, {'startDate': '2026-10-12', 'tokens': 600}],
+                NOW,
+            )
             gap = self.store.account_gap(c, 'codex', NOW, days=14)
-        self.assertEqual(gap['days'], [dict(day='2026-10-11', account=1000, local=400, gap=600, over=0),
-                                       dict(day='2026-10-12', account=600, local=900, gap=0, over=300)])
+        self.assertEqual(
+            gap['days'],
+            [
+                dict(day='2026-10-11', account=1000, local=400, gap=600, over=0),
+                dict(day='2026-10-12', account=600, local=900, gap=0, over=300),
+            ],
+        )
         self.assertEqual((gap['total_gap'], gap['checked']), (600, NOW))
         self.assertEqual(self.store.usage(period='7d', now=NOW)['account_gap']['total_gap'], 600)
         self.assertIsNone(self.store.usage(period='7d', now=NOW, sections='insights').get('account_gap'))
 
     def test_poll_records_account_buckets_and_reports_their_source(self):
         def fake(binary, timeout=35, extra=None, extra_grace=10, extra_params=None):
-            extra['account/usage/read'] = {'summary': {}, 'dailyUsageBuckets': [{'startDate': '2026-10-12', 'tokens': 50}]}
+            extra['account/usage/read'] = {
+                'summary': {},
+                'dailyUsageBuckets': [{'startDate': '2026-10-12', 'tokens': 50}],
+            }
             return {'rateLimits': {}}
-        with patch('llm_usage.limits.poll_claude'), patch('llm_usage.limits.poll_claude_resources'), patch('llm_usage.limits.poll_devin'), patch('llm_usage.limits.collect_claude_cloud'), \
-             patch('llm_usage.limits.claude_contexts', return_value=[]), \
-             patch('llm_usage.limits.poll_antigravity_app'), patch('llm_usage.limits.read_codex', side_effect=fake), \
-             patch('llm_usage.limits.OPENCODE_GO_USAGE_URL', 'http://127.0.0.1:9/none'):
+
+        with (
+            patch('llm_usage.limits.poll_claude'),
+            patch('llm_usage.limits.poll_claude_resources'),
+            patch('llm_usage.limits.poll_devin'),
+            patch('llm_usage.limits.collect_claude_cloud'),
+            patch('llm_usage.limits.claude_contexts', return_value=[]),
+            patch('llm_usage.limits.poll_antigravity_app'),
+            patch('llm_usage.limits.read_codex', side_effect=fake),
+            patch('llm_usage.limits.OPENCODE_GO_USAGE_URL', 'http://127.0.0.1:9/none'),
+        ):
             poll_limits(self.store, {'codex_binary': 'codex', 'opencode_auth': str(self.root / 'missing.json')})
         with self.store.connect() as c:
-            self.assertEqual(c.execute('SELECT route,day,tokens FROM account_token_buckets').fetchall()[0][:], ('codex', '2026-10-12', 50))
+            self.assertEqual(
+                c.execute('SELECT route,day,tokens FROM account_token_buckets').fetchall()[0][:],
+                ('codex', '2026-10-12', 50),
+            )
             row = c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()
         self.assertEqual(row[0], 'ok')
 
     def poll_fake(self, fake):
         from contextlib import ExitStack
+
         with ExitStack() as stack:
-            for name in ('poll_claude','poll_claude_resources','poll_devin','collect_claude_cloud','poll_antigravity_app','poll_codex_thread','claude_contexts'):
-                stack.enter_context(patch('llm_usage.limits.'+name))
-            stack.enter_context(patch('llm_usage.limits.read_codex',side_effect=fake))
-            poll_limits(self.store,{'codex_binary':'fixture','opencode_auth':str(self.root/'absent')})
+            for name in (
+                'poll_claude',
+                'poll_claude_resources',
+                'poll_devin',
+                'collect_claude_cloud',
+                'poll_antigravity_app',
+                'poll_codex_thread',
+                'claude_contexts',
+            ):
+                stack.enter_context(patch('llm_usage.limits.' + name))
+            stack.enter_context(patch('llm_usage.limits.read_codex', side_effect=fake))
+            poll_limits(self.store, {'codex_binary': 'fixture', 'opencode_auth': str(self.root / 'absent')})
 
     def test_quota_failures_preserve_usage_and_do_not_bind_previous_login(self):
         from llm_usage.resources import observe_account
+
         with self.store.connect() as c:
-            observe_account(c,'codex',('old',None),time.time())
-            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=500)],NOW)
-        for mode in ('rpc','parser'):
+            observe_account(c, 'codex', ('old', None), time.time())
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-11', tokens=500)], NOW)
+        for mode in ('rpc', 'parser'):
             with self.subTest(mode=mode):
-                def fake(binary,**kw):
-                    kw['extra']['account/usage/read']={'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]}
-                    kw['extra']['account/read']={'workspaceRouting':{'chatgptAccountId':'new'}}
-                    if mode=='rpc':raise RuntimeError('quota failed')
-                    return {'accountId':'new','rateLimitsByLimitId':[],'rateLimits':'malformed'}
+
+                def fake(binary, **kw):
+                    kw['extra']['account/usage/read'] = {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]}
+                    kw['extra']['account/read'] = {'workspaceRouting': {'chatgptAccountId': 'new'}}
+                    if mode == 'rpc':
+                        raise RuntimeError('quota failed')
+                    return {'accountId': 'new', 'rateLimitsByLimitId': [], 'rateLimits': 'malformed'}
+
                 self.poll_fake(fake)
                 with self.store.connect() as c:
-                    gap=self.store.account_gap(c,'codex',NOW)
-                    self.assertEqual([(r['day'],r['account']) for r in gap['days']],[('2026-10-12',50)])
-                    self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'ok')
-                    self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex'").fetchone()[0],'error')
+                    gap = self.store.account_gap(c, 'codex', NOW)
+                    self.assertEqual([(r['day'], r['account']) for r in gap['days']], [('2026-10-12', 50)])
+                    self.assertEqual(
+                        c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0], 'ok'
+                    )
+                    self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex'").fetchone()[0], 'error')
 
     def test_fresh_usage_with_malformed_identity_is_unbound_from_previous_account(self):
         from llm_usage.resources import observe_account
+
         with self.store.connect() as c:
-            observe_account(c,'codex',('old',None),time.time())
-            before=self.store.account_namespace(c,'codex')
-        def fake(binary,**kw):
-            kw['extra']['account/read']={'workspaceRouting':[], 'account':'malformed'}
-            kw['extra']['account/usage/read']={'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]}
+            observe_account(c, 'codex', ('old', None), time.time())
+            before = self.store.account_namespace(c, 'codex')
+
+        def fake(binary, **kw):
+            kw['extra']['account/read'] = {'workspaceRouting': [], 'account': 'malformed'}
+            kw['extra']['account/usage/read'] = {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]}
             raise RuntimeError('quota unavailable')
+
         self.poll_fake(fake)
         with self.store.connect() as c:
-            self.assertNotEqual(self.store.account_namespace(c,'codex'),before)
-            self.assertTrue(self.store.account_namespace(c,'codex').startswith('epoch:'))
-            self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
+            self.assertNotEqual(self.store.account_namespace(c, 'codex'), before)
+            self.assertTrue(self.store.account_namespace(c, 'codex').startswith('epoch:'))
+            self.assertEqual(self.store.account_gap(c, 'codex', NOW)['total_gap'], 50)
 
     def test_unusable_partial_replies_preserve_previous_account_and_report_failure(self):
         from llm_usage.resources import observe_account
         from llm_usage.limits import record_codex_account
-        with self.store.connect() as c:observe_account(c,'codex',('known',None),time.time())
-        record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
-        with self.store.connect() as c:before=self.store.account_namespace(c,'codex')
-        for usage in (None, {}, {'dailyUsageBuckets':[{'startDate':'invalid','tokens':10}]}):
+
+        with self.store.connect() as c:
+            observe_account(c, 'codex', ('known', None), time.time())
+        record_codex_account(self.store, {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]})
+        with self.store.connect() as c:
+            before = self.store.account_namespace(c, 'codex')
+        for usage in (None, {}, {'dailyUsageBuckets': [{'startDate': 'invalid', 'tokens': 10}]}):
             with self.subTest(usage=usage):
-                def fake(binary,**kw):
-                    kw['extra']['account/read']={'workspaceRouting':[], 'account':{'type':'chatgpt'}}
-                    kw['extra']['account/usage/read']=usage
+
+                def fake(binary, **kw):
+                    kw['extra']['account/read'] = {'workspaceRouting': [], 'account': {'type': 'chatgpt'}}
+                    kw['extra']['account/usage/read'] = usage
                     raise RuntimeError('quota unavailable')
+
                 self.poll_fake(fake)
                 with self.store.connect() as c:
-                    self.assertEqual(self.store.account_namespace(c,'codex'),before)
-                    self.assertEqual(self.store.account_gap(c,'codex',NOW)['total_gap'],50)
-                    self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'error')
+                    self.assertEqual(self.store.account_namespace(c, 'codex'), before)
+                    self.assertEqual(self.store.account_gap(c, 'codex', NOW)['total_gap'], 50)
+                    self.assertEqual(
+                        c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0], 'error'
+                    )
 
     def test_matching_profile_without_account_id_preserves_known_totals(self):
         from llm_usage.resources import observe_account
         from llm_usage.limits import record_codex_account
-        for reply in ('failure','quota','fresh_usage'):
+
+        for reply in ('failure', 'quota', 'fresh_usage'):
             with self.subTest(reply=reply):
                 with self.store.connect() as c:
-                    observe_account(c,'codex',('known',None),time.time(),
-                                    credential_revision=identity('chatgpt','same@example.test'))
-                    before=self.store.account_namespace(c,'codex')
-                record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
-                with self.store.connect() as c:checked=self.store.account_gap(c,'codex',NOW)['checked']
-                def fake(binary,**kw):
-                    kw['extra']['account/read']={'account':{'type':'chatgpt','email':'same@example.test'}}
-                    if reply=='failure':raise RuntimeError('quota unavailable')
-                    if reply=='fresh_usage':
-                        kw['extra']['account/usage/read']={'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=70)]}
-                    return {'rateLimits':{}}
+                    observe_account(
+                        c,
+                        'codex',
+                        ('known', None),
+                        time.time(),
+                        credential_revision=identity('chatgpt', 'same@example.test'),
+                    )
+                    before = self.store.account_namespace(c, 'codex')
+                record_codex_account(self.store, {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]})
+                with self.store.connect() as c:
+                    checked = self.store.account_gap(c, 'codex', NOW)['checked']
+
+                def fake(binary, **kw):
+                    kw['extra']['account/read'] = {'account': {'type': 'chatgpt', 'email': 'same@example.test'}}
+                    if reply == 'failure':
+                        raise RuntimeError('quota unavailable')
+                    if reply == 'fresh_usage':
+                        kw['extra']['account/usage/read'] = {
+                            'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=70)]
+                        }
+                    return {'rateLimits': {}}
+
                 self.poll_fake(fake)
                 with self.store.connect() as c:
-                    self.assertEqual(self.store.account_namespace(c,'codex'),before)
-                    gap=self.store.account_gap(c,'codex',NOW)
-                    expected=70 if reply=='fresh_usage' else 50
-                    self.assertEqual(gap['total_gap'],expected)
-                    if reply!='fresh_usage':self.assertEqual(gap['checked'],checked)
-                    self.assertEqual(self.store.usage(period='7d',now=NOW)['account_gap']['total_gap'],expected)
+                    self.assertEqual(self.store.account_namespace(c, 'codex'), before)
+                    gap = self.store.account_gap(c, 'codex', NOW)
+                    expected = 70 if reply == 'fresh_usage' else 50
+                    self.assertEqual(gap['total_gap'], expected)
+                    if reply != 'fresh_usage':
+                        self.assertEqual(gap['checked'], checked)
+                    self.assertEqual(self.store.usage(period='7d', now=NOW)['account_gap']['total_gap'], expected)
 
     def test_changed_profile_without_account_id_does_not_reuse_known_totals(self):
         from llm_usage.resources import observe_account
+
         with self.store.connect() as c:
-            observe_account(c,'codex',('known',None),time.time(),
-                            credential_revision=identity('chatgpt','old@example.test'))
-            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-12',tokens=50)],NOW)
-        def fake(binary,**kw):
-            kw['extra']['account/read']={'account':{'type':'chatgpt','email':'new@example.test'}}
+            observe_account(
+                c, 'codex', ('known', None), time.time(), credential_revision=identity('chatgpt', 'old@example.test')
+            )
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-12', tokens=50)], NOW)
+
+        def fake(binary, **kw):
+            kw['extra']['account/read'] = {'account': {'type': 'chatgpt', 'email': 'new@example.test'}}
             raise RuntimeError('quota unavailable')
+
         self.poll_fake(fake)
         with self.store.connect() as c:
-            self.assertTrue(self.store.account_namespace(c,'codex').startswith('epoch:'))
-            self.assertIsNone(self.store.account_gap(c,'codex',NOW))
-            self.assertEqual(c.execute('SELECT SUM(tokens) FROM account_token_buckets').fetchone()[0],50)
+            self.assertTrue(self.store.account_namespace(c, 'codex').startswith('epoch:'))
+            self.assertIsNone(self.store.account_gap(c, 'codex', NOW))
+            self.assertEqual(c.execute('SELECT SUM(tokens) FROM account_token_buckets').fetchone()[0], 50)
 
     def test_complete_poll_failure_preserves_last_account_observation(self):
         from llm_usage.resources import observe_account
         from llm_usage.limits import record_codex_account
         from llm_usage.reconciliation import supplements
-        with self.store.connect() as c:observe_account(c,'codex',('known',None),time.time())
-        record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
+
         with self.store.connect() as c:
-            before=self.store.account_namespace(c,'codex')
-            checked=self.store.account_gap(c,'codex',NOW)['checked']
-        def offline(binary,**kw):raise OSError('offline')
+            observe_account(c, 'codex', ('known', None), time.time())
+        record_codex_account(self.store, {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]})
+        with self.store.connect() as c:
+            before = self.store.account_namespace(c, 'codex')
+            checked = self.store.account_gap(c, 'codex', NOW)['checked']
+
+        def offline(binary, **kw):
+            raise OSError('offline')
+
         self.poll_fake(offline)
         with self.store.connect() as c:
-            self.assertEqual(self.store.account_namespace(c,'codex'),before)
-            self.assertEqual(self.store.account_gap(c,'codex',NOW)['checked'],checked)
-            self.assertEqual(sum(e['tokens'] for e in supplements(c)[0]),50)
-            self.assertEqual(c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0],'error')
+            self.assertEqual(self.store.account_namespace(c, 'codex'), before)
+            self.assertEqual(self.store.account_gap(c, 'codex', NOW)['checked'], checked)
+            self.assertEqual(sum(e['tokens'] for e in supplements(c)[0]), 50)
+            self.assertEqual(
+                c.execute("SELECT status FROM sources WHERE name='codex-account-usage'").fetchone()[0], 'error'
+            )
 
     def test_empty_and_sparse_new_account_do_not_reuse_old_totals(self):
         from llm_usage.resources import observe_account
         from llm_usage.limits import record_codex_account
         from llm_usage.reconciliation import supplements
-        for who,buckets in [('old',[dict(startDate='2026-10-11',tokens=500)]),('new',[])]:
-            with self.store.connect() as c:observe_account(c,'codex',(who,None),time.time())
-            record_codex_account(self.store,{'dailyUsageBuckets':buckets})
+
+        for who, buckets in [('old', [dict(startDate='2026-10-11', tokens=500)]), ('new', [])]:
+            with self.store.connect() as c:
+                observe_account(c, 'codex', (who, None), time.time())
+            record_codex_account(self.store, {'dailyUsageBuckets': buckets})
         with self.store.connect() as c:
-            self.assertIsNone(self.store.account_gap(c,'codex',NOW))
-            self.assertEqual(supplements(c)[0],[])
-        record_codex_account(self.store,{'dailyUsageBuckets':[dict(startDate='2026-10-12',tokens=50)]})
+            self.assertIsNone(self.store.account_gap(c, 'codex', NOW))
+            self.assertEqual(supplements(c)[0], [])
+        record_codex_account(self.store, {'dailyUsageBuckets': [dict(startDate='2026-10-12', tokens=50)]})
         with self.store.connect() as c:
-            self.assertEqual([r['day'] for r in self.store.account_gap(c,'codex',NOW)['days']],['2026-10-12'])
-            self.assertEqual(sum(r['tokens'] for r in supplements(c)[0]),50)
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM account_token_buckets').fetchone()[0],2)
-            observe_account(c,'codex',('old',None),time.time())
-            self.assertEqual(self.store.account_gap(c,'codex',NOW)['days'][0]['account'],500)
+            self.assertEqual([r['day'] for r in self.store.account_gap(c, 'codex', NOW)['days']], ['2026-10-12'])
+            self.assertEqual(sum(r['tokens'] for r in supplements(c)[0]), 50)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM account_token_buckets').fetchone()[0], 2)
+            observe_account(c, 'codex', ('old', None), time.time())
+            self.assertEqual(self.store.account_gap(c, 'codex', NOW)['days'][0]['account'], 500)
 
     def test_unknown_account_epoch_is_stable_and_changes_with_native_login(self):
         def poll(email):
-            def fake(binary,**kw):
-                kw['extra']['account/read']={'account':{'type':'chatgpt','email':email}}
-                kw['extra']['account/usage/read']={'dailyUsageBuckets':[]}
-                return {'rateLimits':{}}
+            def fake(binary, **kw):
+                kw['extra']['account/read'] = {'account': {'type': 'chatgpt', 'email': email}}
+                kw['extra']['account/usage/read'] = {'dailyUsageBuckets': []}
+                return {'rateLimits': {}}
+
             self.poll_fake(fake)
-            with self.store.connect() as c:return self.store.account_namespace(c,'codex')
-        first=poll('first@example.test')
-        self.assertEqual(first,poll('first@example.test'))
-        self.assertNotEqual(first,poll('second@example.test'))
-        with self.store.connect() as c:self.assertNotIn('example.test','\n'.join(c.iterdump()))
+            with self.store.connect() as c:
+                return self.store.account_namespace(c, 'codex')
+
+        first = poll('first@example.test')
+        self.assertEqual(first, poll('first@example.test'))
+        self.assertNotEqual(first, poll('second@example.test'))
+        with self.store.connect() as c:
+            self.assertNotIn('example.test', '\n'.join(c.iterdump()))
 
     def test_legacy_migration_retains_but_does_not_assign_history(self):
         import sqlite3
         from contextlib import closing
         from llm_usage.resources import observe_account
         from llm_usage.reconciliation import supplements
-        path=self.root/'legacy.db'
+
+        path = self.root / 'legacy.db'
         with closing(sqlite3.connect(path)) as c:
-            c.execute('CREATE TABLE account_tokens(route TEXT,day TEXT,tokens INTEGER,checked REAL,PRIMARY KEY(route,day))')
-            c.execute('INSERT INTO account_tokens VALUES (?,?,?,?)',('codex','2026-10-11',500,NOW))
+            c.execute(
+                'CREATE TABLE account_tokens(route TEXT,day TEXT,tokens INTEGER,checked REAL,PRIMARY KEY(route,day))'
+            )
+            c.execute('INSERT INTO account_tokens VALUES (?,?,?,?)', ('codex', '2026-10-11', 500, NOW))
             c.commit()
-        migrated=Store(path);Store(path)
+        migrated = Store(path)
+        Store(path)
         with migrated.connect() as c:
-            self.assertEqual(migrated.account_gap(c,'codex',NOW)['total_gap'],500)
-            observe_account(c,'codex',('new',None),time.time())
-            self.assertIsNone(migrated.account_gap(c,'codex',NOW))
-            self.assertEqual(supplements(c)[0],[])
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM account_token_buckets').fetchone()[0],1)
+            self.assertEqual(migrated.account_gap(c, 'codex', NOW)['total_gap'], 500)
+            observe_account(c, 'codex', ('new', None), time.time())
+            self.assertIsNone(migrated.account_gap(c, 'codex', NOW))
+            self.assertEqual(supplements(c)[0], [])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM account_token_buckets').fetchone()[0], 1)
 
     def test_rate_error_waits_for_usage_in_either_reply_order(self):
-        for order in ('before','after'):
+        for order in ('before', 'after'):
             with self.subTest(order=order):
-                server=Path(self.fake_app_server("print(json.dumps({'id':msg['id'],'result':{'dailyUsageBuckets':[]}}),flush=True)"))
-                s=server.read_text().replace("print(json.dumps({'id':msg['id'],'result':{'rateLimits':{}}}),flush=True)",
-                    "print(json.dumps({'id':2,'error':{'code':-1}}),flush=True)" if order=='before' else 'pass')
-                if order=='after':s=s.replace("{'dailyUsageBuckets':[]}}),flush=True)","{'dailyUsageBuckets':[]}}),flush=True); print(json.dumps({'id':2,'error':{'code':-1}}),flush=True)")
+                server = Path(
+                    self.fake_app_server(
+                        "print(json.dumps({'id':msg['id'],'result':{'dailyUsageBuckets':[]}}),flush=True)"
+                    )
+                )
+                s = server.read_text().replace(
+                    "print(json.dumps({'id':msg['id'],'result':{'rateLimits':{}}}),flush=True)",
+                    "print(json.dumps({'id':2,'error':{'code':-1}}),flush=True)" if order == 'before' else 'pass',
+                )
+                if order == 'after':
+                    s = s.replace(
+                        "{'dailyUsageBuckets':[]}}),flush=True)",
+                        "{'dailyUsageBuckets':[]}}),flush=True); print(json.dumps({'id':2,'error':{'code':-1}}),flush=True)",
+                    )
                 server.write_text(s)
-                extra={'account/usage/read':None}
-                with self.assertRaises(RuntimeError):read_codex(str(server),timeout=5,extra=extra,extra_grace=.5)
-                self.assertEqual(extra['account/usage/read'],{'dailyUsageBuckets':[]})
-
+                extra = {'account/usage/read': None}
+                with self.assertRaises(RuntimeError):
+                    read_codex(str(server), timeout=5, extra=extra, extra_grace=0.5)
+                self.assertEqual(extra['account/usage/read'], {'dailyUsageBuckets': []})
 
 
 if __name__ == '__main__':

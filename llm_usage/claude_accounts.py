@@ -9,6 +9,7 @@ and carry the account route in events.account.
 Only accountUuid/organizationUuid (hashed), subscriptionType, rateLimitTier and
 the token expiry time are read. Emails, names and tokens are never stored.
 """
+
 import json
 import math
 import os
@@ -32,7 +33,7 @@ def family(route):
 
 def suffix(route):
     """'' for the original account, ':<hash>' for another account route."""
-    return route[len(FAMILY):] if is_claude(route) else ''
+    return route[len(FAMILY) :] if is_claude(route) else ''
 
 
 def account_source(route):
@@ -51,6 +52,7 @@ def source_label(name, labels):
 def account_key(identity):
     """Same key resources.observe_account stores for route 'claude-code'."""
     from .resources import key
+
     return key(FAMILY, identity)
 
 
@@ -76,15 +78,20 @@ def plan_label(plan, tier):
 
 
 def default_home(settings):
-    credentials = Path(settings.get('claude_auth') or Path.home()/'.claude/.credentials.json')
+    credentials = Path(settings.get('claude_auth') or Path.home() / '.claude/.credentials.json')
     if settings.get('claude_account_file'):
         account_file = Path(settings['claude_account_file'])
     elif credentials.parent.name == '.claude':
-        account_file = credentials.parent.parent/'.claude.json'
+        account_file = credentials.parent.parent / '.claude.json'
     else:
         account_file = None
-    return dict(path=str(credentials.parent), credentials=credentials, account_file=account_file, kind='default',
-                name='~/.claude' if credentials.parent.name == '.claude' else credentials.parent.name)
+    return dict(
+        path=str(credentials.parent),
+        credentials=credentials,
+        account_file=account_file,
+        kind='default',
+        name='~/.claude' if credentials.parent.name == '.claude' else credentials.parent.name,
+    )
 
 
 def home_candidates(settings, observed=()):
@@ -92,7 +99,7 @@ def home_candidates(settings, observed=()):
     found = [default_home(settings)]
     folders = [(Path(p), 'configured') for p in settings.get('claude_homes') or [] if isinstance(p, str)]
     if settings.get('claude_discover_homes', True):
-        base = Path(settings.get('paseo_home') or Path.home()/'.paseo')/'zerosub'/'homes'
+        base = Path(settings.get('paseo_home') or Path.home() / '.paseo') / 'zerosub' / 'homes'
         try:
             folders += [(p, 'zerosub') for p in sorted(base.glob('claude-*'))]
         except OSError:
@@ -101,14 +108,28 @@ def home_candidates(settings, observed=()):
     folders += [(Path(p), 'observed') for p in observed if isinstance(p, str) and Path(p).is_relative_to(Path.home())]
     for folder, kind in folders:
         if folder.is_absolute() and SAFE_NAME.match(folder.name):
-            found.append(dict(path=str(folder), credentials=folder/'.credentials.json',
-                              account_file=folder/'.claude.json', kind=kind, name=folder.name))
+            found.append(
+                dict(
+                    path=str(folder),
+                    credentials=folder / '.credentials.json',
+                    account_file=folder / '.claude.json',
+                    kind=kind,
+                    name=folder.name,
+                )
+            )
     # A Windows home's own login identifies its transcripts; its token is never read.
     for value in settings.get('homes') or []:
         home = Path(value) if isinstance(value, str) else None
         if home and re.match(r'^/mnt/[A-Za-z]/', str(home)):
-            found.append(dict(path=str(home/'.claude'), credentials=None, account_file=home/'.claude.json',
-                              kind='windows', name='Windows'))
+            found.append(
+                dict(
+                    path=str(home / '.claude'),
+                    credentials=None,
+                    account_file=home / '.claude.json',
+                    kind='windows',
+                    name='Windows',
+                )
+            )
     unique = {}
     for home in found:
         try:
@@ -119,30 +140,39 @@ def home_candidates(settings, observed=()):
     return list(unique.values())
 
 
-def transcript_sources(settings,observed=()):
+def transcript_sources(settings, observed=()):
     """Extend selected sources with native Claude homes, once per real projects folder.
 
     An unrelated/isolated source configuration must not start scanning this
     process's real HOME merely because it can discover an installed Claude CLI.
     """
     from .store import identity
-    sources=list(settings.get('sources') or [])
-    roots={str(Path(s['path']).resolve()) for s in sources if s.get('kind')=='jsonl' and s.get('route')==FAMILY}
-    user=Path.home().resolve()
-    selected={Path(p).resolve() for p in settings.get('homes') or [] if isinstance(p,str) and Path(p).is_absolute()}
-    local=user in selected or any(Path(p).is_relative_to(user) for p in roots)
-    explicit=any(settings.get(k) for k in ('claude_auth','claude_homes','paseo_home'))
-    if not (local or selected or explicit or observed):return sources
-    for home in home_candidates(settings,observed):
-        kind=home['kind'];folder=Path(home['path'])
-        if kind=='default' and not (local or settings.get('claude_auth')):continue
-        if kind=='zerosub' and not (local or settings.get('paseo_home')):continue
-        if kind=='observed' and not folder.resolve().is_relative_to(user):continue
-        if not folder.is_dir():continue
-        root=folder/'projects';real=str(root.resolve())
-        if real in roots:continue
+
+    sources = list(settings.get('sources') or [])
+    roots = {str(Path(s['path']).resolve()) for s in sources if s.get('kind') == 'jsonl' and s.get('route') == FAMILY}
+    user = Path.home().resolve()
+    selected = {Path(p).resolve() for p in settings.get('homes') or [] if isinstance(p, str) and Path(p).is_absolute()}
+    local = user in selected or any(Path(p).is_relative_to(user) for p in roots)
+    explicit = any(settings.get(k) for k in ('claude_auth', 'claude_homes', 'paseo_home'))
+    if not (local or selected or explicit or observed):
+        return sources
+    for home in home_candidates(settings, observed):
+        kind = home['kind']
+        folder = Path(home['path'])
+        if kind == 'default' and not (local or settings.get('claude_auth')):
+            continue
+        if kind == 'zerosub' and not (local or settings.get('paseo_home')):
+            continue
+        if kind == 'observed' and not folder.resolve().is_relative_to(user):
+            continue
+        if not folder.is_dir():
+            continue
+        root = folder / 'projects'
+        real = str(root.resolve())
+        if real in roots:
+            continue
         roots.add(real)
-        sources.append(dict(name='claude-local:'+identity(real)[:12],kind='jsonl',route=FAMILY,path=str(root)))
+        sources.append(dict(name='claude-local:' + identity(real)[:12], kind='jsonl', route=FAMILY, path=str(root)))
     return sources
 
 
@@ -163,7 +193,9 @@ def identity_of(account_file):
         user, org = data.get('accountUuid'), data.get('organizationUuid')
     except (OSError, ValueError, TypeError, AttributeError):
         return None
-    found = (user, org) if all(isinstance(v, str) and re.fullmatch('[A-Za-z0-9-]{1,100}', v) for v in (user, org)) else None
+    found = (
+        (user, org) if all(isinstance(v, str) and re.fullmatch('[A-Za-z0-9-]{1,100}', v) for v in (user, org)) else None
+    )
     if len(_identities) > 64:
         _identities.clear()
     _identities[signature] = found
@@ -186,7 +218,7 @@ def inspect(home):
             info['tier'] = auth.get('rateLimitTier') if isinstance(auth.get('rateLimitTier'), str) else None
             expires = auth.get('expiresAt')
             if isinstance(expires, (int, float)) and not isinstance(expires, bool) and math.isfinite(expires):
-                info['expires'] = expires/1000
+                info['expires'] = expires / 1000
             info['has_token'] = bool(auth.get('accessToken'))
     return info
 
@@ -198,13 +230,21 @@ def bind_primary(store, c, homes):
     if primary:
         return primary
     from .resources import account
+
     owner = account(c, FAMILY)
-    primary = owner['account_key'] if owner and owner['account_key'] else next(
-        (h['key'] for h in homes if h['kind'] == 'default' and h['key']), None)
+    primary = (
+        owner['account_key']
+        if owner and owner['account_key']
+        else next((h['key'] for h in homes if h['kind'] == 'default' and h['key']), None)
+    )
     remembered = store.state(c, 'claude_accounts:unbound-keys', []) or []
     secondary = set(remembered)
-    secondary.update(r[0] for r in c.execute(
-        'SELECT account_key FROM claude_accounts WHERE route<>? AND account_key IS NOT NULL', (FAMILY,)))
+    secondary.update(
+        r[0]
+        for r in c.execute(
+            'SELECT account_key FROM claude_accounts WHERE route<>? AND account_key IS NOT NULL', (FAMILY,)
+        )
+    )
     if primary in secondary:
         primary = None  # A later default-home login must keep its existing hashed route.
     if primary:
@@ -243,20 +283,37 @@ def accounts(store, settings, now=None):
         for key, members in groups.items():
             route = route_for(key, primary)
             pollable = [h for h in members if h['kind'] != 'windows' and h.get('credentials') and h['has_token']]
-            best = max(pollable, key=lambda h: ((h['expires'] or 0) > now, h['kind'] == 'default', h['expires'] or 0), default=None)
-            plan = next(((h['plan'], h['tier']) for h in ([best] if best else []) + members if h['plan'] or h['tier']), (None, None))
+            best = max(
+                pollable,
+                key=lambda h: ((h['expires'] or 0) > now, h['kind'] == 'default', h['expires'] or 0),
+                default=None,
+            )
+            plan = next(
+                ((h['plan'], h['tier']) for h in ([best] if best else []) + members if h['plan'] or h['tier']),
+                (None, None),
+            )
             contexts.append(dict(route=route, key=key, home=best, homes=members, plan=plan[0], tier=plan[1]))
             previous = c.execute('SELECT first_seen FROM claude_accounts WHERE route=?', (route,)).fetchone()
-            data = dict(primary=route == FAMILY, plan=plan[0], tier=plan[1], plan_label=plan_label(*plan),
-                        homes=[dict(kind=h['kind'], name=h['name']) for h in members],
-                        polled=dict(kind=best['kind'], name=best['name']) if best else None,
-                        token_valid=bool(best and best['expires'] and best['expires'] > now))
-            c.execute('INSERT OR REPLACE INTO claude_accounts VALUES (?,?,?,?,?)',
-                      (route, key, previous[0] if previous else now, now, json.dumps(data, ensure_ascii=False)))
+            data = dict(
+                primary=route == FAMILY,
+                plan=plan[0],
+                tier=plan[1],
+                plan_label=plan_label(*plan),
+                homes=[dict(kind=h['kind'], name=h['name']) for h in members],
+                polled=dict(kind=best['kind'], name=best['name']) if best else None,
+                token_valid=bool(best and best['expires'] and best['expires'] > now),
+            )
+            c.execute(
+                'INSERT OR REPLACE INTO claude_accounts VALUES (?,?,?,?,?)',
+                (route, key, previous[0] if previous else now, now, json.dumps(data, ensure_ascii=False)),
+            )
         if not default['key'] and not any(ctx['route'] == FAMILY for ctx in contexts):
             # Legacy behaviour for a default home without a readable identity. A default
             # home signed in to another account is that account's route only.
-            contexts.insert(0, dict(route=FAMILY, key=None, home=default, homes=[default], plan=default['plan'], tier=default['tier']))
+            contexts.insert(
+                0,
+                dict(route=FAMILY, key=None, home=default, homes=[default], plan=default['plan'], tier=default['tier']),
+            )
     contexts.sort(key=lambda ctx: (ctx['route'] != FAMILY, ctx['route']))
     return contexts
 
@@ -268,8 +325,15 @@ def registry(c):
             data = json.loads(row['data'])
         except ValueError:
             data = {}
-        rows.append(dict(route=row['route'], account_key=row['account_key'], first_seen=row['first_seen'],
-                         last_seen=row['last_seen'], **data))
+        rows.append(
+            dict(
+                route=row['route'],
+                account_key=row['account_key'],
+                first_seen=row['first_seen'],
+                last_seen=row['last_seen'],
+                **data,
+            )
+        )
     rows.sort(key=lambda r: (r['route'] != FAMILY, r['first_seen'], r['route']))
     return rows
 
@@ -299,8 +363,19 @@ def describe(c, names=None, ended=()):
     out = []
     for row in rows:
         custom = names.get(row['route'])
-        out.append(dict(route=row['route'], label=named[row['route']], plan_label=row.get('plan_label'),
-                        primary=row['route'] == FAMILY, homes=row.get('homes') or [], polled=row.get('polled'),
-                        token_valid=row.get('token_valid'), first_seen=row['first_seen'], last_seen=row['last_seen'],
-                        ended=row['route'] in set(ended or ()), custom_name=custom.strip() if isinstance(custom, str) and custom.strip() else None))
+        out.append(
+            dict(
+                route=row['route'],
+                label=named[row['route']],
+                plan_label=row.get('plan_label'),
+                primary=row['route'] == FAMILY,
+                homes=row.get('homes') or [],
+                polled=row.get('polled'),
+                token_valid=row.get('token_valid'),
+                first_seen=row['first_seen'],
+                last_seen=row['last_seen'],
+                ended=row['route'] in set(ended or ()),
+                custom_name=custom.strip() if isinstance(custom, str) and custom.strip() else None,
+            )
+        )
     return out

@@ -16,6 +16,7 @@ the transcript folder decides: a folder only one account writes is that account'
 in a shared folder, requests before a second account first appeared belong to the
 folder's own account. Anything else is 'claude-code:unknown' - never guessed.
 """
+
 import json
 import math
 import os
@@ -24,7 +25,16 @@ import re
 import sqlite3
 import time
 
-from .claude_accounts import FAMILY, UNKNOWN, home_candidates, inspect, observed_homes, route_for, bind_primary,transcript_sources
+from .claude_accounts import (
+    FAMILY,
+    UNKNOWN,
+    home_candidates,
+    inspect,
+    observed_homes,
+    route_for,
+    bind_primary,
+    transcript_sources,
+)
 
 # Evidence may be stamped a moment after the request it explains (clock jitter).
 TOLERANCE = 2
@@ -47,13 +57,18 @@ def initialize(c):
 def account_for(ts, evidence, policy, primary_route):
     """Pure decision for one request. evidence: sorted [(ts, route)]; policy:
     ('single', route) | ('shared', native route, cutover) | None (folder unknown)."""
-    latest = None;point_time=None;ambiguous=False
+    latest = None
+    point_time = None
+    ambiguous = False
     for point, route in evidence:
         if point > ts + TOLERANCE:
             break
-        if point_time==point and latest!=route:ambiguous=True
-        elif point_time!=point:ambiguous=False
-        latest = route;point_time=point
+        if point_time == point and latest != route:
+            ambiguous = True
+        elif point_time != point:
+            ambiguous = False
+        latest = route
+        point_time = point
     if latest:
         return UNKNOWN if ambiguous else latest
     if policy and policy[0] == 'single':
@@ -75,12 +90,20 @@ def add_evidence(c, points):
     """Insert (session, ts, key, kind); mark sessions whose new points may move requests."""
     dirty = {}
     for session, ts, key, kind in points:
-        if not (isinstance(session, str) and SESSION.match(session) and _finite(ts) and isinstance(key, str) and KEY.match(key)):
+        if not (
+            isinstance(session, str)
+            and SESSION.match(session)
+            and _finite(ts)
+            and isinstance(key, str)
+            and KEY.match(key)
+        ):
             continue
         point = (c.execute('PRAGMA database_list').fetchone()[2], session, float(ts), key, kind)
         if point in _stored:
             continue
-        if c.execute('INSERT OR IGNORE INTO claude_evidence VALUES (?,?,?,?)', (session, float(ts), key, kind)).rowcount:
+        if c.execute(
+            'INSERT OR IGNORE INTO claude_evidence VALUES (?,?,?,?)', (session, float(ts), key, kind)
+        ).rowcount:
             dirty[session] = min(dirty.get(session, ts), ts)
         else:
             # Remember only points already committed, so a rolled-back insert is retried.
@@ -88,14 +111,16 @@ def add_evidence(c, points):
                 _stored.clear()
             _stored.add(point)
     for session, since in dirty.items():
-        c.execute('INSERT INTO claude_dirty VALUES (?,?) ON CONFLICT(session) DO UPDATE SET since=MIN(since,excluded.since)',
-                  (session, since - TOLERANCE))
+        c.execute(
+            'INSERT INTO claude_dirty VALUES (?,?) ON CONFLICT(session) DO UPDATE SET since=MIN(since,excluded.since)',
+            (session, since - TOLERANCE),
+        )
     return len(dirty)
 
 
 def read_hooks(store, inbox):
     """Copy new hook markers from the inbox database (read-only)."""
-    path = Path(inbox)/'claude-accounts.db'
+    path = Path(inbox) / 'claude-accounts.db'
     if not path.exists():
         return 0, []
     key = 'claude-hooks:' + str(path)
@@ -106,7 +131,9 @@ def read_hooks(store, inbox):
         top = source.execute('SELECT MAX(id) FROM markers').fetchone()[0] or 0
         if top < last:
             last = 0  # the inbox database was recreated
-        rows = source.execute('SELECT id,ts,session,event,account,home FROM markers WHERE id>? ORDER BY id LIMIT 20000', (last,)).fetchall()
+        rows = source.execute(
+            'SELECT id,ts,session,event,account,home FROM markers WHERE id>? ORDER BY id LIMIT 20000', (last,)
+        ).fetchall()
     finally:
         source.close()
     if not rows:
@@ -135,7 +162,7 @@ def registry_points(homes):
         if home['kind'] == 'windows' or not home.get('key'):
             continue
         try:
-            folder = os.path.realpath(Path(home['path'])/'sessions')
+            folder = os.path.realpath(Path(home['path']) / 'sessions')
         except (OSError, ValueError):
             continue
         owners.setdefault(folder, set()).add(home['key'])
@@ -158,10 +185,10 @@ def registry_points(homes):
             session = data.get('sessionId')
             started = data.get('startedAt')
             if _finite(started):
-                points.append((session, started/1000, key, 'process:start'))
+                points.append((session, started / 1000, key, 'process:start'))
             changed = data.get('statusUpdatedAt')
             if data.get('status') == 'busy' and _finite(changed):
-                points.append((session, changed/1000, key, 'process:busy'))
+                points.append((session, changed / 1000, key, 'process:busy'))
     return points
 
 
@@ -196,7 +223,11 @@ def policies(store, settings, homes, primary):
     """Transcript folder -> ('single', route) or ('shared', native route, cutover)."""
     result = {}
     with store.connect() as c:
-        roots = [Path(s['path']) for s in transcript_sources(settings,observed_homes(store,c)) if s.get('route') == FAMILY and s.get('kind') == 'jsonl']
+        roots = [
+            Path(s['path'])
+            for s in transcript_sources(settings, observed_homes(store, c))
+            if s.get('route') == FAMILY and s.get('kind') == 'jsonl'
+        ]
         for root in roots:
             try:
                 real = os.path.realpath(root)
@@ -204,7 +235,7 @@ def policies(store, settings, homes, primary):
                 continue
             owners, joined = [], []
             for home in homes:
-                link = Path(home['path'])/'projects'
+                link = Path(home['path']) / 'projects'
                 try:
                     if os.path.realpath(link) != real:
                         continue
@@ -215,7 +246,9 @@ def policies(store, settings, homes, primary):
                 owners.append(home)
             # A home without a readable identity is a separate (unknown) owner.
             keys = {h['key'] for h in owners}
-            native = next((h for h in owners if not (Path(h['path'])/'projects').is_symlink()), owners[0] if owners else None)
+            native = next(
+                (h for h in owners if not (Path(h['path']) / 'projects').is_symlink()), owners[0] if owners else None
+            )
             native_route = route_for(native['key'], primary) if native and native['key'] else FAMILY
             state_key = 'claude_cutover:' + str(root)
             stored = store.state(c, state_key)
@@ -246,7 +279,11 @@ def session_roots(c, roots, *, unambiguous=False):
             if SESSION.match(session):
                 if session not in found:
                     found[session] = root
-                elif unambiguous and found[session] is not None and os.path.realpath(found[session]) != os.path.realpath(root):
+                elif (
+                    unambiguous
+                    and found[session] is not None
+                    and os.path.realpath(found[session]) != os.path.realpath(root)
+                ):
                     found[session] = None
     return found
 
@@ -263,11 +300,17 @@ def repair_unbound_folders(c, rules, primary):
         policy = rules.get(root)
         if not policy or policy[1] in (FAMILY, UNKNOWN):
             continue
-        evidence = [(ts, route_for(key, primary)) for ts, key in c.execute(
-            'SELECT ts,account_key FROM claude_evidence WHERE session=? ORDER BY ts', (session,))]
-        for event_id, ts in c.execute("""SELECT id,ts FROM events WHERE route='claude-code' AND session=? AND account=?
+        evidence = [
+            (ts, route_for(key, primary))
+            for ts, key in c.execute(
+                'SELECT ts,account_key FROM claude_evidence WHERE session=? ORDER BY ts', (session,)
+            )
+        ]
+        for event_id, ts in c.execute(
+            """SELECT id,ts FROM events WHERE route='claude-code' AND session=? AND account=?
                 AND NOT EXISTS (SELECT 1 FROM usage_origins o WHERE o.event_id=events.id AND o.source LIKE 'claude-cloud:%')""",
-                (session, FAMILY)):
+            (session, FAMILY),
+        ):
             target = account_for(ts, evidence, policy, FAMILY)
             if target != FAMILY:
                 updates.append((target, event_id))
@@ -297,9 +340,12 @@ def _resolve(store, settings, limit=None):
         primary = bind_primary(store, c, homes)
     accounts = len({h['key'] for h in homes if h['key']})
     with store.connect() as c:
-        idle = (store.state(c, 'claude_accounts:cloud-v1') and store.state(c, 'claude_accounts:folder-routes-v1')
-                and not c.execute('SELECT 1 FROM claude_dirty LIMIT 1').fetchone()
-                and not c.execute("SELECT 1 FROM events WHERE route='claude-code' AND account IS NULL LIMIT 1").fetchone())
+        idle = (
+            store.state(c, 'claude_accounts:cloud-v1')
+            and store.state(c, 'claude_accounts:folder-routes-v1')
+            and not c.execute('SELECT 1 FROM claude_dirty LIMIT 1').fetchone()
+            and not c.execute("SELECT 1 FROM events WHERE route='claude-code' AND account IS NULL LIMIT 1").fetchone()
+        )
     if idle:
         return 0, accounts  # nothing pending: no write transaction every few seconds
     rules = policies(store, settings, homes, primary)
@@ -310,39 +356,59 @@ def _resolve(store, settings, limit=None):
         c.execute('BEGIN IMMEDIATE')
         if not store.state(c, 'claude_accounts:cloud-v1'):
             # Cloud sessions were read with the original account's login only.
-            c.execute("""UPDATE events SET account=? WHERE route='claude-code' AND account IS NULL AND id IN
-                         (SELECT event_id FROM usage_origins WHERE source LIKE 'claude-cloud:%')""", (FAMILY,))
+            c.execute(
+                """UPDATE events SET account=? WHERE route='claude-code' AND account IS NULL AND id IN
+                         (SELECT event_id FROM usage_origins WHERE source LIKE 'claude-cloud:%')""",
+                (FAMILY,),
+            )
             store.save_state(c, 'claude_accounts:cloud-v1', True)
         if not store.state(c, 'claude_accounts:folder-routes-v1'):
             changed = repair_unbound_folders(c, rules, primary) if unbound else 0
-            store.save_state(c, 'claude_accounts:folder-routes-v1', dict(checked=time.time(), unbound=unbound, repaired=changed))
+            store.save_state(
+                c, 'claude_accounts:folder-routes-v1', dict(checked=time.time(), unbound=unbound, repaired=changed)
+            )
             c.execute("DELETE FROM state WHERE key='claude_accounts:folder-repair-unbound'")
         roots = session_roots(c, list(rules))
         work = {r[0]: r[1] for r in c.execute('SELECT session,since FROM claude_dirty')}
-        for (session,) in c.execute("SELECT DISTINCT session FROM events WHERE route='claude-code' AND account IS NULL"):
+        for (session,) in c.execute(
+            "SELECT DISTINCT session FROM events WHERE route='claude-code' AND account IS NULL"
+        ):
             work.setdefault(session, None)
         for session, since in list(work.items())[:limit]:
             routes = {}
-            evidence = [];requests={}
+            evidence = []
+            requests = {}
             if session is not None:
-                for ts, key,kind in c.execute('SELECT ts,account_key,kind FROM claude_evidence WHERE session=? ORDER BY ts', (session,)):
-                    routes.setdefault(key, route_for(key, primary) if primary else FAMILY+':'+key[:12])
+                for ts, key, kind in c.execute(
+                    'SELECT ts,account_key,kind FROM claude_evidence WHERE session=? ORDER BY ts', (session,)
+                ):
+                    routes.setdefault(key, route_for(key, primary) if primary else FAMILY + ':' + key[:12])
                     evidence.append((ts, routes[key]))
-                    if kind.startswith('telemetry:'):requests.setdefault(kind[len('telemetry:'):],set()).add(routes[key])
+                    if kind.startswith('telemetry:'):
+                        requests.setdefault(kind[len('telemetry:') :], set()).add(routes[key])
             policy = rules.get(roots.get(session)) if session is not None else None
             policy = policy or fallback
             where = "route='claude-code' AND session IS ?"
             args = [session]
             if since is not None:
-                where += ' AND (ts>=? OR account IS NULL)'; args.append(since)
+                where += ' AND (ts>=? OR account IS NULL)'
+                args.append(since)
             else:
                 where += ' AND account IS NULL'
             # A cloud copy was assigned by the account that read it.
             where += " AND NOT EXISTS (SELECT 1 FROM usage_origins o WHERE o.event_id=events.id AND o.source LIKE 'claude-cloud:%')"
             updates = []
-            for event_id, ts, current,parent in c.execute(f'SELECT id,ts,account,parent_id FROM events WHERE {where}', args).fetchall():
-                direct=requests.get(parent or event_id,set())
-                target = next(iter(direct)) if len(direct)==1 else UNKNOWN if direct else account_for(ts, evidence, policy, FAMILY)
+            for event_id, ts, current, parent in c.execute(
+                f'SELECT id,ts,account,parent_id FROM events WHERE {where}', args
+            ).fetchall():
+                direct = requests.get(parent or event_id, set())
+                target = (
+                    next(iter(direct))
+                    if len(direct) == 1
+                    else UNKNOWN
+                    if direct
+                    else account_for(ts, evidence, policy, FAMILY)
+                )
                 if target != current:
                     updates.append((target, event_id))
             c.executemany('UPDATE events SET account=? WHERE id=?', updates)
@@ -362,11 +428,19 @@ def summarize(store, c, accounts):
     if accounts < 2:
         return
     hooks = c.execute("SELECT COUNT(*),MAX(ts) FROM claude_evidence WHERE kind LIKE 'hook:%'").fetchone()
-    unknown = c.execute("SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=?", (UNKNOWN,)).fetchone()[0]
-    recent = c.execute("SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=? AND ts>=?",
-                       (UNKNOWN, time.time()-86400)).fetchone()[0]
-    detail = (f'Claude 계정 {accounts}개 · 훅 기록 {hooks[0]}건' + ('' if hooks[0] else ' (훅 미설치 · 프로세스 기록만 사용)')
-              + f' · 계정 미확인 요청 {unknown}건' + (f' (최근 24시간 {recent}건)' if recent else ''))
+    unknown = c.execute(
+        "SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=?", (UNKNOWN,)
+    ).fetchone()[0]
+    recent = c.execute(
+        "SELECT COALESCE(SUM(requests),0) FROM events WHERE route='claude-code' AND account=? AND ts>=?",
+        (UNKNOWN, time.time() - 86400),
+    ).fetchone()[0]
+    detail = (
+        f'Claude 계정 {accounts}개 · 훅 기록 {hooks[0]}건'
+        + ('' if hooks[0] else ' (훅 미설치 · 프로세스 기록만 사용)')
+        + f' · 계정 미확인 요청 {unknown}건'
+        + (f' (최근 24시간 {recent}건)' if recent else '')
+    )
     store.source_changed(c, 'claude-accounts', 'partial' if recent or not hooks[0] else 'ok', detail)
 
 
@@ -383,10 +457,14 @@ def refresh(store, settings, *, evidence=True):
             with store.connect() as c:
                 summarize(store, c, accounts)
                 if errors:
-                    store.source_changed(c, 'claude-accounts', 'error', '훅 기록 파일을 읽지 못했습니다 · 기존 계정 구분은 유지합니다.')
+                    store.source_changed(
+                        c, 'claude-accounts', 'error', '훅 기록 파일을 읽지 못했습니다 · 기존 계정 구분은 유지합니다.'
+                    )
             _summarized[store.path] = time.time()
         return changed
     except Exception as exc:  # never stops collection
         with store.connect() as c:
-            store.source_changed(c, 'claude-accounts', 'error', f'계정 구분 실패 ({type(exc).__name__}) · 기존 계정 구분은 유지합니다.')
+            store.source_changed(
+                c, 'claude-accounts', 'error', f'계정 구분 실패 ({type(exc).__name__}) · 기존 계정 구분은 유지합니다.'
+            )
         return 0

@@ -32,6 +32,25 @@ jobs:
         if: matrix.dependencies == 'minimum'
         run: uv pip install --python .venv/bin/python gunicorn==25.1.0
       - run: uv run --no-sync python -m unittest discover -s tests -q
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.12.23"
+          enable-cache: false
+      - run: uv sync --locked
+      - name: Unused or undefined names and likely bugs
+        run: uv run --no-sync ruff check --no-cache .
+      - name: One layout for every Python file
+        run: uv run --no-sync ruff format --no-cache --check .
   javascript:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -172,7 +191,7 @@ jobs:
         run: python scripts/check_sarif.py codeql-results
   ci-required:
     if: ${{ always() }}
-    needs: [python, javascript, browser, package, public-checks, security, codeql]
+    needs: [python, lint, javascript, browser, package, public-checks, security, codeql]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

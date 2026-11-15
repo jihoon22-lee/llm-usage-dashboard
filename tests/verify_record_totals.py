@@ -4,6 +4,7 @@ Complete, reset and partial-baseline sessions are verified separately. Conflicti
 counters at one timestamp lack a unique chronological order and are reported
 separately; fixture tests exercise the collector's conservative tie handling.
 """
+
 import argparse
 from pathlib import Path
 
@@ -19,5 +20,5 @@ for failure in result['codex'].pop('mismatch_samples', []):
     print(failure)
 for section, counts in result.items():
     print({section: counts})
-print({'verification':'failed' if failed(result) else 'partial' if partial(result) else 'matched'})
+print({'verification': 'failed' if failed(result) else 'partial' if partial(result) else 'matched'})
 raise SystemExit(failed(result))

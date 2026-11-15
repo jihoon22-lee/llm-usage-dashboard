@@ -1,4 +1,5 @@
 """Reject high/critical SARIF findings and unresolved security metadata."""
+
 import json
 import math
 from pathlib import Path
@@ -29,13 +30,16 @@ def resolve_rule(run, result):
         if 'index' in component_ref:
             # SARIF toolComponent.index addresses tool.extensions, not the driver.
             component = _indexed(extensions, component_ref['index'], 'tool component')
-            if any(component.get(key) != component_ref[key] for key in ('name','guid') if key in component_ref):
+            if any(component.get(key) != component_ref[key] for key in ('name', 'guid') if key in component_ref):
                 raise ValueError('Conflicting SARIF tool component identity')
             components = [component]
         else:
-            keys = [key for key in ('name','guid') if key in component_ref]
-            components = [component for component in components
-                          if keys and all(component.get(key) == component_ref[key] for key in keys)]
+            keys = [key for key in ('name', 'guid') if key in component_ref]
+            components = [
+                component
+                for component in components
+                if keys and all(component.get(key) == component_ref[key] for key in keys)
+            ]
             if len(components) != 1:
                 raise ValueError('Unresolved or ambiguous SARIF tool component')
     elif index is not None:
@@ -52,10 +56,13 @@ def resolve_rule(run, result):
                 raise ValueError('SARIF rule index does not match its GUID')
             candidates.append(rule)
         else:
-            candidates.extend(rule for rule in rules
-                              if (identity is not None or 'guid' in reference)
-                              and (identity is None or rule.get('id') == identity)
-                              and ('guid' not in reference or rule.get('guid') == reference['guid']))
+            candidates.extend(
+                rule
+                for rule in rules
+                if (identity is not None or 'guid' in reference)
+                and (identity is None or rule.get('id') == identity)
+                and ('guid' not in reference or rule.get('guid') == reference['guid'])
+            )
     if len(candidates) != 1:
         raise ValueError('Unresolved or ambiguous SARIF rule metadata')
     return candidates[0]
@@ -100,7 +107,9 @@ def main(folder):
         raise ValueError('CodeQL produced no SARIF results')
     findings = [finding for path in files for finding in high_findings(json.loads(path.read_text()))]
     if findings:
-        raise ValueError(f'CodeQL found {len(findings)} high/critical security findings: ' + ', '.join(sorted(set(findings))))
+        raise ValueError(
+            f'CodeQL found {len(findings)} high/critical security findings: ' + ', '.join(sorted(set(findings)))
+        )
     print('No high/critical CodeQL security findings')
 
 

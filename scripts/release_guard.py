@@ -1,4 +1,5 @@
 """Fail-closed release invariants shared by CI, publishing, and regression tests."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -7,7 +8,7 @@ import subprocess
 import sys
 import tomllib
 
-REQUIRED_JOBS = {'python', 'javascript', 'browser', 'package', 'public-checks', 'security', 'codeql'}
+REQUIRED_JOBS = {'python', 'lint', 'javascript', 'browser', 'package', 'public-checks', 'security', 'codeql'}
 
 
 def require_success(needs):

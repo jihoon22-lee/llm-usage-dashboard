@@ -22,8 +22,23 @@ llm_usage = ["web/*"]
 include = ["llm_usage*"]
 
 [dependency-groups]
-dev = ["pip-audit==2.10.1", "playwright==1.64.1"]
+dev = ["pip-audit==2.10.1", "playwright==1.64.1", "ruff==0.17.5"]
 
 [tool.uv]
 # pip-audit's file cache must not resolve the vulnerable pre-4.2.1 releases.
 constraint-dependencies = ["filelock>=4.2.1"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# Pyflakes and bugbear: unused names, undefined names and likely bugs. Style is the formatter's.
+select = ["F", "B"]
+# B905: zip() pairs sequences this code builds to the same length.
+# B007: a loop that unpacks a row often needs only some of its fields.
+# B023: the closures defined in loops here are called within the same iteration.
+ignore = ["B905", "B007", "B023"]
+
+[tool.ruff.format]
+quote-style = "preserve"

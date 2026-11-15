@@ -4,6 +4,7 @@ Runs inside the collector loop; writes go to the data directory which is the
 service's only ReadWritePaths location. SQLite's online backup API is safe
 against WAL writers, so collection does not pause.
 """
+
 import gzip
 import os
 import sqlite3
@@ -39,8 +40,10 @@ def backup_now(database):
     gz_tmp = backups / f'{target.name}.tmp'
     partial = [tmp, gz_tmp]
     try:
-        with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as src, \
-                closing(sqlite3.connect(tmp)) as dst:
+        with (
+            closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as src,
+            closing(sqlite3.connect(tmp)) as dst,
+        ):
             src.backup(dst)
             ok = dst.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
         if not ok:

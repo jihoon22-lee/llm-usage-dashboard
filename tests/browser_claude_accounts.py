@@ -3,6 +3,7 @@
 A disposable synthetic store and Flask app serve every request: no provider, account
 file, collector, private origin or production database is consulted.
 """
+
 from browser_support import Sock, watch_csp, artifact_directory, show_filter_details
 import argparse
 from datetime import datetime
@@ -28,56 +29,111 @@ SECOND = 'claude-code:abababababab'
 now = time.time()
 folder = tempfile.TemporaryDirectory(prefix='llm-claude-accounts-')
 root = Path(folder.name)
-store = Store(root/'usage.db')
+store = Store(root / 'usage.db')
 with store.connect() as c:
-    for route, plan, tier, label, homes in (('claude-code', 'pro', 'default_claude_ai', 'Pro', [dict(kind='default', name='~/.claude')]),
-                                           (SECOND, 'max', 'default_claude_max_5x', 'Max 5x', [dict(kind='zerosub', name='claude-0123abcd4567')])):
-        c.execute('INSERT INTO claude_accounts VALUES (?,?,?,?,?)', (route, 'k'*64 if route == 'claude-code' else 'f'*64, now-86400, now,
-                  json.dumps(dict(primary=route == 'claude-code', plan=plan, tier=tier, plan_label=label, homes=homes,
-                                  polled=homes[0], token_valid=True))))
-    for route, five, seven, source in (('claude-code', 0, 25, 'claude-oauth'), (SECOND, 92, 97, 'claude-oauth:abababababab')):
-        store.limit(c, route, 'five_hour', five, now+900, now-60, source)
-        store.limit(c, route, 'seven_day', seven, now+3*86400, now-60, source)
+    for route, plan, tier, label, homes in (
+        ('claude-code', 'pro', 'default_claude_ai', 'Pro', [dict(kind='default', name='~/.claude')]),
+        (SECOND, 'max', 'default_claude_max_5x', 'Max 5x', [dict(kind='zerosub', name='claude-0123abcd4567')]),
+    ):
+        c.execute(
+            'INSERT INTO claude_accounts VALUES (?,?,?,?,?)',
+            (
+                route,
+                'k' * 64 if route == 'claude-code' else 'f' * 64,
+                now - 86400,
+                now,
+                json.dumps(
+                    dict(
+                        primary=route == 'claude-code',
+                        plan=plan,
+                        tier=tier,
+                        plan_label=label,
+                        homes=homes,
+                        polled=homes[0],
+                        token_valid=True,
+                    )
+                ),
+            ),
+        )
+    for route, five, seven, source in (
+        ('claude-code', 0, 25, 'claude-oauth'),
+        (SECOND, 92, 97, 'claude-oauth:abababababab'),
+    ):
+        store.limit(c, route, 'five_hour', five, now + 900, now - 60, source)
+        store.limit(c, route, 'seven_day', seven, now + 3 * 86400, now - 60, source)
         # The second account's poll is overdue: a delay chip that names the account.
-        store.source(c, source, 'ok', '계정 사용량 조회 · 내부 OAuth 경로', now-60 if route == 'claude-code' else now-1200)
-    store.limit(c, 'codex', 'codex · 10080분', 98, now+4*86400, now-60, 'codex')
-    store.source(c, 'codex', 'ok', '', now-60)
+        store.source(
+            c, source, 'ok', '계정 사용량 조회 · 내부 OAuth 경로', now - 60 if route == 'claude-code' else now - 1200
+        )
+    store.limit(c, 'codex', 'codex · 10080분', 98, now + 4 * 86400, now - 60, 'codex')
+    store.source(c, 'codex', 'ok', '', now - 60)
     for bucket in ('daily', 'weekly'):
-        store.limit(c, 'devin', bucket, 100, now+86400, now-60, 'devin')
-    store.source(c, 'devin', 'ok', 'Free · 계정 사용량 조회', now-60)
-    store.source(c, 'claude-accounts', 'ok', 'Claude 계정 2개 · 훅 기록 12건 · 계정 미확인 요청 3건', now-60)
+        store.limit(c, 'devin', bucket, 100, now + 86400, now - 60, 'devin')
+    store.source(c, 'devin', 'ok', 'Free · 계정 사용량 조회', now - 60)
+    store.source(c, 'claude-accounts', 'ok', 'Claude 계정 2개 · 훅 기록 12건 · 계정 미확인 요청 3건', now - 60)
     # A source that never succeeded needs a look at once; one that failed five minutes after
     # a success waits for the next cycle (진단 shows both, in different groups).
-    store.source(c, 'claude-credits:abababababab', 'error', 'HTTP 500', now-120)
-    store.source(c, 'claude-resets:abababababab', 'ok', '', now-400)
-    store.source(c, 'claude-resets:abababababab', 'error', 'HTTP 503', now-100)
+    store.source(c, 'claude-credits:abababababab', 'error', 'HTTP 500', now - 120)
+    store.source(c, 'claude-resets:abababababab', 'ok', '', now - 400)
+    store.source(c, 'claude-resets:abababababab', 'error', 'HTTP 503', now - 100)
     for day in range(5):
-        for i, (route, account, model, tokens) in enumerate((('claude-code', 'claude-code', 'claude-test', 4000), ('claude-code', SECOND, 'claude-test', 9000),
-                                                            ('claude-code', 'claude-code:unknown', 'claude-test', 500), ('codex', None, 'gpt-test', 7000))):
-            store.event(c, f'e-{day}-{i}', now-1800-day*86400, 'Anthropic' if route == 'claude-code' else 'OpenAI', route, model,
-                        dict(uncached_input=tokens, cached_input=tokens*4, output=tokens//5), session=f'session-{i%2}',
-                        project='fixture-project', agent_kind='main', account=account)
-    store.save_state(c, 'collector', dict(status='idle', checked=now-30))
-    store.save_state(c, 'last_local', now-30)
-(root/'config.json').write_text('{}')
-config = dict(database=str(root/'usage.db'), origin=ORIGIN, secret_key='fixture-key-'*4, allowed_logins=['fixture'],
-              config_file=str(root/'config.json'), subscription_prices={'claude-code': 20, 'codex': 200},
-              ended_subscriptions={'devin': {'since': now-3600}},
-              pricing={'claude-test': dict(input=3, cached=.3, output=15), 'gpt-test': dict(input=2, cached=.2, output=8)})
+        for i, (route, account, model, tokens) in enumerate(
+            (
+                ('claude-code', 'claude-code', 'claude-test', 4000),
+                ('claude-code', SECOND, 'claude-test', 9000),
+                ('claude-code', 'claude-code:unknown', 'claude-test', 500),
+                ('codex', None, 'gpt-test', 7000),
+            )
+        ):
+            store.event(
+                c,
+                f'e-{day}-{i}',
+                now - 1800 - day * 86400,
+                'Anthropic' if route == 'claude-code' else 'OpenAI',
+                route,
+                model,
+                dict(uncached_input=tokens, cached_input=tokens * 4, output=tokens // 5),
+                session=f'session-{i % 2}',
+                project='fixture-project',
+                agent_kind='main',
+                account=account,
+            )
+    store.save_state(c, 'collector', dict(status='idle', checked=now - 30))
+    store.save_state(c, 'last_local', now - 30)
+(root / 'config.json').write_text('{}')
+config = dict(
+    database=str(root / 'usage.db'),
+    origin=ORIGIN,
+    secret_key='fixture-key-' * 4,
+    allowed_logins=['fixture'],
+    config_file=str(root / 'config.json'),
+    subscription_prices={'claude-code': 20, 'codex': 200},
+    ended_subscriptions={'devin': {'since': now - 3600}},
+    pricing={'claude-test': dict(input=3, cached=0.3, output=15), 'gpt-test': dict(input=2, cached=0.2, output=8)},
+)
 client = create_app(config).test_client()
 
 
 def serve(route):
     url = urlsplit(route.request.url)
     assert url.netloc == 'dashboard.test', route.request.url
-    headers = {k: v for k, v in route.request.headers.items() if k.lower() in ('content-type', 'x-csrf-token', 'origin')}
-    response = client.open(url.path+('?'+url.query if url.query else ''), method=route.request.method, data=route.request.post_data,
-                           headers={**headers, 'Tailscale-User-Login': 'fixture', 'Host': 'dashboard.test'},
-                           environ_base={'gunicorn.socket': Sock()})
+    headers = {
+        k: v for k, v in route.request.headers.items() if k.lower() in ('content-type', 'x-csrf-token', 'origin')
+    }
+    response = client.open(
+        url.path + ('?' + url.query if url.query else ''),
+        method=route.request.method,
+        data=route.request.post_data,
+        headers={**headers, 'Tailscale-User-Login': 'fixture', 'Host': 'dashboard.test'},
+        environ_base={'gunicorn.socket': Sock()},
+    )
     try:
         assert response.status_code < 400, (route.request.url, response.status_code)
-        route.fulfill(status=response.status_code, body=response.get_data(),
-                      headers={k: v for k, v in response.headers.items() if k.lower() != 'content-length'})
+        route.fulfill(
+            status=response.status_code,
+            body=response.get_data(),
+            headers={k: v for k, v in response.headers.items() if k.lower() != 'content-length'},
+        )
     finally:
         response.close()
 
@@ -86,8 +142,10 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(service_workers='block', viewport={'width': 1440, 'height': 1000})
     page.route('**/*', serve)
-    errors = []; page.on('pageerror', lambda e: errors.append(str(e))); watch_csp(page, errors)
-    page.goto(ORIGIN+'/?view=quota')
+    errors = []
+    page.on('pageerror', lambda e: errors.append(str(e)))
+    watch_csp(page, errors)
+    page.goto(ORIGIN + '/?view=quota')
     expect(page.locator('#updated')).to_contain_text('마지막 갱신')
     # One Claude Code card, one section per account; no second Anthropic service.
     cards = page.locator('#limits > .limit-card')
@@ -97,24 +155,29 @@ with sync_playwright() as p:
     expect(claude.locator('.quota-account-title').nth(0)).to_contain_text('Pro')
     # Where each login lives is a note beside the account name (hover, focus or tap), with
     # the same text as its accessible name.
-    expect(claude.locator('.quota-account-head').nth(0).locator('.info')).to_have_attribute('data-tip','기본 Claude 홈')
+    expect(claude.locator('.quota-account-head').nth(0).locator('.info')).to_have_attribute(
+        'data-tip', '기본 Claude 홈'
+    )
     expect(claude.locator('.quota-account-title').nth(1)).to_contain_text('Max 5x')
-    home=claude.locator('.quota-account-head').nth(1).locator('.info')
-    expect(home).to_have_attribute('data-tip','zerosub 관리 홈 claude-0123abcd4567')
-    expect(home).to_have_attribute('aria-label','로그인 위치: zerosub 관리 홈 claude-0123abcd4567')
-    home.hover();expect(page.locator('#tip')).to_have_text('zerosub 관리 홈 claude-0123abcd4567')
+    home = claude.locator('.quota-account-head').nth(1).locator('.info')
+    expect(home).to_have_attribute('data-tip', 'zerosub 관리 홈 claude-0123abcd4567')
+    expect(home).to_have_attribute('aria-label', '로그인 위치: zerosub 관리 홈 claude-0123abcd4567')
+    home.hover()
+    expect(page.locator('#tip')).to_have_text('zerosub 관리 홈 claude-0123abcd4567')
     # The read path is a note too: the card line keeps only when it was checked.
-    meta=claude.locator('.quota-account').nth(1).locator('.card-meta')
+    meta = claude.locator('.quota-account').nth(1).locator('.card-meta')
     expect(meta).not_to_contain_text('OAuth')
-    expect(meta.locator('.info')).to_have_attribute('data-tip','계정 사용량 조회 · 내부 OAuth 경로')
+    expect(meta.locator('.info')).to_have_attribute('data-tip', '계정 사용량 조회 · 내부 OAuth 경로')
     expect(claude.locator('.quota-account').nth(1).locator('.remaining').first).to_contain_text('92%')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Pro) 5시간')
     expect(page.locator('#reset-timeline')).to_contain_text('Claude(Max 5x) 5시간')
-    expect(page.locator('#alerts')).to_contain_text('Claude(Pro) 5시간 잔여 0.0% · 다른 계정 Claude(Max 5x) 5시간 92.0%')
+    expect(page.locator('#alerts')).to_contain_text(
+        'Claude(Pro) 5시간 잔여 0.0% · 다른 계정 Claude(Max 5x) 5시간 92.0%'
+    )
     # Collection problems are counted by the header's data status, not added as chips: the
     # lasting credits failure and the late Max OAuth read need a look; the resets failure,
     # 100 seconds after a success, waits for the next cycle.
-    expect(page.locator('#data-status')).to_have_attribute('data-level','critical')
+    expect(page.locator('#data-status')).to_have_attribute('data-level', 'critical')
     expect(page.locator('#data-status')).to_have_text('조치 필요 2')
     expect(page.locator('#alerts')).not_to_contain_text('claude-credits')
     expect(page.locator('#alerts')).not_to_contain_text('claude-resets')
@@ -124,7 +187,7 @@ with sync_playwright() as p:
     expect(dormant).to_contain_text('Cognition / Devin')
     dormant.locator('summary').first.click()
     expect(dormant.locator('.quota-note').first).to_contain_text('구독 종료')
-    page.screenshot(path=str(output/'claude-accounts-quota-1440.png'), full_page=True)
+    page.screenshot(path=str(output / 'claude-accounts-quota-1440.png'), full_page=True)
     # Usage by subscription account; the route view keeps one Claude Code service.
     page.locator('#tab-usage').click()
     expect(page.locator('#group option[value="account"]')).to_be_enabled()
@@ -136,10 +199,10 @@ with sync_playwright() as p:
     expect(page.locator('#legend')).to_contain_text('Anthropic / Claude Code · 계정 미확인')
     expect(page.locator('#scope optgroup[label="Claude 계정"] option')).to_have_count(3)
     show_filter_details(page)
-    page.select_option('#scope', 'account:'+SECOND)
+    page.select_option('#scope', 'account:' + SECOND)
     expect(page.locator('#scope-chip')).to_contain_text('Claude 계정: Max 5x')
     expect(page.locator('#cards')).to_contain_text('45K')
-    page.screenshot(path=str(output/'claude-accounts-usage-1440.png'), full_page=True)
+    page.screenshot(path=str(output / 'claude-accounts-usage-1440.png'), full_page=True)
     page.locator('#scope-chip').click()
     # Subscription value per Claude account; a missing price is visible, not 0.
     page.locator('#tab-reports').click()
@@ -149,8 +212,11 @@ with sync_playwright() as p:
     expect(subvalue).not_to_contain_text('Cognition / Devin')
     # 진단 sources name their account, in the groups the header badge counted.
     page.locator('#data-status').click()
-    assert page.locator('#sources .source-action .source strong').all_text_contents()==['claude-credits · Max 5x','claude-oauth · Max 5x']
-    assert page.locator('#sources .source-retry .source strong').all_text_contents()==['claude-resets · Max 5x']
+    assert page.locator('#sources .source-action .source strong').all_text_contents() == [
+        'claude-credits · Max 5x',
+        'claude-oauth · Max 5x',
+    ]
+    assert page.locator('#sources .source-retry .source strong').all_text_contents() == ['claude-resets · Max 5x']
     expect(page.locator('#sources')).to_contain_text('claude-accounts')
     # Settings: a row per Claude account with a display name; the ended toggle is kept.
     page.locator('#settings-open').click()
@@ -161,7 +227,7 @@ with sync_playwright() as p:
     page.locator(f'#cfg-subs input[data-route="{SECOND}"]').fill('100')
     page.locator('#cfg-subs-save').click()
     expect(page.locator('#cfg-subs-msg')).to_contain_text('저장했습니다')
-    saved = json.loads((root/'local.json').read_text())
+    saved = json.loads((root / 'local.json').read_text())
     assert saved['claude_account_names'] == {SECOND: '업무 Max'}, saved
     assert saved['subscription_prices'][SECOND] == 100, saved
     assert list(saved['ended_subscriptions']) == ['devin'], saved
@@ -173,13 +239,15 @@ with sync_playwright() as p:
     page.locator('#cfg-subs input[data-route="codex"]').fill('100')
     page.locator('#cfg-subs-save').click()
     expect(page.locator('#cfg-subs-msg')).to_contain_text('적용 시작 시각')
-    changed_at = datetime.fromtimestamp(now-2*86400, KST).strftime('%Y-%m-%dT%H:%M')
+    changed_at = datetime.fromtimestamp(now - 2 * 86400, KST).strftime('%Y-%m-%dT%H:%M')
     page.locator('#cfg-subs-at').fill(changed_at)
     page.locator('#cfg-subs-save').click()
     expect(page.locator('#cfg-subs-msg')).to_contain_text('저장했습니다')
-    saved = json.loads((root/'local.json').read_text())
+    saved = json.loads((root / 'local.json').read_text())
     history = saved['subscription_price_history']['codex']
-    assert [e['usd'] for e in history] == [200] and abs(history[0]['until']-datetime.strptime(changed_at, '%Y-%m-%dT%H:%M').replace(tzinfo=KST).timestamp()) < 1, history
+    assert [e['usd'] for e in history] == [200] and abs(
+        history[0]['until'] - datetime.strptime(changed_at, '%Y-%m-%dT%H:%M').replace(tzinfo=KST).timestamp()
+    ) < 1, history
     assert saved['subscription_prices']['codex'] == 100 and SECOND not in saved['subscription_price_history'], saved
     expect(page.locator('#cfg-subs .cfg-sub', has_text='OpenAI / Codex')).to_contain_text('이전 구독료 $200')
     page.locator('#settings-back').click()
@@ -189,7 +257,7 @@ with sync_playwright() as p:
     expect(codex_value.locator('.price-spans')).to_contain_text('$200/월')
     expect(codex_value.locator('.price-spans')).to_contain_text('$100/월')
     page.locator('#settings-open').click()
-    page.screenshot(path=str(output/'claude-accounts-settings-1440.png'), full_page=True)
+    page.screenshot(path=str(output / 'claude-accounts-settings-1440.png'), full_page=True)
     page.locator('#settings-back').click()
     page.locator('#tab-quota').click()
     expect(page.locator('#quota-claude-code .quota-account-title').nth(1)).to_contain_text('업무 Max')
@@ -204,13 +272,13 @@ with sync_playwright() as p:
     row.click()
     expect(page.locator('#quota-claude-code')).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-    page.screenshot(path=str(output/'claude-accounts-quota-390.png'), full_page=True)
+    page.screenshot(path=str(output / 'claude-accounts-quota-390.png'), full_page=True)
     page.locator('#tab-usage').click()
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     page.locator('#settings-open').click()
     expect(page.locator(f'#cfg-subs input[data-account-name="{SECOND}"]')).to_have_value('업무 Max')
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-    page.screenshot(path=str(output/'claude-accounts-settings-390.png'), full_page=True)
+    page.screenshot(path=str(output / 'claude-accounts-settings-390.png'), full_page=True)
     assert not errors, errors
     # Refreshes while a manual resource is being edited must keep its account.
     # Install the clock before navigation so the real 30-second aging timer runs.
@@ -219,7 +287,7 @@ with sync_playwright() as p:
         editor = context.new_page()
         editor.clock.install()
         editor.route('**/*', serve)
-        editor.goto(ORIGIN+'/?view=quota')
+        editor.goto(ORIGIN + '/?view=quota')
         expect(editor.locator('#updated')).to_contain_text('마지막 갱신')
         editor.evaluate("$('auto').checked=false;schedule()")
         editor.locator('#resource-add').click()
@@ -238,7 +306,9 @@ with sync_playwright() as p:
         expect(editor.locator('#resource-message')).to_contain_text('기록을 저장했습니다.')
         expect(editor.locator('#resource-save')).to_be_enabled()
         with store.connect() as c:
-            saved = c.execute("SELECT id,route FROM resource_items WHERE json_extract(data,'$.label')=?", (label,)).fetchone()
+            saved = c.execute(
+                "SELECT id,route FROM resource_items WHERE json_extract(data,'$.label')=?", (label,)
+            ).fetchone()
         assert saved['route'] == SECOND, dict(saved)
         editor.locator('#resource-cancel').click()
         editor.locator(f'[data-resource-edit="{saved["id"]}"]').click()
@@ -249,10 +319,14 @@ with sync_playwright() as p:
         expect(editor.locator('#resource-message')).to_contain_text('기록을 저장했습니다.')
         expect(editor.locator('#resource-save')).to_be_enabled()
         with store.connect() as c:
-            changed = c.execute("SELECT route,json_extract(data,'$.amount') FROM resource_items WHERE id=?", (saved['id'],)).fetchone()
+            changed = c.execute(
+                "SELECT route,json_extract(data,'$.amount') FROM resource_items WHERE id=?", (saved['id'],)
+            ).fetchone()
         assert tuple(changed) == (SECOND, 9), tuple(changed)
         # A disappearing account leaves an explicit invalid selection, never Codex.
-        editor.evaluate("setClaudeAccounts(claudeAccounts.list.filter(a=>a.route==='claude-code'));syncResourceRoutes()")
+        editor.evaluate(
+            "setClaudeAccounts(claudeAccounts.list.filter(a=>a.route==='claude-code'));syncResourceRoutes()"
+        )
         expect(editor.locator('#resource-route')).to_have_value(SECOND)
         assert not editor.locator('#resource-route').evaluate('(s)=>s.checkValidity()')
         editor.locator('#resource-route').select_option('codex')
@@ -264,4 +338,6 @@ with sync_playwright() as p:
         context.close()
     browser.close()
 folder.cleanup()
-print('Claude accounts browser passed: quota, usage, value, settings, ended subscriptions and resource account selection across refreshes at three widths.')
+print(
+    'Claude accounts browser passed: quota, usage, value, settings, ended subscriptions and resource account selection across refreshes at three widths.'
+)

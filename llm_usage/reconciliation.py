@@ -3,6 +3,7 @@
 Only an interval wholly inside a selected range contributes to its total. It
 enters a chart bucket only when the whole interval fits there as well.
 """
+
 from bisect import bisect_left
 from contextlib import contextmanager
 import copy
@@ -47,40 +48,76 @@ def initialize(c):
 
 
 def number(value):
-    return type(value) is int and 0 <= value <= 2**63-1
+    return type(value) is int and 0 <= value <= 2**63 - 1
 
 
-def snapshot(store, c, *, source, scope_id, route, provider, model, start, end,
-             tokens, parts=None, session=None, project=None, account_key=None, checked=None):
-    if not number(tokens) or not all(isinstance(v,(float,int)) and math.isfinite(v) for v in (start,end)) or end <= start:
+def snapshot(
+    store,
+    c,
+    *,
+    source,
+    scope_id,
+    route,
+    provider,
+    model,
+    start,
+    end,
+    tokens,
+    parts=None,
+    session=None,
+    project=None,
+    account_key=None,
+    checked=None,
+):
+    if (
+        not number(tokens)
+        or not all(isinstance(v, (float, int)) and math.isfinite(v) for v in (start, end))
+        or end <= start
+    ):
         raise ValueError('invalid usage interval')
     if parts is not None:
-        if not all(number(parts.get(k)) for k in PARTS):raise ValueError('incomplete token breakdown')
-        if sum(parts[k] for k in PARTS) != tokens:raise ValueError('token breakdown mismatch')
-        parts={k:parts[k] for k in TOKENS if k in parts and number(parts[k])}
-    key=identity(source,scope_id,model,end,account_key)
-    values=(key,source,scope_id,route,provider,model,session,project,account_key,start,end,checked or end,tokens,
-            json.dumps(parts,sort_keys=True) if parts is not None else None)
-    previous=c.execute('SELECT * FROM usage_evidence WHERE id=?',(key,)).fetchone()
-    if previous is not None and previous['tokens']==tokens and previous['parts']==values[-1]:
+        if not all(number(parts.get(k)) for k in PARTS):
+            raise ValueError('incomplete token breakdown')
+        if sum(parts[k] for k in PARTS) != tokens:
+            raise ValueError('token breakdown mismatch')
+        parts = {k: parts[k] for k in TOKENS if k in parts and number(parts[k])}
+    key = identity(source, scope_id, model, end, account_key)
+    values = (
+        key,
+        source,
+        scope_id,
+        route,
+        provider,
+        model,
+        session,
+        project,
+        account_key,
+        start,
+        end,
+        checked or end,
+        tokens,
+        json.dumps(parts, sort_keys=True) if parts is not None else None,
+    )
+    previous = c.execute('SELECT * FROM usage_evidence WHERE id=?', (key,)).fetchone()
+    if previous is not None and previous['tokens'] == tokens and previous['parts'] == values[-1]:
         # Preserve the earliest receipt proving this unchanged count. Merely
         # polling after KST midnight must not erase an already known day bound.
-        values=values[:11]+(min(previous['checked'],values[11]),)+values[12:]
-    c.execute('INSERT OR REPLACE INTO usage_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',values)
-    if previous is None or tuple(previous)[:11]+tuple(previous)[12:] != values[:11]+values[12:]:
+        values = values[:11] + (min(previous['checked'], values[11]),) + values[12:]
+    c.execute('INSERT OR REPLACE INTO usage_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', values)
+    if previous is None or tuple(previous)[:11] + tuple(previous)[12:] != values[:11] + values[12:]:
         store.bump_data_version(c)
-        store.save_state(c,'usage_evidence_version',(store.state(c,'usage_evidence_version') or 0)+1)
+        store.save_state(c, 'usage_evidence_version', (store.state(c, 'usage_evidence_version') or 0) + 1)
 
 
 def link(c, scope, event_id, source, quality='final'):
-    c.execute('INSERT OR IGNORE INTO usage_links VALUES (?,?)',(scope,event_id))
-    c.execute('INSERT OR REPLACE INTO usage_origins VALUES (?,?,?)',(event_id,source,quality))
+    c.execute('INSERT OR IGNORE INTO usage_links VALUES (?,?)', (scope, event_id))
+    c.execute('INSERT OR REPLACE INTO usage_origins VALUES (?,?,?)', (event_id, source, quality))
 
 
 def aliases(c, route, event_id, *values):
     for v in values:
-        if isinstance(v,str) and 0<len(v)<=200:
-            c.execute('INSERT OR IGNORE INTO usage_aliases VALUES (?,?,?)',(route,identity(v),event_id))
+        if isinstance(v, str) and 0 < len(v) <= 200:
+            c.execute('INSERT OR IGNORE INTO usage_aliases VALUES (?,?,?)', (route, identity(v), event_id))
 
 
 def _raw(c, row, begin, end):
@@ -88,63 +125,100 @@ def _raw(c, row, begin, end):
     # Unknown old records remain explicitly unverified. A proven different
     # native creator must never subtract from this account's server total.
     from .codex_usage import account_filter
-    account_sql,account_args=account_filter(row.get('account_key'))
-    where='route=? AND ts>=? AND ts<? AND '+account_sql;args=(row['route'],begin,end,*account_args)
+
+    account_sql, account_args = account_filter(row.get('account_key'))
+    where = 'route=? AND ts>=? AND ts<? AND ' + account_sql
+    args = (row['route'], begin, end, *account_args)
     if row['model']:
-        where+=' AND model=?';args+= (row['model'],)
-    return dict(c.execute('SELECT '+','.join('COALESCE(SUM('+k+'),0) AS '+k for k in TOKENS)+
-                          ' FROM events WHERE '+where,args).fetchone())
+        where += ' AND model=?'
+        args += (row['model'],)
+    return dict(
+        c.execute(
+            'SELECT ' + ','.join('COALESCE(SUM(' + k + '),0) AS ' + k for k in TOKENS) + ' FROM events WHERE ' + where,
+            args,
+        ).fetchone()
+    )
 
 
 def _linked(c, scope_id):
     """A scope's linked local records in time order (times, rows), read once for all of
     the scope's snapshots."""
-    rows=c.execute('SELECT ts,model,'+','.join(TOKENS)+' FROM events WHERE id IN '
-                   '(SELECT event_id FROM usage_links WHERE scope_id=?) ORDER BY ts',(scope_id,)).fetchall()
-    return [r[0] for r in rows],rows
+    rows = c.execute(
+        'SELECT ts,model,' + ','.join(TOKENS) + ' FROM events WHERE id IN '
+        '(SELECT event_id FROM usage_links WHERE scope_id=?) ORDER BY ts',
+        (scope_id,),
+    ).fetchall()
+    return [r[0] for r in rows], rows
 
 
 def _window(linked, begin, end, model):
     """The linked records' tokens in [begin, end), of `model` only when one is given."""
-    times,rows=linked
-    out=dict.fromkeys(TOKENS,0)
-    for r in rows[bisect_left(times,begin):bisect_left(times,end)]:
-        if model and r[1]!=model:continue
-        for i,k in enumerate(TOKENS,2):out[k]+=r[i]
+    times, rows = linked
+    out = dict.fromkeys(TOKENS, 0)
+    for r in rows[bisect_left(times, begin) : bisect_left(times, end)]:
+        if model and r[1] != model:
+            continue
+        for i, k in enumerate(TOKENS, 2):
+            out[k] += r[i]
     return out
 
 
 def _evidence(c):
     """Aggregates to reconcile: other sources as stored; Codex account days of the current
     account, the latest revision of each (UTC) day, plus older account buckets."""
-    rows=[dict(r) for r in c.execute('SELECT * FROM usage_evidence ORDER BY source,scope_id,model,end')]
+    rows = [dict(r) for r in c.execute('SELECT * FROM usage_evidence ORDER BY source,scope_id,model,end')]
     from .store import Store
-    namespace=Store.account_namespace(c,'codex')
-    rows=[r for r in rows if r['source']!='codex-account' or (r['account_key'] or '')==namespace]
-    daily={}
+
+    namespace = Store.account_namespace(c, 'codex')
+    rows = [r for r in rows if r['source'] != 'codex-account' or (r['account_key'] or '') == namespace]
+    daily = {}
     for r in rows:
-        if r['source']=='codex-account':
-            key=(r['route'],r['start'])
-            if key not in daily or (r['checked'],bool(r['account_key']))>(daily[key]['checked'],bool(daily[key]['account_key'])):daily[key]=r
-    rows=[r for r in rows if r['source']!='codex-account']+list(daily.values())
+        if r['source'] == 'codex-account':
+            key = (r['route'], r['start'])
+            if key not in daily or (r['checked'], bool(r['account_key'])) > (
+                daily[key]['checked'],
+                bool(daily[key]['account_key']),
+            ):
+                daily[key] = r
+    rows = [r for r in rows if r['source'] != 'codex-account'] + list(daily.values())
     # Upgrade old account buckets without rewriting or attributing their history.
-    existing={datetime.fromtimestamp(r['start'],timezone.utc).strftime('%Y-%m-%d') for r in rows if r['source']=='codex-account'}
-    for r in c.execute('SELECT * FROM account_token_buckets WHERE route=? AND namespace=?',('codex',namespace)):
-        scope='codex-day:'+r['day']
-        if r['day'] in existing:continue
-        start=stamp(r['day']+'T00:00:00Z')
-        rows.append(dict(id=scope,source='codex-account',scope_id=scope,route=r['route'],provider='OpenAI',
-                         model=None,session=None,project=None,account_key=namespace,start=start,end=start+86400,
-                         checked=r['checked'],tokens=r['tokens'],parts=None))
+    existing = {
+        datetime.fromtimestamp(r['start'], timezone.utc).strftime('%Y-%m-%d')
+        for r in rows
+        if r['source'] == 'codex-account'
+    }
+    for r in c.execute('SELECT * FROM account_token_buckets WHERE route=? AND namespace=?', ('codex', namespace)):
+        scope = 'codex-day:' + r['day']
+        if r['day'] in existing:
+            continue
+        start = stamp(r['day'] + 'T00:00:00Z')
+        rows.append(
+            dict(
+                id=scope,
+                source='codex-account',
+                scope_id=scope,
+                route=r['route'],
+                provider='OpenAI',
+                model=None,
+                session=None,
+                project=None,
+                account_key=namespace,
+                start=start,
+                end=start + 86400,
+                checked=r['checked'],
+                tokens=r['tokens'],
+                parts=None,
+            )
+        )
     return rows
 
 
 def account_days(c):
     """The Codex account's day totals (09:00–09:00 KST days), as reconciled."""
-    return [r for r in _evidence(c) if r['source']=='codex-account']
+    return [r for r in _evidence(c) if r['source'] == 'codex-account']
 
 
-_held=threading.local()
+_held = threading.local()
 
 
 @contextmanager
@@ -152,294 +226,468 @@ def held():
     """Within the block (this thread), supplements() is worked out once per database and
     handed back as copies. Only for reading work during which nothing it reads changes,
     such as building the weekly reports; a later block works it out again."""
-    outer=getattr(_held,'memo',None)
-    _held.memo={} if outer is None else outer
-    try:yield
-    finally:_held.memo=outer
+    outer = getattr(_held, 'memo', None)
+    _held.memo = {} if outer is None else outer
+    try:
+        yield
+    finally:
+        _held.memo = outer
 
 
 def supplements(c, received=None):
     """(supplement entries, conflicts). `received`, when given, is extended with every
     aggregate received (its source, start and the fields a scope matches), whether or not
     it left anything beyond the local records."""
-    memo=getattr(_held,'memo',None)
-    if memo is None:return _supplements(c,received)
-    database=c.execute('PRAGMA database_list').fetchone()[2]
+    memo = getattr(_held, 'memo', None)
+    if memo is None:
+        return _supplements(c, received)
+    database = c.execute('PRAGMA database_list').fetchone()[2]
     if database not in memo:
-        seen=[];memo[database]=(*_supplements(c,seen),seen)
-    entries,conflicts,seen=memo[database]
-    if received is not None:received.extend(copy.deepcopy(seen))
-    return copy.deepcopy(entries),copy.deepcopy(conflicts)
+        seen = []
+        memo[database] = (*_supplements(c, seen), seen)
+    entries, conflicts, seen = memo[database]
+    if received is not None:
+        received.extend(copy.deepcopy(seen))
+    return copy.deepcopy(entries), copy.deepcopy(conflicts)
 
 
 def _supplements(c, received=None):
-    rows=_evidence(c)
+    rows = _evidence(c)
     if received is not None:
-        received.extend(dict(source=r['source'],start=r['start'],route=r['route'],provider=r['provider'],model=r['model'],
-                             project=r['project'],account=_account(c,r)) for r in rows)
-    groups={}
-    for r in rows:groups.setdefault((r['source'],r['scope_id'],r['model'],r['account_key']),[]).append(r)
-    out=[];conflicts=[];linked={}
+        received.extend(
+            dict(
+                source=r['source'],
+                start=r['start'],
+                route=r['route'],
+                provider=r['provider'],
+                model=r['model'],
+                project=r['project'],
+                account=_account(c, r),
+            )
+            for r in rows
+        )
+    groups = {}
+    for r in rows:
+        groups.setdefault((r['source'], r['scope_id'], r['model'], r['account_key']), []).append(r)
+    out = []
+    conflicts = []
+    linked = {}
     for group in groups.values():
-        previous=None
-        for r in sorted(group,key=lambda x:x['end']):
+        previous = None
+        for r in sorted(group, key=lambda x: x['end']):
             # The whole interval the count belongs to (an account day stays one total).
-            whole=r['end']
-            if r['source']=='codex-account':
+            whole = r['end']
+            if r['source'] == 'codex-account':
                 # A received running-day count cannot contain future activity.
                 # This is an upper bound, not a claim that work happened at poll
                 # time. Revisions still replace the SAME original daily bucket.
-                r={**r,'end':min(r['end'],r['checked'])}
-                if r['end']<=r['start']:continue
-            parts=json.loads(r['parts']) if r['parts'] else None
-            begin=previous['end'] if previous else r['start']
-            amount=r['tokens']-(previous['tokens'] if previous else 0)
-            old=json.loads(previous['parts']) if previous and previous['parts'] else None
-            delta={k:parts[k]-(old[k] if old else 0) for k in PARTS} if parts else None
-            if amount<0 or (delta and any(v<0 for v in delta.values())):
-                conflicts.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],model=r['model'],project=r['project'],start=begin,end=r['end'],reason='counter_decreased',checked=r['checked']))
-                previous=r;continue
-            if r['source']=='codex-account':raw=_raw(c,r,begin,r['end'])
+                r = {**r, 'end': min(r['end'], r['checked'])}
+                if r['end'] <= r['start']:
+                    continue
+            parts = json.loads(r['parts']) if r['parts'] else None
+            begin = previous['end'] if previous else r['start']
+            amount = r['tokens'] - (previous['tokens'] if previous else 0)
+            old = json.loads(previous['parts']) if previous and previous['parts'] else None
+            delta = {k: parts[k] - (old[k] if old else 0) for k in PARTS} if parts else None
+            if amount < 0 or (delta and any(v < 0 for v in delta.values())):
+                conflicts.append(
+                    dict(
+                        source=r['source'],
+                        scope_id=r['scope_id'],
+                        route=r['route'],
+                        provider=r['provider'],
+                        model=r['model'],
+                        project=r['project'],
+                        start=begin,
+                        end=r['end'],
+                        reason='counter_decreased',
+                        checked=r['checked'],
+                    )
+                )
+                previous = r
+                continue
+            if r['source'] == 'codex-account':
+                raw = _raw(c, r, begin, r['end'])
             else:
                 # A scope-linked source keeps many cumulative snapshots of one scope (a
                 # session): its records are read once and each snapshot's span summed.
-                if r['scope_id'] not in linked:linked[r['scope_id']]=_linked(c,r['scope_id'])
-                raw=_window(linked[r['scope_id']],begin,r['end'],r['model'])
-            missing=amount-sum(raw[k] for k in PARTS)
-            detail={k:delta[k]-raw[k] for k in PARTS} if delta else None
-            if missing<0 or (detail and any(v<0 for v in detail.values())):
-                conflicts.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],model=r['model'],project=r['project'],start=begin,end=r['end'],reason='records_exceed_aggregate',
-                                      excess=max(0,-missing),checked=r['checked']))
-                previous=r;continue
+                if r['scope_id'] not in linked:
+                    linked[r['scope_id']] = _linked(c, r['scope_id'])
+                raw = _window(linked[r['scope_id']], begin, r['end'], r['model'])
+            missing = amount - sum(raw[k] for k in PARTS)
+            detail = {k: delta[k] - raw[k] for k in PARTS} if delta else None
+            if missing < 0 or (detail and any(v < 0 for v in detail.values())):
+                conflicts.append(
+                    dict(
+                        source=r['source'],
+                        scope_id=r['scope_id'],
+                        route=r['route'],
+                        provider=r['provider'],
+                        model=r['model'],
+                        project=r['project'],
+                        start=begin,
+                        end=r['end'],
+                        reason='records_exceed_aggregate',
+                        excess=max(0, -missing),
+                        checked=r['checked'],
+                    )
+                )
+                previous = r
+                continue
             if detail is not None and parts is not None and 'reasoning' in parts:
-                reasoning=parts['reasoning']-(old.get('reasoning',0) if old else 0)-raw['reasoning']
-                if reasoning>=0:detail['reasoning']=reasoning
+                reasoning = parts['reasoning'] - (old.get('reasoning', 0) if old else 0) - raw['reasoning']
+                if reasoning >= 0:
+                    detail['reasoning'] = reasoning
             if missing or (detail and detail.get('reasoning')):
-                out.append(dict(source=r['source'],scope_id=r['scope_id'],route=r['route'],provider=r['provider'],
-                                model=r['model'],session=r['session'],project=r['project'],start=begin,end=r['end'],
-                                tokens=missing,parts=detail,checked=r['checked'],account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
-                                account=_account(c,r),whole_end=whole))
-            previous=r
+                out.append(
+                    dict(
+                        source=r['source'],
+                        scope_id=r['scope_id'],
+                        route=r['route'],
+                        provider=r['provider'],
+                        model=r['model'],
+                        session=r['session'],
+                        project=r['project'],
+                        start=begin,
+                        end=r['end'],
+                        tokens=missing,
+                        parts=detail,
+                        checked=r['checked'],
+                        account_verified=bool(r['account_key']) and not r['account_key'].startswith('epoch:'),
+                        account=_account(c, r),
+                        whole_end=whole,
+                    )
+                )
+            previous = r
     # Thread/telemetry detail for Codex must not be added on top of its account
     # residual; account totals cover the same route. Keep the narrower evidence
     # as diagnostics until account-bound overlap is provable.
-    account_days=[x for x in out if x['source']=='codex-account']
-    out=[x for x in out if x['route']!='codex' or x['source']=='codex-account' or
-         not any(a['start']<x['end'] and x['start']<a['end'] for a in account_days)]
-    return out,conflicts
+    account_days = [x for x in out if x['source'] == 'codex-account']
+    out = [
+        x
+        for x in out
+        if x['route'] != 'codex'
+        or x['source'] == 'codex-account'
+        or not any(a['start'] < x['end'] and x['start'] < a['end'] for a in account_days)
+    ]
+    return out, conflicts
 
 
-def _account(c,row):
+def _account(c, row):
     """Subscription account of an aggregate: the Claude account whose login read it."""
-    if row['route']!='claude-code':return row['route']
-    found=c.execute('SELECT data FROM state WHERE key=?',('claude_cloud_account:'+str(row['account_key']),)).fetchone() if row['account_key'] else None
+    if row['route'] != 'claude-code':
+        return row['route']
+    found = (
+        c.execute('SELECT data FROM state WHERE key=?', ('claude_cloud_account:' + str(row['account_key']),)).fetchone()
+        if row['account_key']
+        else None
+    )
     return json.loads(found[0]) if found else 'claude-code'
 
 
-def matches(row,scope):
-    if not scope:return True
-    kind,_,value=scope.partition(':')
+def matches(row, scope):
+    if not scope:
+        return True
+    kind, _, value = scope.partition(':')
     # The Codex account residual is no model and no project: not 'unknown' or '미분류'.
-    if row.get('source')=='codex-account' and kind in ('model','project'):return False
-    return (row.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None))==value
+    if row.get('source') == 'codex-account' and kind in ('model', 'project'):
+        return False
+    return (row.get(kind) or ('unknown' if kind == 'model' else '미분류' if kind == 'project' else None)) == value
 
 
 def total(row):
-    return row.get('total_tokens',sum(row.get(k,0) or 0 for k in PARTS))
+    return row.get('total_tokens', sum(row.get(k, 0) or 0 for k in PARTS))
 
 
 def add(row, evidence):
-    before=total(row)
-    row.setdefault('recorded_tokens',before)
-    row['supplemental_tokens']=row.get('supplemental_tokens',0)+evidence['tokens']
-    row['total_tokens']=before+evidence['tokens']
-    row['unpriced']=row.get('unpriced',0)+evidence['tokens']
+    before = total(row)
+    row.setdefault('recorded_tokens', before)
+    row['supplemental_tokens'] = row.get('supplemental_tokens', 0) + evidence['tokens']
+    row['total_tokens'] = before + evidence['tokens']
+    row['unpriced'] = row.get('unpriced', 0) + evidence['tokens']
     if evidence['parts']:
-        for k in TOKENS:row[k]=row.get(k,0)+evidence['parts'].get(k,0)
-    else:row['unclassified_tokens']=row.get('unclassified_tokens',0)+evidence['tokens']
-    if evidence['source']=='codex-account':row['residual_tokens']=row.get('residual_tokens',0)+evidence['tokens']
+        for k in TOKENS:
+            row[k] = row.get(k, 0) + evidence['parts'].get(k, 0)
+    else:
+        row['unclassified_tokens'] = row.get('unclassified_tokens', 0) + evidence['tokens']
+    if evidence['source'] == 'codex-account':
+        row['residual_tokens'] = row.get('residual_tokens', 0) + evidence['tokens']
 
 
 def residual(e):
-    return e['source']=='codex-account'
+    return e['source'] == 'codex-account'
 
 
 def series_label(e, group):
-    if residual(e) and group in ('model','project'):return RESIDUAL
-    if group=='agent':return '미귀속'
-    return e.get(group) or ('unknown' if group=='model' else '미분류' if group=='project' else '미귀속')
+    if residual(e) and group in ('model', 'project'):
+        return RESIDUAL
+    if group == 'agent':
+        return '미귀속'
+    return e.get(group) or ('unknown' if group == 'model' else '미분류' if group == 'project' else '미귀속')
 
 
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None, origins=True):
     """Overlay a COPY of the cached request-only response; never mutate the cache.
     `origins`: also split the period's records by where they came from (`origin_tokens`)."""
-    data=copy.deepcopy(body)
+    data = copy.deepcopy(body)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
     # reach back as far as the local records (whose first record is taken in the scope too).
-    received=[]
-    entries,conflicts=supplements(c,received)
-    entries=[e for e in entries if matches(e,scope)]
-    first_seen={}
+    received = []
+    entries, conflicts = supplements(c, received)
+    entries = [e for e in entries if matches(e, scope)]
+    first_seen = {}
     for r in received:
-        if matches(r,scope):first_seen[r['source']]=min(first_seen.get(r['source'],math.inf),r['start'])
-    a,b=stamp(data['start']),stamp(data['end_exclusive'])
-    conflicts=[e for e in conflicts if matches(e,scope) and e['start']<b and a<e['end']]
-    if not entries and not conflicts:return data
+        if matches(r, scope):
+            first_seen[r['source']] = min(first_seen.get(r['source'], math.inf), r['start'])
+    a, b = stamp(data['start']), stamp(data['end_exclusive'])
+    conflicts = [e for e in conflicts if matches(e, scope) and e['start'] < b and a < e['end']]
+    if not entries and not conflicts:
+        return data
     # Recover only supplemented candidates omitted from the cached top 100. They
     # are already counted in sessions_total and need their real request metadata.
     # Keeping all local sessions in every cached response would make large ranges costly.
-    if data.get('sessions_total',0)>len(data.get('sessions') or []):
+    if data.get('sessions_total', 0) > len(data.get('sessions') or []):
         from .store import Store
-        present={s['session'] for s in data['sessions']}
-        missing=sorted({e['session'] for e in entries if e['session'] and a<=e['start'] and e['end']<=b}-present)
-        for offset in range(0,len(missing),500):
-            data['sessions'].extend(Store.session_rows(c,a,b,pricing,scope,missing[offset:offset+500]).values())
-    accepted=[];unallocated=[];overlapping=[]
+
+        present = {s['session'] for s in data['sessions']}
+        missing = sorted(
+            {e['session'] for e in entries if e['session'] and a <= e['start'] and e['end'] <= b} - present
+        )
+        for offset in range(0, len(missing), 500):
+            data['sessions'].extend(
+                Store.session_rows(c, a, b, pricing, scope, missing[offset : offset + 500]).values()
+            )
+    accepted = []
+    unallocated = []
+    overlapping = []
     # Per subscription: what the records alone gave, what the accepted supplements add, and
     # whether a supplement crossing the period edge leaves the rest unknown.
-    recorded={s['route']:s.get('period_tokens') for s in data.get('subscriptions') or []};supplemented={};crossing=set()
+    recorded = {s['route']: s.get('period_tokens') for s in data.get('subscriptions') or []}
+    supplemented = {}
+    crossing = set()
     for e in entries:
-        if e['end']<=a or e['start']>=b:continue
-        public={**e,'start':datetime.fromtimestamp(e['start'],KST).isoformat(),
-                'end_exclusive':datetime.fromtimestamp(e['end'],KST).isoformat()}
-        public.pop('end');public.pop('parts');public.pop('whole_end')
+        if e['end'] <= a or e['start'] >= b:
+            continue
+        public = {
+            **e,
+            'start': datetime.fromtimestamp(e['start'], KST).isoformat(),
+            'end_exclusive': datetime.fromtimestamp(e['end'], KST).isoformat(),
+        }
+        public.pop('end')
+        public.pop('parts')
+        public.pop('whole_end')
         # A subscription whose period usage is only supplemented (a Codex account residual,
         # Claude cloud sessions) was still used; an aggregate that crosses the period edge
         # leaves 'no usage' unknown (None) rather than 0.
-        sub=next((s for s in data.get('subscriptions') or [] if s['route']==(e.get('account') or e['route'])),None)
-        if not (a<=e['start'] and e['end']<=b):
+        sub = next((s for s in data.get('subscriptions') or [] if s['route'] == (e.get('account') or e['route'])), None)
+        if not (a <= e['start'] and e['end'] <= b):
             overlapping.append(public)
-            if sub is not None:crossing.add(sub['route'])
+            if sub is not None:
+                crossing.add(sub['route'])
             continue
-        if sub is not None:supplemented[sub['route']]=supplemented.get(sub['route'],0)+e['tokens']
-        accepted.append(e);add(data['totals'],e)
-        split=data.get('claude_split')
-        if split is not None and e['route']=='claude-code':
-            account=e.get('account') or 'claude-code'
-            part=next((x for x in split if x['account']==account),None)
-            if part is None:part=dict(account=account,tokens=0,requests=0,cost=None);split.append(part)
-            part['tokens']+=e['tokens']
-        label=series_label(e,group)
-        located=False
+        if sub is not None:
+            supplemented[sub['route']] = supplemented.get(sub['route'], 0) + e['tokens']
+        accepted.append(e)
+        add(data['totals'], e)
+        split = data.get('claude_split')
+        if split is not None and e['route'] == 'claude-code':
+            account = e.get('account') or 'claude-code'
+            part = next((x for x in split if x['account'] == account), None)
+            if part is None:
+                part = dict(account=account, tokens=0, requests=0, cost=None)
+                split.append(part)
+            part['tokens'] += e['tokens']
+        label = series_label(e, group)
+        located = False
         for p in data['series']:
-            lo=stamp(p.get('range_start',p['time']));hi=stamp(p.get('range_end_exclusive',data['end_exclusive']))
-            if lo<=e['start'] and e['end']<=hi:
-                located=True
-                add(p['values'].setdefault(label,dict.fromkeys((*TOKENS,'requests','cost','unpriced'),0)),e)
-                if label not in data['labels']:data['labels'].append(label)
+            lo = stamp(p.get('range_start', p['time']))
+            hi = stamp(p.get('range_end_exclusive', data['end_exclusive']))
+            if lo <= e['start'] and e['end'] <= hi:
+                located = True
+                add(p['values'].setdefault(label, dict.fromkeys((*TOKENS, 'requests', 'cost', 'unpriced'), 0)), e)
+                if label not in data['labels']:
+                    data['labels'].append(label)
                 if cumulative:
                     for later in data['series']:
-                        if stamp(later['time'])>stamp(p['time']):
-                            add(later['values'].setdefault(label,dict.fromkeys((*TOKENS,'requests','cost','unpriced'),0)),e)
+                        if stamp(later['time']) > stamp(p['time']):
+                            add(
+                                later['values'].setdefault(
+                                    label, dict.fromkeys((*TOKENS, 'requests', 'cost', 'unpriced'), 0)
+                                ),
+                                e,
+                            )
                 break
-        if not located:unallocated.append(public)
-        model=RESIDUAL if residual(e) else e['model'] or 'unknown'
-        row=next((r for r in data['rows'] if r['route']==e['route'] and r['model']==model),None)
+        if not located:
+            unallocated.append(public)
+        model = RESIDUAL if residual(e) else e['model'] or 'unknown'
+        row = next((r for r in data['rows'] if r['route'] == e['route'] and r['model'] == model), None)
         if row is None:
-            row=dict(provider=e['provider'],route=e['route'],model=model,requests=0,
-                     est_cost=None,**dict.fromkeys(TOKENS,0));data['rows'].append(row)
-        add(row,e)
-        project=RESIDUAL if residual(e) else e['project'] or '미분류'
-        for collection,key,value in [('sessions','session',e['session']),('projects','project',project)]:
-            if key=='session' and not value:continue
-            target=next((r for r in data.get(collection,[]) if r.get(key)==value),None)
+            row = dict(
+                provider=e['provider'],
+                route=e['route'],
+                model=model,
+                requests=0,
+                est_cost=None,
+                **dict.fromkeys(TOKENS, 0),
+            )
+            data['rows'].append(row)
+        add(row, e)
+        project = RESIDUAL if residual(e) else e['project'] or '미분류'
+        for collection, key, value in [('sessions', 'session', e['session']), ('projects', 'project', project)]:
+            if key == 'session' and not value:
+                continue
+            target = next((r for r in data.get(collection, []) if r.get(key) == value), None)
             if target is None and collection in data:
-                target={key:value,'route':e['route'],'project':project,'kind':'unattributed',
-                        'requests':0,'sessions':0,'cost':None,'first_ts':e['start'],'last_ts':e['end'],**dict.fromkeys(TOKENS,0)}
+                target = {
+                    key: value,
+                    'route': e['route'],
+                    'project': project,
+                    'kind': 'unattributed',
+                    'requests': 0,
+                    'sessions': 0,
+                    'cost': None,
+                    'first_ts': e['start'],
+                    'last_ts': e['end'],
+                    **dict.fromkeys(TOKENS, 0),
+                }
                 data[collection].append(target)
-                if collection=='sessions':data['sessions_total']=data.get('sessions_total',0)+1
+                if collection == 'sessions':
+                    data['sessions_total'] = data.get('sessions_total', 0) + 1
             if target is not None:
-                add(target,e)
-                if collection=='sessions' and e['route']=='claude-code':
-                    target['accounts']=sorted(set(target.get('accounts') or [])|{e.get('account') or 'claude-code'})
-        for kind in ('route','provider','model','project','account'):
+                add(target, e)
+                if collection == 'sessions' and e['route'] == 'claude-code':
+                    target['accounts'] = sorted(set(target.get('accounts') or []) | {e.get('account') or 'claude-code'})
+        for kind in ('route', 'provider', 'model', 'project', 'account'):
             # The residual is not an unknown model or an unassigned project to filter by.
-            if residual(e) and kind in ('model','project'):continue
-            value=e.get(kind) or ('unknown' if kind=='model' else '미분류' if kind=='project' else None)
-            if kind=='account' and value and not value.startswith('claude-code'):continue
-            options=data.get('scope_options',{}).get(kind)
-            if options is not None and value and value not in options:options.append(value)
+            if residual(e) and kind in ('model', 'project'):
+                continue
+            value = e.get(kind) or ('unknown' if kind == 'model' else '미분류' if kind == 'project' else None)
+            if kind == 'account' and value and not value.startswith('claude-code'):
+                continue
+            options = data.get('scope_options', {}).get(kind)
+            if options is not None and value and value not in options:
+                options.append(value)
     for sub in data.get('subscriptions') or []:
-        base=recorded[sub['route']]
-        if base is None:continue  # unknown for another reason: left as it was
-        used=base+supplemented.get(sub['route'],0)
+        base = recorded[sub['route']]
+        if base is None:
+            continue  # unknown for another reason: left as it was
+        used = base + supplemented.get(sub['route'], 0)
         # No use on record and an aggregate across the edge: 'no usage' is unknown, not 0.
-        sub['period_tokens']=None if not used and sub['route'] in crossing else used
+        sub['period_tokens'] = None if not used and sub['route'] in crossing else used
     # The card comparison: on both sides, aggregates whose whole interval ended by the same
     # elapsed time. An account day is one total: it counts once the day is over by the cut,
     # whenever its count was first received; a day still open at the cut counts on neither
     # side (it is in the period total, not set against a whole one).
-    prior=data.get('prior')
+    prior = data.get('prior')
     if prior:
-        pa,pb,cut=stamp(prior['start']),stamp(prior['end_exclusive']),stamp(prior['current_end'])
-        counted=set()
+        pa, pb, cut = stamp(prior['start']), stamp(prior['end_exclusive']), stamp(prior['current_end'])
+        counted = set()
         for e in entries:
-            if pa<=e['start'] and e['whole_end']<=pb:add(prior,e);counted.add(e['source'])
-            if a<=e['start'] and e['whole_end']<=cut:prior['current_tokens']+=e['tokens'];counted.add(e['source'])
+            if pa <= e['start'] and e['whole_end'] <= pb:
+                add(prior, e)
+                counted.add(e['source'])
+            if a <= e['start'] and e['whole_end'] <= cut:
+                prior['current_tokens'] += e['tokens']
+                counted.add(e['source'])
         # A source counted on either side must already have covered the earlier window;
         # otherwise its share is missing there, not zero.
-        if any(first_seen.get(source,math.inf)>pa for source in counted):prior['complete']=False
-    if data.get('claude_split'):data['claude_split'].sort(key=lambda x:(-x['tokens'],x['account']))
-    if 'sessions' in data:data['sessions']=sorted(data['sessions'],key=lambda s:(-total(s),s['session']))[:100]
-    for e in entries:add(data['lifetime'],e)
+        if any(first_seen.get(source, math.inf) > pa for source in counted):
+            prior['complete'] = False
+    if data.get('claude_split'):
+        data['claude_split'].sort(key=lambda x: (-x['tokens'], x['account']))
+    if 'sessions' in data:
+        data['sessions'] = sorted(data['sessions'], key=lambda s: (-total(s), s['session']))[:100]
     for e in entries:
-        begin=datetime.fromtimestamp(e['start'],KST)
-        finish=datetime.fromtimestamp(e['end']-0.000001,KST)
-        if begin.date()==finish.date() and 'calendar' in data and begin.date().isoformat()>=calendar_start:
-            day=begin.date().isoformat()
-            cell=next((x for x in data['calendar'] if x['day']==day),None)
+        add(data['lifetime'], e)
+    for e in entries:
+        begin = datetime.fromtimestamp(e['start'], KST)
+        finish = datetime.fromtimestamp(e['end'] - 0.000001, KST)
+        if begin.date() == finish.date() and 'calendar' in data and begin.date().isoformat() >= calendar_start:
+            day = begin.date().isoformat()
+            cell = next((x for x in data['calendar'] if x['day'] == day), None)
             if cell is None:
-                cell=dict(day=day,tokens=0,requests=0,cost=None);data['calendar'].append(cell)
-            cell['tokens']+=e['tokens']
-        if e in accepted and begin.date()==finish.date() and begin.hour==finish.hour:
-            dow=(begin.weekday()+1)%7
-            cell=next((x for x in data.get('heatmap',[]) if x['dow']==dow and x['hour']==begin.hour),None)
+                cell = dict(day=day, tokens=0, requests=0, cost=None)
+                data['calendar'].append(cell)
+            cell['tokens'] += e['tokens']
+        if e in accepted and begin.date() == finish.date() and begin.hour == finish.hour:
+            dow = (begin.weekday() + 1) % 7
+            cell = next((x for x in data.get('heatmap', []) if x['dow'] == dow and x['hour'] == begin.hour), None)
             if cell is None:
-                cell=dict(dow=dow,hour=begin.hour,tokens=0,requests=0,cost=None);data.setdefault('heatmap',[]).append(cell)
-            cell['tokens']+=e['tokens']
-    if 'calendar' in data:data['calendar'].sort(key=lambda x:x['day'])
-    for name in ('totals','lifetime'):
-        value=data[name];value.setdefault('total_tokens',total(value));value.setdefault('recorded_tokens',value['total_tokens'])
-        value.setdefault('supplemental_tokens',0);value.setdefault('unclassified_tokens',0);value.setdefault('residual_tokens',0)
-    data['reconciliation']=dict(recorded_tokens=data['totals']['recorded_tokens'],
-        supplemental_tokens=sum(e['tokens'] for e in accepted),residual_tokens=sum(e['tokens'] for e in accepted if residual(e)),
-        unallocated_tokens=sum(e['tokens'] for e in unallocated),unallocated_intervals=unallocated,
-        overlapping_intervals=overlapping,conflicts=conflicts,
-        cost_basis='세부 요청 기록 중 단가가 확인된 부분',requests_basis='수집한 고유 요청',
-        sources=sorted({e['source'] for e in accepted}))
+                cell = dict(dow=dow, hour=begin.hour, tokens=0, requests=0, cost=None)
+                data.setdefault('heatmap', []).append(cell)
+            cell['tokens'] += e['tokens']
+    if 'calendar' in data:
+        data['calendar'].sort(key=lambda x: x['day'])
+    for name in ('totals', 'lifetime'):
+        value = data[name]
+        value.setdefault('total_tokens', total(value))
+        value.setdefault('recorded_tokens', value['total_tokens'])
+        value.setdefault('supplemental_tokens', 0)
+        value.setdefault('unclassified_tokens', 0)
+        value.setdefault('residual_tokens', 0)
+    data['reconciliation'] = dict(
+        recorded_tokens=data['totals']['recorded_tokens'],
+        supplemental_tokens=sum(e['tokens'] for e in accepted),
+        residual_tokens=sum(e['tokens'] for e in accepted if residual(e)),
+        unallocated_tokens=sum(e['tokens'] for e in unallocated),
+        unallocated_intervals=unallocated,
+        overlapping_intervals=overlapping,
+        conflicts=conflicts,
+        cost_basis='세부 요청 기록 중 단가가 확인된 부분',
+        requests_basis='수집한 고유 요청',
+        sources=sorted({e['source'] for e in accepted}),
+    )
     # The split looks up every record of the period, so callers that do not show it skip it.
     if origins:
-        where='e.ts>=? AND e.ts<?';args=[a,b]
+        where = 'e.ts>=? AND e.ts<?'
+        args = [a, b]
         if scope:
-            kind,_,value=scope.partition(':')
-            if kind in ('route','provider','model','project','account'):
-                column=("COALESCE(e.project,'미분류')" if kind=='project' else
-                        "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END" if kind=='account' else 'e.'+kind)
-                where+=' AND '+column+'=?';args.append(value)
-        rows=c.execute("SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
-                       "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
-                       'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '+where+' GROUP BY 1',args)
-        data['reconciliation']['origin_tokens']={r['origin']:r['tokens'] for r in rows}
-    comparison=data.get('compare')
+            kind, _, value = scope.partition(':')
+            if kind in ('route', 'provider', 'model', 'project', 'account'):
+                column = (
+                    "COALESCE(e.project,'미분류')"
+                    if kind == 'project'
+                    else "CASE WHEN e.route='claude-code' THEN COALESCE(e.account,'claude-code') ELSE e.route END"
+                    if kind == 'account'
+                    else 'e.' + kind
+                )
+                where += ' AND ' + column + '=?'
+                args.append(value)
+        rows = c.execute(
+            "SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source LIKE 'claude-cloud:%') THEN 'cloud' "
+            "WHEN EXISTS(SELECT 1 FROM usage_origins o WHERE o.event_id=e.id AND o.source='telemetry') THEN 'telemetry' ELSE 'local' END origin,"
+            'SUM(e.uncached_input+e.cached_input+e.output+e.cache_creation) tokens FROM events e WHERE '
+            + where
+            + ' GROUP BY 1',
+            args,
+        )
+        data['reconciliation']['origin_tokens'] = {r['origin']: r['tokens'] for r in rows}
+    comparison = data.get('compare')
     if comparison:
-        ca,cb=stamp(comparison['start']),stamp(comparison['end_exclusive'])
-        comparison['unallocated_tokens']=0
-        shift=a-ca
+        ca, cb = stamp(comparison['start']), stamp(comparison['end_exclusive'])
+        comparison['unallocated_tokens'] = 0
+        shift = a - ca
         for e in entries:
-            elapsed=comparison.get('elapsed')
-            if elapsed and stamp(elapsed['start'])<=e['start'] and e['end']<=stamp(elapsed['end_exclusive']):add(elapsed,e)
-            if not (ca<=e['start'] and e['end']<=cb):continue
-            placed=False
-            label=series_label(e,group)
-            for p,grid in zip(comparison.get('series',[]),data['series']):
-                lo=stamp(grid.get('range_start',grid['time']))-shift
-                hi=stamp(grid.get('range_end_exclusive',data['end_exclusive']))-shift
-                if lo<=e['start'] and e['end']<=hi:
-                    add(p['values'].setdefault(label,dict.fromkeys((*TOKENS,'requests','cost','unpriced'),0)),e)
-                    if label not in data['labels']:data['labels'].append(label)
-                    placed=True;break
-            if not placed:comparison['unallocated_tokens']+=e['tokens']
-    for key,which in [('coverage','totals'),('lifetime_coverage','lifetime')]:
-        if data.get('cost',{}).get(key) is not None:
-            r=data[which];data['cost'][key]*=r['recorded_tokens']/r['total_tokens'] if r['total_tokens'] else 1
+            elapsed = comparison.get('elapsed')
+            if elapsed and stamp(elapsed['start']) <= e['start'] and e['end'] <= stamp(elapsed['end_exclusive']):
+                add(elapsed, e)
+            if not (ca <= e['start'] and e['end'] <= cb):
+                continue
+            placed = False
+            label = series_label(e, group)
+            for p, grid in zip(comparison.get('series', []), data['series']):
+                lo = stamp(grid.get('range_start', grid['time'])) - shift
+                hi = stamp(grid.get('range_end_exclusive', data['end_exclusive'])) - shift
+                if lo <= e['start'] and e['end'] <= hi:
+                    add(p['values'].setdefault(label, dict.fromkeys((*TOKENS, 'requests', 'cost', 'unpriced'), 0)), e)
+                    if label not in data['labels']:
+                        data['labels'].append(label)
+                    placed = True
+                    break
+            if not placed:
+                comparison['unallocated_tokens'] += e['tokens']
+    for key, which in [('coverage', 'totals'), ('lifetime_coverage', 'lifetime')]:
+        if data.get('cost', {}).get(key) is not None:
+            r = data[which]
+            data['cost'][key] *= r['recorded_tokens'] / r['total_tokens'] if r['total_tokens'] else 1
     return data

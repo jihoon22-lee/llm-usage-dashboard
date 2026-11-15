@@ -1,11 +1,35 @@
 """Run every synthetic browser regression; never accepts a live origin."""
+
 from pathlib import Path
 import subprocess
 import sys
 
-CHECKS = ('smoke','reconciliation','dashboard','features','insights','model_visibility','notifications',
-          'quota_hierarchy','review','status','antigravity','privacy','remediation',
-          'usability_settings','usability_requests','usability_output','resource_planning','recent_usage','claude_accounts','account_residual','usage_details','codex_activity','readability','overview')
+CHECKS = (
+    'smoke',
+    'reconciliation',
+    'dashboard',
+    'features',
+    'insights',
+    'model_visibility',
+    'notifications',
+    'quota_hierarchy',
+    'review',
+    'status',
+    'antigravity',
+    'privacy',
+    'remediation',
+    'usability_settings',
+    'usability_requests',
+    'usability_output',
+    'resource_planning',
+    'recent_usage',
+    'claude_accounts',
+    'account_residual',
+    'usage_details',
+    'codex_activity',
+    'readability',
+    'overview',
+)
 if __name__ == '__main__':
     for check in CHECKS:
         print(f'Browser check: {check}', flush=True)
