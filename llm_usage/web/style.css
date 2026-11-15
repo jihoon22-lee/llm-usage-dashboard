@@ -61,12 +61,19 @@ progress::-webkit-progress-value{background:var(--chart-0)}
 .activity{margin-top:24px}
 /* One bar holds the brand, the tabs, freshness with refresh, and the status and settings buttons. */
 .sticky-nav{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--border)}
-.tabs{display:flex;gap:2px;align-self:stretch;overflow-x:auto}
-.tabs button{background:none;border:none;border-radius:0;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--muted);padding:0 14px;min-height:44px;font-size:var(--fs-sm);font-weight:600;white-space:nowrap}
+/* The four views are the page's main navigation: set at heading size, each a full-height
+   target. The marker is drawn inside the button, so the strip never overflows: a strip that
+   scrolls shows scrollbars on Windows for a single pixel of overflow. */
+.tabs{display:flex;gap:4px;align-self:stretch}
+.tabs button{position:relative;background:none;border:none;border-radius:0;color:var(--muted);padding:0 18px;min-height:48px;font-size:var(--fs-md);font-weight:650;letter-spacing:-.2px;white-space:nowrap}
+.tabs button::after{content:'';position:absolute;left:10px;right:10px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:transparent}
 .tabs button:hover{color:var(--ink)}
-.tabs button.active{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs button:hover::after{background:var(--border)}
+.tabs button.active{color:var(--ink)}
+.tabs button.active::after{background:var(--accent)}
+.tabs button:focus-visible{outline-offset:-4px;border-radius:var(--radius-sm)}
 /* Between a phone and a wide window the tabs take their own row under the brand and tools. */
-@media(min-width:601px) and (max-width:1000px){.tabs{order:5;flex:1 0 100%;border-top:1px solid var(--line)}}
+@media(min-width:601px) and (max-width:1000px){header{padding-top:10px;row-gap:10px}.tabs{order:5;flex:1 0 100%;border-top:1px solid var(--line)}}
 main{padding-top:20px}
 section[data-view]{margin-top:0}
 [data-view][hidden]{display:none}
@@ -154,7 +161,7 @@ footer{border-top:1px solid var(--border);padding:24px 0 30px;color:var(--subtle
 
 
 /* Theme selection, aggregate date tooltip and keyboard access. */
-header{min-height:56px;display:flex;align-items:center;gap:0 24px;flex-wrap:wrap}
+header{min-height:64px;display:flex;align-items:center;gap:0 28px;flex-wrap:wrap}
 .header-tools{display:flex;align-items:center;gap:10px;margin-left:auto;min-width:0}
 .icon-btn{width:36px;height:36px;flex:none;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-lg);line-height:1;background:var(--raised);color:var(--muted);border:1px solid var(--border);border-radius:9px}
 .icon-btn:hover{color:var(--ink)}
@@ -594,7 +601,9 @@ details.source-group[open]>summary{margin-bottom:-8px}
 /* Phones: tabs sit at the bottom, within thumb reach; content keeps clear of them. */
 @media(max-width:600px){
  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;margin:0;gap:0;background:var(--surface);border-top:1px solid var(--border);border-bottom:0;padding:0 0 env(safe-area-inset-bottom);box-shadow:0 -4px 12px rgba(0,0,0,.06)}
- .tabs button{flex:1;min-height:48px;padding:6px 2px;margin-bottom:0;font-size:var(--fs-sm);border-radius:0}
+ .tabs button{flex:1;min-height:48px;padding:6px 2px;font-size:var(--fs-sm);border-radius:0}
+ /* At the bottom of the screen the marker sits on the bar's top edge, next to the content. */
+ .tabs button::after{top:0;bottom:auto;left:18%;right:18%;border-radius:0 0 3px 3px}
  body{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
  .tip{z-index:40}
 }
