@@ -515,7 +515,10 @@ def deliver(store, notify, messages, now):
             store.save_state(c, OUTBOX_KEY, fresh + sending)
             _log(c, store, log)
             return []
-        store.save_state(c, OUTBOX_KEY, [])
+        # What is about to be sent stays in the outbox until its outcome is written: a
+        # collector stopped in between sends it again at its next start instead of losing it.
+        pending = fresh + sending
+        store.save_state(c, OUTBOX_KEY, pending)
         _log(c, store, log)
     queue = fresh + sending
     if not queue:
@@ -566,8 +569,9 @@ def deliver(store, notify, messages, now):
                 )
             )
     with store.connect() as c:
-        # Another evaluation may not run in between, but keep anything already queued.
-        store.save_state(c, OUTBOX_KEY, (store.state(c, OUTBOX_KEY, []) or []) + retry)
+        # Another evaluation may not run in between, but keep anything queued meanwhile.
+        queued = [m for m in (store.state(c, OUTBOX_KEY, []) or []) if m not in pending]
+        store.save_state(c, OUTBOX_KEY, queued + retry)
         _log(c, store, log)
         store.source(
             c,

@@ -24,6 +24,24 @@ def run(*args, capture=False):
     return subprocess.run(args, check=True, text=True, stdout=subprocess.PIPE if capture else None).stdout
 
 
+def healthy(seconds=60):
+    """Whether the web unit answers /healthz within `seconds`. A refused connection returns
+    at once, so the wait goes by the clock (a minute, as the unit updater's does) and not by
+    a count of attempts that a slow first start outlasts."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                'http://127.0.0.1:8766/healthz', timeout=2
+            ) as response:
+                if response.status == 200:
+                    return True
+        except OSError:
+            pass
+        time.sleep(0.25)
+    return False
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--owner', help='Non-root service owner (defaults to SUDO_USER)')
@@ -140,16 +158,7 @@ Nice=10
     run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', 'llm-usage.service')
     run('systemctl', 'restart', 'llm-usage.service')
-    for attempt in range(60):
-        try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-                'http://127.0.0.1:8766/healthz', timeout=2
-            ) as response:
-                if response.status == 200:
-                    break
-        except OSError:
-            time.sleep(0.25)
-    else:
+    if not healthy():
         raise RuntimeError('LLM Usage 서버 상태 점검 실패')
     run('tailscale', 'serve', '--bg', '--https=9444', 'unix:/run/llm-usage/http.sock')
     if args.resource_guard:

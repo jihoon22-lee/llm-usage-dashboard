@@ -312,6 +312,8 @@ $('projects').addEventListener('click',async event=>{
  $('projects').querySelectorAll('.sess-detail-row').forEach(el=>el.remove());
  $('projects').querySelectorAll('.proj-open').forEach(b=>b.setAttribute('aria-expanded','false'));
  if(openProject===name){openProject=null;projectDetails.delete(name);return;}
+ // As for sessions: switching forgets the other project's detail, so it is loaded again.
+ if(openProject)projectDetails.delete(openProject);
  openProject=name;button.setAttribute('aria-expanded','true');
  try{
   if(!projectDetails.has(name))projectDetails.set(name,projectDetailHtml(await api('/api/project?name='+encodeURIComponent(name))));

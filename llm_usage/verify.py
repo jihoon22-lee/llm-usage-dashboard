@@ -336,7 +336,7 @@ def _antigravity(path, settings):
                             split_errors += 1
                         completed = bool(_decode(metadata.get(8, b'')).get(1))
                         observations.append((ids, values, timestamp, completed))
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
                         errors += 1
         except (OSError, sqlite3.Error):
             errors += 1
@@ -418,7 +418,8 @@ def _devin_db(path):
         raise
 
 
-def _devin_expected(cfg, checkpoints):
+def _devin_expected(cfg, checkpoints, unreadable=None):
+    unreadable = [] if unreadable is None else unreadable
     found = {Path(s['path']) for s in cfg.get('sources', []) if s.get('kind') == 'devin'}
     for home in cfg.get('homes', []):
         for rel in ('.local/share/devin/cli/sessions.db', 'AppData/Roaming/devin/cli/sessions.db'):
@@ -440,16 +441,21 @@ def _devin_expected(cfg, checkpoints):
             ):
                 if not rid or row_id > checkpoint:
                     continue
-                m = json.loads(raw).get('metadata') or {}
-                t = m.get('metrics')
-                if not isinstance(t, dict):
+                try:
+                    m = json.loads(raw).get('metadata') or {}
+                    t = m.get('metrics')
+                    if not isinstance(t, dict):
+                        continue
+                    vals = (
+                        int(t.get('input_tokens') or 0),
+                        int(t.get('cache_read_tokens') or 0),
+                        int(t.get('output_tokens') or 0),
+                        int(t.get('cache_creation_tokens') or 0),
+                    )
+                except (ValueError, TypeError, AttributeError, OverflowError):
+                    # One unreadable original row is counted; the comparison goes on.
+                    unreadable.append(rid)
                     continue
-                vals = (
-                    int(t.get('input_tokens') or 0),
-                    int(t.get('cache_read_tokens') or 0),
-                    int(t.get('output_tokens') or 0),
-                    int(t.get('cache_creation_tokens') or 0),
-                )
                 # The collector skips snapshots whose metrics carry no tokens.
                 if not any(vals):
                     continue
@@ -468,8 +474,10 @@ def _devin(path, cfg):
             checkpoints = {
                 k: json.loads(v) for k, v in c.execute("SELECT key,data FROM state WHERE key LIKE 'devin:%sessions.db'")
             }
-            expected = _devin_expected(cfg, checkpoints)
+            unreadable = []
+            expected = _devin_expected(cfg, checkpoints, unreadable)
             result['requests'] = len(expected)
+            result['source_errors'] += len(unreadable)
             for rid, want in expected.items():
                 row = c.execute(
                     'SELECT model,uncached_input,cached_input,output,cache_creation FROM events WHERE id=?',

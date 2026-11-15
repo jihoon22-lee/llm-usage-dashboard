@@ -285,11 +285,12 @@ def decide(data, route, model='common', hours=2, pace='recent', now=None):
                     deadlines.append((duration, r['bucket']))
                 if r['resets'] <= now + hours * 3600:
                     resets.append(r['bucket'])
+            # Each deadline already lies before its own window's reset. Another window that
+            # resets sooner does not refill this one, so it does not cancel the shortage.
             earliest = min(deadlines) if deadlines else None
-            boundary = min((r['resets'] - now for r in fresh if r.get('resets')), default=float('inf'))
-            if earliest and earliest[0] < boundary:
+            if earliest:
                 result.update(seconds=earliest[0], bottleneck=earliest[1])
-            if earliest and earliest[0] <= hours * 3600 and earliest[0] < boundary:
+            if earliest and earliest[0] <= hours * 3600:
                 result.update(state='shortage', reason='현재 속도가 유지되면 계획 시간 안에 구독 한도가 소진됩니다.')
             elif incomplete:
                 result['reason'] = '속도 관측 부족 또는 최근 감소 없음 · 작업 가능 시간을 확정할 수 없습니다.'
