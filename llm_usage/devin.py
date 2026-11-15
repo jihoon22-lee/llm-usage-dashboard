@@ -7,6 +7,7 @@ as chain snapshots with identical metrics, so request_id is the deduplication
 identity. Quota fields are not persisted locally; limits.py polls GetUserStatus.
 Conversation text and credentials are never copied out.
 """
+
 import json
 import shutil
 import sqlite3
@@ -105,11 +106,24 @@ def collect_database(store, path, provider_for):
                 c.execute('DELETE FROM import_errors WHERE source=?', (key,))
             checkpoint = 0 if replaced else saved['row_id']
             newest = checkpoint
-            has_sessions = src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() is not None
-            sel = ('SELECT n.row_id,n.session_id,n.node_id,n.created_at,n.chat_message,s.working_directory '
-                   'FROM message_nodes n LEFT JOIN sessions s ON s.id=n.session_id ' if has_sessions else
-                   'SELECT row_id,session_id,node_id,created_at,chat_message,NULL AS working_directory FROM message_nodes ')
-            for row in src.execute(sel + 'WHERE ' + ('n.' if has_sessions else '') + 'row_id>? ORDER BY ' + ('n.' if has_sessions else '') + 'row_id', (checkpoint,)):
+            has_sessions = (
+                src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() is not None
+            )
+            sel = (
+                'SELECT n.row_id,n.session_id,n.node_id,n.created_at,n.chat_message,s.working_directory '
+                'FROM message_nodes n LEFT JOIN sessions s ON s.id=n.session_id '
+                if has_sessions
+                else 'SELECT row_id,session_id,node_id,created_at,chat_message,NULL AS working_directory FROM message_nodes '
+            )
+            for row in src.execute(
+                sel
+                + 'WHERE '
+                + ('n.' if has_sessions else '')
+                + 'row_id>? ORDER BY '
+                + ('n.' if has_sessions else '')
+                + 'row_id',
+                (checkpoint,),
+            ):
                 newest = max(newest, row['row_id'])
                 try:
                     d = json.loads(row['chat_message'])
@@ -126,15 +140,24 @@ def collect_database(store, path, provider_for):
                         continue
                     model = model_name(meta.get('generation_model'))
                     # Chain snapshots repeat identical metrics; events dedupe by request_id.
-                    store.event(c, identity('devin', rid), row['created_at'],
-                                provider_for(model or ''), 'devin', model,
-                                dict(uncached_input=metrics.get('input_tokens'),
-                                     cached_input=metrics.get('cache_read_tokens'),
-                                     output=metrics.get('output_tokens'),
-                                     cache_creation=metrics.get('cache_creation_tokens'),
-                                     reasoning=None),
-                                session=row['session_id'], project=project_label(row['working_directory']),
-                                agent_kind='main')
+                    store.event(
+                        c,
+                        identity('devin', rid),
+                        row['created_at'],
+                        provider_for(model or ''),
+                        'devin',
+                        model,
+                        dict(
+                            uncached_input=metrics.get('input_tokens'),
+                            cached_input=metrics.get('cache_read_tokens'),
+                            output=metrics.get('output_tokens'),
+                            cache_creation=metrics.get('cache_creation_tokens'),
+                            reasoning=None,
+                        ),
+                        session=row['session_id'],
+                        project=project_label(row['working_directory']),
+                        agent_kind='main',
+                    )
                     c.execute('DELETE FROM import_errors WHERE source=? AND record=?', (key, record))
                 except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
                     store.import_error(c, key, 'node:' + str(row['node_id']), type(exc).__name__)
@@ -190,6 +213,8 @@ def collect_databases(store, settings, provider_for):
     with store.connect() as c:
         total = c.execute("SELECT COUNT(*) FROM events WHERE route='devin'").fetchone()[0]
         status = ('partial' if failed or errors or missing else 'ok') if files else 'error' if failed else 'unavailable'
-        detail = (f'{files}개 DB 확인 · 보존한 고유 요청 {total}개 · 읽기 실패 {failed}개'
-                  f' · 해석 실패 {errors}건 · 없는 경로 {missing}개')
+        detail = (
+            f'{files}개 DB 확인 · 보존한 고유 요청 {total}개 · 읽기 실패 {failed}개'
+            f' · 해석 실패 {errors}건 · 없는 경로 {missing}개'
+        )
         store.source(c, 'devin-records', status, detail)

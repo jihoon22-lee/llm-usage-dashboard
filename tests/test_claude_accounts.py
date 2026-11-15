@@ -3,6 +3,7 @@
 All homes, logins, transcripts and process registries are synthetic files in a
 disposable HOME; no provider is contacted and no real account file is read.
 """
+
 from contextlib import ExitStack, closing
 from io import BytesIO
 import json
@@ -17,8 +18,19 @@ import unittest
 from unittest.mock import patch
 
 from llm_usage import cli, claudehook, collect, limits, statusline
-from llm_usage.claude_accounts import (FAMILY, UNKNOWN, account_key, accounts, describe, home_candidates, inspect,
-                                       labels, plan_label, registry, route_for)
+from llm_usage.claude_accounts import (
+    FAMILY,
+    UNKNOWN,
+    account_key,
+    accounts,
+    describe,
+    home_candidates,
+    inspect,
+    labels,
+    plan_label,
+    registry,
+    route_for,
+)
 from llm_usage.claude_attribution import account_for, collect_evidence, policies, refresh, resolve
 from llm_usage.resources import key, observe_account
 from llm_usage.store import Store
@@ -57,20 +69,48 @@ class Homes:
 
     @staticmethod
     def write_account(path, identity):
-        path.write_text(json.dumps({'oauthAccount': {'accountUuid': identity[0], 'organizationUuid': identity[1],
-                                                     'emailAddress': 'PRIVATE-EMAIL', 'displayName': 'PRIVATE-NAME'}}))
+        path.write_text(
+            json.dumps(
+                {
+                    'oauthAccount': {
+                        'accountUuid': identity[0],
+                        'organizationUuid': identity[1],
+                        'emailAddress': 'PRIVATE-EMAIL',
+                        'displayName': 'PRIVATE-NAME',
+                    }
+                }
+            )
+        )
 
     @staticmethod
     def write_credentials(path, plan, tier, expires=None, token='TEST-ONLY-TOKEN'):
-        path.write_text(json.dumps({'claudeAiOauth': {'accessToken': token, 'refreshToken': 'TEST-ONLY-REFRESH',
-                                                      'expiresAt': ((expires or NOW + 3600) * 1000),
-                                                      'subscriptionType': plan, 'rateLimitTier': tier}}))
+        path.write_text(
+            json.dumps(
+                {
+                    'claudeAiOauth': {
+                        'accessToken': token,
+                        'refreshToken': 'TEST-ONLY-REFRESH',
+                        'expiresAt': ((expires or NOW + 3600) * 1000),
+                        'subscriptionType': plan,
+                        'rateLimitTier': tier,
+                    }
+                }
+            )
+        )
 
     def settings(self, database, **extra):
-        return dict(database=str(database), claude_auth=str(self.default / '.credentials.json'),
-                    paseo_home=str(self.home / '.paseo'), status_inboxes=[str(self.inbox)],
-                    sources=[dict(name='WSL .claude/projects', route='claude-code', kind='jsonl', path=str(self.default / 'projects'))],
-                    **extra)
+        return dict(
+            database=str(database),
+            claude_auth=str(self.default / '.credentials.json'),
+            paseo_home=str(self.home / '.paseo'),
+            status_inboxes=[str(self.inbox)],
+            sources=[
+                dict(
+                    name='WSL .claude/projects', route='claude-code', kind='jsonl', path=str(self.default / 'projects')
+                )
+            ],
+            **extra,
+        )
 
     def transcript(self, session, stamps, subagent=False):
         """Assistant requests of one session at the given times."""
@@ -79,24 +119,49 @@ class Homes:
         path = folder / (('agent-x' if subagent else session) + '.jsonl')
         with path.open('a') as f:
             for i, ts in enumerate(stamps):
-                f.write(json.dumps({'type': 'assistant', 'sessionId': session, 'cwd': '/home/user/repo', 'isSidechain': subagent,
-                                    'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)) + f'.{int(ts*1000)%1000:03d}Z',
-                                    'message': {'id': f'msg-{session}-{subagent}-{ts:.3f}-{i}', 'model': 'claude-test',
-                                                'usage': {'input_tokens': 10, 'output_tokens': 5}}}) + '\n')
+                f.write(
+                    json.dumps(
+                        {
+                            'type': 'assistant',
+                            'sessionId': session,
+                            'cwd': '/home/user/repo',
+                            'isSidechain': subagent,
+                            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts))
+                            + f'.{int(ts * 1000) % 1000:03d}Z',
+                            'message': {
+                                'id': f'msg-{session}-{subagent}-{ts:.3f}-{i}',
+                                'model': 'claude-test',
+                                'usage': {'input_tokens': 10, 'output_tokens': 5},
+                            },
+                        }
+                    )
+                    + '\n'
+                )
         return path
 
     def registry(self, home, pid, session, started, status='idle', status_at=None):
-        (home / 'sessions' / f'{pid}.json').write_text(json.dumps(
-            {'pid': pid, 'sessionId': session, 'startedAt': started * 1000, 'status': status,
-             'statusUpdatedAt': (status_at or started) * 1000, 'kind': 'interactive'}))
+        (home / 'sessions' / f'{pid}.json').write_text(
+            json.dumps(
+                {
+                    'pid': pid,
+                    'sessionId': session,
+                    'startedAt': started * 1000,
+                    'status': status,
+                    'statusUpdatedAt': (status_at or started) * 1000,
+                    'kind': 'interactive',
+                }
+            )
+        )
 
 
 class AccountTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.h = Homes(self.root)
-        self.home_patch = patch.object(Path, 'home', return_value=self.h.home); self.home_patch.start()
+        self.home_patch = patch.object(Path, 'home', return_value=self.h.home)
+        self.home_patch.start()
         self.addCleanup(self.home_patch.stop)
         self.store = Store(self.root / 'usage.db')
         self.cfg = self.h.settings(self.root / 'usage.db')
@@ -106,7 +171,10 @@ class AccountTests(unittest.TestCase):
 
     def events(self):
         with self.store.connect() as c:
-            return {r['id']: dict(r) for r in c.execute("SELECT id,ts,session,account FROM events WHERE route='claude-code'")}
+            return {
+                r['id']: dict(r)
+                for r in c.execute("SELECT id,ts,session,account FROM events WHERE route='claude-code'")
+            }
 
     def accounts_of(self, session):
         return [e['account'] for e in sorted(self.events().values(), key=lambda e: e['ts']) if e['session'] == session]
@@ -123,9 +191,14 @@ class AccountTests(unittest.TestCase):
 
     def test_discovery_keeps_one_entry_per_real_home_and_never_reads_windows_tokens(self):
         windows = self.root / 'mnt/c/Users/Example'
-        found = home_candidates({**self.cfg, 'homes': [str(self.h.home), '/mnt/c/Users/Example'],
-                                 'claude_homes': [str(self.h.managed), 'relative/home']},
-                                observed=[str(self.h.default), '/outside/home'])
+        found = home_candidates(
+            {
+                **self.cfg,
+                'homes': [str(self.h.home), '/mnt/c/Users/Example'],
+                'claude_homes': [str(self.h.managed), 'relative/home'],
+            },
+            observed=[str(self.h.default), '/outside/home'],
+        )
         kinds = [(h['kind'], Path(h['path']).name) for h in found]
         self.assertEqual(kinds, [('default', '.claude'), ('configured', 'claude-0123abcd'), ('windows', '.claude')])
         self.assertIsNone(found[-1]['credentials'])
@@ -133,36 +206,50 @@ class AccountTests(unittest.TestCase):
 
     def test_discovered_private_transcript_folder_is_collected_and_attributed(self):
         from llm_usage.claude_accounts import transcript_sources
+
         # Shared native folders are already covered by the configured source.
-        self.assertEqual(len(transcript_sources(self.cfg)),1)
-        projects=self.h.managed/'projects';projects.unlink();projects.mkdir()
-        original=self.h.transcript('private-sdk',[NOW-30])
-        private=projects/'project';private.mkdir()
-        original.rename(private/original.name)
+        self.assertEqual(len(transcript_sources(self.cfg)), 1)
+        projects = self.h.managed / 'projects'
+        projects.unlink()
+        projects.mkdir()
+        original = self.h.transcript('private-sdk', [NOW - 30])
+        private = projects / 'project'
+        private.mkdir()
+        original.rename(private / original.name)
         self.accounts_by_route()
-        collect.collect_local(self.store,self.cfg,include_derived=False)
-        resolve(self.store,self.cfg)
-        self.assertEqual(self.accounts_of('private-sdk'),[R_SECOND])
-        collect.collect_local(self.store,self.cfg,include_derived=False)
-        self.assertEqual(len(self.events()),1)
-        self.assertEqual(len(transcript_sources(self.cfg)),2)
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        resolve(self.store, self.cfg)
+        self.assertEqual(self.accounts_of('private-sdk'), [R_SECOND])
+        collect.collect_local(self.store, self.cfg, include_derived=False)
+        self.assertEqual(len(self.events()), 1)
+        self.assertEqual(len(transcript_sources(self.cfg)), 2)
 
     def test_isolated_sources_do_not_discover_the_process_home(self):
         from llm_usage.claude_accounts import transcript_sources
-        isolated=dict(sources=[dict(name='fixture',kind='jsonl',route='codex',path=str(self.root/'empty'))])
-        self.assertEqual(transcript_sources(isolated),isolated['sources'])
+
+        isolated = dict(sources=[dict(name='fixture', kind='jsonl', route='codex', path=str(self.root / 'empty'))])
+        self.assertEqual(transcript_sources(isolated), isolated['sources'])
         # A deliberately different default home does not opt into global zerosub homes.
-        other=self.root/'isolated-claude';other.mkdir();(other/'projects').mkdir()
-        found=transcript_sources(dict(sources=[],claude_auth=str(other/'.credentials.json')))
-        self.assertEqual([s['path'] for s in found],[str(other/'projects')])
+        other = self.root / 'isolated-claude'
+        other.mkdir()
+        (other / 'projects').mkdir()
+        found = transcript_sources(dict(sources=[], claude_auth=str(other / '.credentials.json')))
+        self.assertEqual([s['path'] for s in found], [str(other / 'projects')])
 
     def test_plan_labels_and_duplicate_names(self):
         self.assertEqual(plan_label('max', 'default_claude_max_5x'), 'Max 5x')
         self.assertEqual(plan_label('max', 'default_claude_max_20x'), 'Max 20x')
         self.assertEqual(plan_label('pro', 'default_claude_ai'), 'Pro')
         self.assertIsNone(plan_label(None, None))
-        rows = [dict(route=FAMILY, plan_label='Max 5x'), dict(route=R_SECOND, plan_label='Max 5x'), dict(route='claude-code:aaaaaaaaaaaa', plan_label=None)]
-        self.assertEqual(labels(rows), {FAMILY: 'Max 5x · 기본', R_SECOND: 'Max 5x · ' + R_SECOND[-4:], 'claude-code:aaaaaaaaaaaa': '계정'})
+        rows = [
+            dict(route=FAMILY, plan_label='Max 5x'),
+            dict(route=R_SECOND, plan_label='Max 5x'),
+            dict(route='claude-code:aaaaaaaaaaaa', plan_label=None),
+        ]
+        self.assertEqual(
+            labels(rows),
+            {FAMILY: 'Max 5x · 기본', R_SECOND: 'Max 5x · ' + R_SECOND[-4:], 'claude-code:aaaaaaaaaaaa': '계정'},
+        )
         self.assertEqual(labels(rows, {R_SECOND: '  개인 Max ', FAMILY: ''})[R_SECOND], '개인 Max')
 
     def test_existing_identified_account_keeps_the_original_route(self):
@@ -177,7 +264,14 @@ class AccountTests(unittest.TestCase):
             self.assertEqual(rows[R_SECOND]['plan_label'], 'Max 5x')
             self.assertEqual(rows[FAMILY]['plan_label'], 'Pro')
             dump = '\n'.join(c.iterdump())
-        for private in ('PRIVATE-EMAIL', 'PRIVATE-NAME', 'TEST-ONLY-TOKEN', 'TEST-ONLY-REFRESH', 'main-user', 'second-org'):
+        for private in (
+            'PRIVATE-EMAIL',
+            'PRIVATE-NAME',
+            'TEST-ONLY-TOKEN',
+            'TEST-ONLY-REFRESH',
+            'main-user',
+            'second-org',
+        ):
             self.assertNotIn(private, dump)
 
     def test_a_previously_identified_account_stays_original_even_when_the_default_home_changes(self):
@@ -188,6 +282,7 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(contexts['claude-code:' + K_MAIN[:12]]['home']['kind'], 'default')
         # The original account signed in nowhere: its route is not polled with another login.
         import shutil
+
         shutil.rmtree(self.h.home / '.paseo')
         contexts = self.accounts_by_route()
         self.assertEqual(set(contexts), {'claude-code:' + K_MAIN[:12]})
@@ -209,29 +304,48 @@ class AccountTests(unittest.TestCase):
     # --- per-account polling --------------------------------------------------------------------
 
     def usage_response(self, five, seven):
-        return BytesIO(json.dumps({'five_hour': {'utilization': five, 'resets_at': '2099-01-01T00:00:00Z'},
-                                   'seven_day': {'utilization': seven, 'resets_at': '2099-01-05T00:00:00Z'}}).encode())
+        return BytesIO(
+            json.dumps(
+                {
+                    'five_hour': {'utilization': five, 'resets_at': '2099-01-01T00:00:00Z'},
+                    'seven_day': {'utilization': seven, 'resets_at': '2099-01-05T00:00:00Z'},
+                }
+            ).encode()
+        )
 
     def test_each_account_is_polled_with_its_own_login_into_its_own_route(self):
         tokens = []
+
         def opener(*handlers):
             class Open:
                 def open(self, request, timeout=None):
                     tokens.append(request.get_header('Authorization'))
                     return self_.usage_response(10 if len(tokens) == 1 else 60, 20)
+
             return Open()
+
         self_ = self
-        Homes.write_credentials(self.h.managed / '.credentials.json', 'max', 'default_claude_max_5x', token='TEST-SECOND-TOKEN')
+        Homes.write_credentials(
+            self.h.managed / '.credentials.json', 'max', 'default_claude_max_5x', token='TEST-SECOND-TOKEN'
+        )
         with ExitStack() as stack:
             stack.enter_context(patch.object(limits.urllib.request, 'build_opener', side_effect=opener))
-            for name in ('poll_claude_resources', 'collect_claude_cloud', 'poll_devin', 'poll_antigravity_app', 'read_codex'):
-                stack.enter_context(patch.object(limits, name, side_effect=OSError('offline') if name == 'read_codex' else None))
+            for name in (
+                'poll_claude_resources',
+                'collect_claude_cloud',
+                'poll_devin',
+                'poll_antigravity_app',
+                'read_codex',
+            ):
+                stack.enter_context(
+                    patch.object(limits, name, side_effect=OSError('offline') if name == 'read_codex' else None)
+                )
             limits.poll_limits(self.store, {**self.cfg, 'opencode_auth': str(self.root / 'none.json')})
         self.assertEqual(tokens, ['Bearer TEST-ONLY-TOKEN', 'Bearer TEST-SECOND-TOKEN'])
         rows = {(r['route'], r['bucket']): r for r in self.store.limits(NOW)['limits']}
         self.assertEqual(rows[(FAMILY, 'five_hour')]['remaining'], 90)
         self.assertEqual(rows[(R_SECOND, 'five_hour')]['remaining'], 40)
-        self.assertEqual(rows[(R_SECOND, 'five_hour')]['source'], 'claude-oauth' + R_SECOND[len(FAMILY):])
+        self.assertEqual(rows[(R_SECOND, 'five_hour')]['source'], 'claude-oauth' + R_SECOND[len(FAMILY) :])
         self.assertEqual(rows[(R_SECOND, 'five_hour')]['family'], FAMILY)
         self.assertEqual(rows[(R_SECOND, 'five_hour')]['account_label'], 'Max 5x')
         self.assertEqual(rows[(FAMILY, 'five_hour')]['account_label'], 'Pro')
@@ -240,31 +354,55 @@ class AccountTests(unittest.TestCase):
 
     def test_per_model_weekly_limits_from_the_limits_list(self):
         from llm_usage.limits import claude_limits
-        data = {'five_hour': {'utilization': 46, 'resets_at': '2099-01-01T00:00:00Z'},
-                'seven_day': {'utilization': 3, 'resets_at': '2099-01-02T00:00:00Z'}, 'seven_day_opus': None,
-                'limits': [{'kind': 'session', 'percent': 46, 'scope': None},
-                           {'kind': 'weekly_scoped', 'percent': 30, 'resets_at': '2099-01-02T00:00:00+00:00',
-                            'scope': {'model': {'id': None, 'display_name': 'Fable'}, 'surface': None}},
-                           {'kind': 'weekly_scoped', 'percent': 10, 'scope': {'model': None, 'surface': {'display_name': 'Claude Code'}}},
-                           {'kind': 'weekly_scoped', 'percent': 120, 'scope': {'model': {'display_name': 'Bad'}}},
-                           {'kind': 'weekly_scoped', 'percent': 5, 'scope': {'model': {'display_name': '<script>'}}},
-                           'not a row']}
+
+        data = {
+            'five_hour': {'utilization': 46, 'resets_at': '2099-01-01T00:00:00Z'},
+            'seven_day': {'utilization': 3, 'resets_at': '2099-01-02T00:00:00Z'},
+            'seven_day_opus': None,
+            'limits': [
+                {'kind': 'session', 'percent': 46, 'scope': None},
+                {
+                    'kind': 'weekly_scoped',
+                    'percent': 30,
+                    'resets_at': '2099-01-02T00:00:00+00:00',
+                    'scope': {'model': {'id': None, 'display_name': 'Fable'}, 'surface': None},
+                },
+                {
+                    'kind': 'weekly_scoped',
+                    'percent': 10,
+                    'scope': {'model': None, 'surface': {'display_name': 'Claude Code'}},
+                },
+                {'kind': 'weekly_scoped', 'percent': 120, 'scope': {'model': {'display_name': 'Bad'}}},
+                {'kind': 'weekly_scoped', 'percent': 5, 'scope': {'model': {'display_name': '<script>'}}},
+                'not a row',
+            ],
+        }
         with self.store.connect() as c:
             self.assertEqual(claude_limits(self.store, c, data, NOW, R_SECOND), 4)
         rows = {r['bucket']: r for r in self.store.limits(NOW)['limits'] if r['route'] == R_SECOND}
         self.assertEqual(set(rows), {'five_hour', 'seven_day', 'seven_day_fable', 'seven_day_claude_code'})
         fable = rows['seven_day_fable']
-        self.assertEqual((fable['remaining'], fable['display_name'], fable['scope']['role'], fable['scope']['label']), (70, 'Fable 주간', 'model', 'Fable'))
-        self.assertEqual(fable['source'], 'claude-oauth' + R_SECOND[len(FAMILY):])
+        self.assertEqual(
+            (fable['remaining'], fable['display_name'], fable['scope']['role'], fable['scope']['label']),
+            (70, 'Fable 주간', 'model', 'Fable'),
+        )
+        self.assertEqual(fable['source'], 'claude-oauth' + R_SECOND[len(FAMILY) :])
         self.assertEqual(rows['seven_day_claude_code']['scope']['role'], 'unknown')
         # A later response without the scoped limit marks it as not current.
         with self.store.connect() as c:
             claude_limits(self.store, c, {k: v for k, v in data.items() if k != 'limits'}, NOW + 1, R_SECOND)
-        self.assertTrue(next(r for r in self.store.limits(NOW + 2)['limits'] if r['bucket'] == 'seven_day_fable')['omitted_latest'])
+        self.assertTrue(
+            next(r for r in self.store.limits(NOW + 2)['limits'] if r['bucket'] == 'seven_day_fable')['omitted_latest']
+        )
 
     def test_resource_sources_of_every_account_keep_their_fifteen_minute_cadence(self):
         with self.store.connect() as c:
-            for name in ('claude-credits', 'claude-credits:' + K_SECOND[:12], 'claude-resets:' + K_SECOND[:12], 'claude-oauth:' + K_SECOND[:12]):
+            for name in (
+                'claude-credits',
+                'claude-credits:' + K_SECOND[:12],
+                'claude-resets:' + K_SECOND[:12],
+                'claude-oauth:' + K_SECOND[:12],
+            ):
                 self.store.source(c, name, 'ok', '', NOW - 700)
         sources = {s['name']: s['status'] for s in self.store.usage(period='7d', now=NOW)['sources']}
         self.assertEqual(sources['claude-credits'], 'ok')
@@ -275,28 +413,47 @@ class AccountTests(unittest.TestCase):
     def test_ended_account_is_not_polled(self):
         seen = []
         with self.store.connect() as c:
-            self.store.source(c, 'claude-oauth' + R_SECOND[len(FAMILY):], 'ok', '', NOW - 60)
+            self.store.source(c, 'claude-oauth' + R_SECOND[len(FAMILY) :], 'ok', '', NOW - 60)
         with ExitStack() as stack:
-            stack.enter_context(patch.object(limits, 'poll_claude', side_effect=lambda s, cfg, account=None: seen.append(account['route'])))
+            stack.enter_context(
+                patch.object(
+                    limits, 'poll_claude', side_effect=lambda s, cfg, account=None: seen.append(account['route'])
+                )
+            )
             for name in ('poll_claude_resources', 'collect_claude_cloud', 'poll_devin', 'poll_antigravity_app'):
                 stack.enter_context(patch.object(limits, name))
             stack.enter_context(patch.object(limits, 'read_codex', side_effect=OSError('offline')))
             limits.poll_limits(self.store, {**self.cfg, 'opencode_auth': 'none', 'ended_subscriptions': {R_SECOND: {}}})
         self.assertEqual(seen, [FAMILY])
         with self.store.connect() as c:
-            status = c.execute('SELECT status FROM sources WHERE name=?', ('claude-oauth' + R_SECOND[len(FAMILY):],)).fetchone()
+            status = c.execute(
+                'SELECT status FROM sources WHERE name=?', ('claude-oauth' + R_SECOND[len(FAMILY) :],)
+            ).fetchone()
         self.assertEqual(status[0], 'ended')
 
     def test_quota_windows_and_parents_stay_within_each_account(self):
         accounts(self.store, self.cfg, NOW)
         with self.store.connect() as c:
             for route, five, seven in ((FAMILY, 50, 0), (R_SECOND, 80, 100)):
-                self.store.limit(c, route, 'five_hour', five, NOW + 3600, NOW - 5, 'claude-oauth' + route[len(FAMILY):])
-                self.store.limit(c, route, 'seven_day', seven, NOW + 86400, NOW - 5, 'claude-oauth' + route[len(FAMILY):])
-                self.store.source(c, 'claude-oauth' + route[len(FAMILY):], 'ok', '', NOW - 5)
+                self.store.limit(
+                    c, route, 'five_hour', five, NOW + 3600, NOW - 5, 'claude-oauth' + route[len(FAMILY) :]
+                )
+                self.store.limit(
+                    c, route, 'seven_day', seven, NOW + 86400, NOW - 5, 'claude-oauth' + route[len(FAMILY) :]
+                )
+                self.store.source(c, 'claude-oauth' + route[len(FAMILY) :], 'ok', '', NOW - 5)
             for i, account in enumerate((FAMILY, R_SECOND, R_SECOND, None)):
-                self.store.event(c, f'w{i}', NOW - 600, 'Anthropic', 'claude-code', 'claude-test', dict(uncached_input=100, output=10),
-                                 session='s', account=account)
+                self.store.event(
+                    c,
+                    f'w{i}',
+                    NOW - 600,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(uncached_input=100, output=10),
+                    session='s',
+                    account=account,
+                )
         rows = {(r['route'], r['bucket']): r for r in self.store.limits(NOW)['limits']}
         # Pending (unresolved) requests count for the original account until resolved.
         self.assertEqual(rows[(FAMILY, 'five_hour')]['window']['requests'], 2)
@@ -310,12 +467,14 @@ class AccountTests(unittest.TestCase):
     def test_account_decision_rules(self):
         shared = ('shared', FAMILY, 1000)
         alternating = [(100, FAMILY), (200, R_SECOND), (300, FAMILY)]
-        self.assertEqual([account_for(t, alternating, shared, FAMILY) for t in (150, 250, 350, 197)],
-                         [FAMILY, R_SECOND, FAMILY, FAMILY])
+        self.assertEqual(
+            [account_for(t, alternating, shared, FAMILY) for t in (150, 250, 350, 197)],
+            [FAMILY, R_SECOND, FAMILY, FAMILY],
+        )
         # Within the clock tolerance the new turn's evidence already applies.
         self.assertEqual(account_for(199, [(100, FAMILY), (200.5, R_SECOND)], shared, FAMILY), R_SECOND)
-        self.assertEqual(account_for(50, alternating, shared, FAMILY), FAMILY)      # before cutover, no evidence
-        self.assertEqual(account_for(1500, [], shared, FAMILY), UNKNOWN)            # after cutover, no evidence
+        self.assertEqual(account_for(50, alternating, shared, FAMILY), FAMILY)  # before cutover, no evidence
+        self.assertEqual(account_for(1500, [], shared, FAMILY), UNKNOWN)  # after cutover, no evidence
         self.assertEqual(account_for(1500, [], ('single', R_SECOND), FAMILY), R_SECOND)
         self.assertEqual(account_for(1500, [], None, FAMILY), UNKNOWN)
 
@@ -328,13 +487,18 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(rule[:2], ('shared', FAMILY))
         self.assertAlmostEqual(rule[2], self.h.joined, places=3)
         # Once shared, the folder stays shared from the recorded time on.
-        (self.h.managed / 'projects').unlink(); (self.h.managed / 'projects').mkdir()
+        (self.h.managed / 'projects').unlink()
+        (self.h.managed / 'projects').mkdir()
         rules = policies(self.store, self.cfg, [inspect(h) for h in home_candidates(self.cfg)], K_MAIN)
         self.assertEqual(rules[str(self.h.default / 'projects')], ('shared', FAMILY, rule[2]))
         # A folder only one account ever wrote is that account's, before and after.
         fresh = Store(self.root / 'other.db')
-        self.assertEqual(policies(fresh, self.cfg, [inspect(h) for h in home_candidates(self.cfg)], K_MAIN)[str(self.h.default / 'projects')],
-                         ('single', FAMILY))
+        self.assertEqual(
+            policies(fresh, self.cfg, [inspect(h) for h in home_candidates(self.cfg)], K_MAIN)[
+                str(self.h.default / 'projects')
+            ],
+            ('single', FAMILY),
+        )
 
     def collect(self):
         collect.collect_local(self.store, self.cfg, include_derived=False)
@@ -405,10 +569,23 @@ class AccountTests(unittest.TestCase):
 
     def test_cloud_copies_keep_the_account_that_read_them(self):
         from llm_usage.reconciliation import link
+
         with self.store.connect() as c:
             observe_account(c, 'claude-code', MAIN, NOW - 86400)
-            self.store.event(c, 'cloud-1', NOW - 50, 'Anthropic', 'claude-code', 'claude-test', dict(output=5), session='cloud', account=R_SECOND)
-            self.store.event(c, 'cloud-old', NOW - 40, 'Anthropic', 'claude-code', 'claude-test', dict(output=5), session='cloud')
+            self.store.event(
+                c,
+                'cloud-1',
+                NOW - 50,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=5),
+                session='cloud',
+                account=R_SECOND,
+            )
+            self.store.event(
+                c, 'cloud-old', NOW - 40, 'Anthropic', 'claude-code', 'claude-test', dict(output=5), session='cloud'
+            )
             link(c, 'claude:cloud', 'cloud-1', 'claude-cloud:teleport-events')
             link(c, 'claude:cloud', 'cloud-old', 'claude-cloud:teleport-events')
         self.collect()
@@ -420,6 +597,7 @@ class AccountTests(unittest.TestCase):
     def test_single_account_installs_attribute_everything_to_the_original_route(self):
         (self.h.managed / 'projects').unlink()
         import shutil
+
         shutil.rmtree(self.h.home / '.paseo')
         self.h.transcript('solo', [NOW - 100, NOW - 50])
         self.collect()
@@ -444,31 +622,46 @@ class AccountTests(unittest.TestCase):
         self.assertIn(R_SECOND, contexts)
         self.collect()
         self.assertEqual(self.accounts_of('separate'), [R_SECOND])
-        usage = self.store.usage(period='7d', now=NOW, subscriptions={R_SECOND: 20},
-                                 pricing={'claude-test': dict(input=1, output=2)})
+        usage = self.store.usage(
+            period='7d', now=NOW, subscriptions={R_SECOND: 20}, pricing={'claude-test': dict(input=1, output=2)}
+        )
         sub = next(s for s in usage['subscriptions'] if s['route'] == R_SECOND)
         self.assertEqual(sub['period_tokens'], 15)
-        self.assertAlmostEqual(sub['period_cost'], .00002)
+        self.assertAlmostEqual(sub['period_cost'], 0.00002)
         self.assertEqual([(r['account'], r['tokens']) for r in usage['claude_split']], [(R_SECOND, 15)])
         from llm_usage.webapp import create_app
-        app = create_app(dict(
-            database=self.store.path, origin='https://dashboard.test', secret_key='fixture', allowed_logins=['fixture']))
+
+        app = create_app(
+            dict(
+                database=self.store.path,
+                origin='https://dashboard.test',
+                secret_key='fixture',
+                allowed_logins=['fixture'],
+            )
+        )
         from types import SimpleNamespace
         import socket
+
         with app.test_client() as client:
-            cfg = client.get('/api/config', base_url='https://dashboard.test', headers={'Tailscale-User-Login': 'fixture'},
-                             environ_overrides={'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)}).json
+            cfg = client.get(
+                '/api/config',
+                base_url='https://dashboard.test',
+                headers={'Tailscale-User-Login': 'fixture'},
+                environ_overrides={'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)},
+            ).json
         self.assertIn(R_SECOND, cfg['subscription_routes'])
-        quota=next(r for r in self.store.limits(NOW)['limits'] if r['route']==R_SECOND)
-        self.assertEqual(quota['account_label'],'Max 5x')
+        quota = next(r for r in self.store.limits(NOW)['limits'] if r['route'] == R_SECOND)
+        self.assertEqual(quota['account_label'], 'Max 5x')
         from llm_usage.reports import _names
+
         with self.store.connect() as c:
-            self.assertEqual(_names(c)[1][R_SECOND],'Max 5x')
+            self.assertEqual(_names(c)[1][R_SECOND], 'Max 5x')
 
     def test_unbound_folder_repair_keeps_cloud_and_confirmed_accounts_and_is_idempotent(self):
         self.unbound_folder(['fallback', 'cloud', 'confirmed'])
         collect.collect_local(self.store, self.cfg, include_derived=False)
         from llm_usage.reconciliation import link
+
         with self.store.connect() as c:
             c.execute("UPDATE events SET account=?", (FAMILY,))
             c.execute("UPDATE events SET account=? WHERE session='confirmed'", (R_SECOND,))
@@ -482,7 +675,9 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.accounts_of('confirmed'), [R_SECOND])
         self.assertEqual(refresh(Store(self.store.path), self.cfg), 0)
         with self.store.connect() as c:
-            self.assertEqual(tuple(c.execute('SELECT COUNT(*),SUM(uncached_input),SUM(output) FROM events').fetchone()), before)
+            self.assertEqual(
+                tuple(c.execute('SELECT COUNT(*),SUM(uncached_input),SUM(output) FROM events').fetchone()), before
+            )
         self.assertTrue(self.store.rollup_matches())
 
     def assert_late_default_keeps_route(self, register_first):
@@ -497,18 +692,35 @@ class AccountTests(unittest.TestCase):
                 # Existing registry rows from before the route reservation was added.
                 c.execute("DELETE FROM state WHERE key='claude_accounts:unbound-keys'")
             else:
-                self.assertEqual(collect.status_route(self.store, c, Path('claude-code@0123456789ab.json'),
-                                                      FAMILY, dict(account=K_SECOND)), R_SECOND)
+                self.assertEqual(
+                    collect.status_route(
+                        self.store, c, Path('claude-code@0123456789ab.json'), FAMILY, dict(account=K_SECOND)
+                    ),
+                    R_SECOND,
+                )
         from llm_usage.resources import write_manual
-        manual = write_manual(self.store, dict(route=R_SECOND, kind='reset', label='saved reset', amount=2,
-                                               unit='count', scope='unknown', checked=NOW - 100))
+
+        manual = write_manual(
+            self.store,
+            dict(
+                route=R_SECOND,
+                kind='reset',
+                label='saved reset',
+                amount=2,
+                unit='count',
+                scope='unknown',
+                checked=NOW - 100,
+            ),
+        )
         # A later login of the same identity in the default home must not rename it.
         Homes.write_account(self.h.home / '.claude.json', SECOND)
         contexts = self.accounts_by_route()
         self.assertEqual(set(contexts), {R_SECOND})
         self.assertEqual(contexts[R_SECOND]['home']['kind'], 'default')
         self.h.transcript('after-login', [NOW - 50])
-        self.cfg['sources'].append(dict(name='default home', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects')))
+        self.cfg['sources'].append(
+            dict(name='default home', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects'))
+        )
         self.collect()
         self.assertEqual(self.accounts_of('before-login'), [R_SECOND])
         self.assertEqual(self.accounts_of('after-login'), [R_SECOND])
@@ -519,20 +731,39 @@ class AccountTests(unittest.TestCase):
             self.assertIsNone(self.store.state(c, 'claude_primary_account'))
             self.assertEqual(observe_account(c, R_SECOND, SECOND, NOW)['epoch'], owner['epoch'])
             for name in ('claude-code.json', 'claude-code@0123456789ab.json'):
-                self.assertEqual(collect.status_route(self.store, c, Path(name), FAMILY, dict(account=K_SECOND)), R_SECOND)
-            self.assertEqual(c.execute('SELECT route FROM resource_items WHERE id=?', (manual['id'],)).fetchone()[0], R_SECOND)
+                self.assertEqual(
+                    collect.status_route(self.store, c, Path(name), FAMILY, dict(account=K_SECOND)), R_SECOND
+                )
+            self.assertEqual(
+                c.execute('SELECT route FROM resource_items WHERE id=?', (manual['id'],)).fetchone()[0], R_SECOND
+            )
         for i, name in enumerate(('claude-code.json', 'claude-code@0123456789ab.json')):
-            (self.h.inbox / name).write_text(json.dumps(dict(account=K_SECOND, checked=NOW - 20 + i,
-                data={'rate_limits': {'five_hour': {'used_percentage': 30, 'resets_at': NOW + 3600}}})))
+            (self.h.inbox / name).write_text(
+                json.dumps(
+                    dict(
+                        account=K_SECOND,
+                        checked=NOW - 20 + i,
+                        data={'rate_limits': {'five_hour': {'used_percentage': 30, 'resets_at': NOW + 3600}}},
+                    )
+                )
+            )
         collect.collect_status(self.store, self.cfg)
         with self.store.connect() as c:
-            self.assertEqual({r[0] for r in c.execute("SELECT route FROM limit_history WHERE source LIKE 'claude-code%'")}, {R_SECOND})
-        usage = self.store.usage(period='7d', now=NOW, subscriptions={R_SECOND: 20},
-                                 pricing={'claude-test': dict(input=1, output=2)})
+            self.assertEqual(
+                {r[0] for r in c.execute("SELECT route FROM limit_history WHERE source LIKE 'claude-code%'")},
+                {R_SECOND},
+            )
+        usage = self.store.usage(
+            period='7d', now=NOW, subscriptions={R_SECOND: 20}, pricing={'claude-test': dict(input=1, output=2)}
+        )
         self.assertEqual([(r['account'], r['tokens']) for r in usage['claude_split']], [(R_SECOND, 30)])
-        self.assertEqual([(s['route'], s['period_tokens'], s['monthly_usd']) for s in usage['subscriptions']], [(R_SECOND, 30, 20)])
-        self.assertAlmostEqual(usage['subscriptions'][0]['period_cost'], .00004)
-        quota = next(r for r in self.store.limits(NOW)['limits'] if r['route']==R_SECOND and r['bucket']=='five_hour')
+        self.assertEqual(
+            [(s['route'], s['period_tokens'], s['monthly_usd']) for s in usage['subscriptions']], [(R_SECOND, 30, 20)]
+        )
+        self.assertAlmostEqual(usage['subscriptions'][0]['period_cost'], 0.00004)
+        quota = next(
+            r for r in self.store.limits(NOW)['limits'] if r['route'] == R_SECOND and r['bucket'] == 'five_hour'
+        )
         self.assertEqual(quota['remaining'], 70)
         self.assertTrue(self.store.rollup_matches())
 
@@ -576,8 +807,11 @@ class AccountTests(unittest.TestCase):
     def test_unbound_repair_does_not_choose_between_copies_in_different_roots(self):
         folder = self.unbound_folder(['copied'])
         import shutil
+
         shutil.copy2(folder / 'copied.jsonl', self.h.project / 'copied.jsonl')
-        self.cfg['sources'].append(dict(name='another root', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects')))
+        self.cfg['sources'].append(
+            dict(name='another root', route=FAMILY, kind='jsonl', path=str(self.h.default / 'projects'))
+        )
         collect.collect_local(self.store, self.cfg, include_derived=False)
         with self.store.connect() as c:
             c.execute('UPDATE events SET account=?', (FAMILY,))
@@ -598,8 +832,13 @@ class AccountTests(unittest.TestCase):
             env['HOME'] = str(self.h.home)
             if home:
                 env['CLAUDE_CONFIG_DIR'] = str(home)
-            subprocess.run([sys.executable, statusline.__file__, '--route', 'claude-code', '--directory', str(self.h.inbox)],
-                           input=payload, capture_output=True, env=env, check=True)
+            subprocess.run(
+                [sys.executable, statusline.__file__, '--route', 'claude-code', '--directory', str(self.h.inbox)],
+                input=payload,
+                capture_output=True,
+                env=env,
+                check=True,
+            )
 
     def test_status_lines_of_two_homes_never_overwrite_each_other(self):
         self.status_lines()
@@ -639,12 +878,28 @@ class AccountTests(unittest.TestCase):
         accounts(self.store, self.cfg, NOW)
         with self.store.connect() as c:
             for i, account in enumerate((FAMILY, R_SECOND, R_SECOND, UNKNOWN)):
-                self.store.event(c, f'u{i}', NOW - 3600, 'Anthropic', 'claude-code', 'claude-test',
-                                 dict(uncached_input=1_000_000, output=0), session='mixed', account=account)
-            self.store.event(c, 'codex-1', NOW - 3600, 'OpenAI', 'codex', 'gpt-test', dict(uncached_input=1_000_000), session='cx')
+                self.store.event(
+                    c,
+                    f'u{i}',
+                    NOW - 3600,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(uncached_input=1_000_000, output=0),
+                    session='mixed',
+                    account=account,
+                )
+            self.store.event(
+                c, 'codex-1', NOW - 3600, 'OpenAI', 'codex', 'gpt-test', dict(uncached_input=1_000_000), session='cx'
+            )
         pricing = {'claude-test': dict(input=1, output=1), 'gpt-test': dict(input=1, output=1)}
-        data = self.store.usage(period='7d', group='account', pricing=pricing,
-                                subscriptions={'claude-code': 20, 'codex': 200}, names={R_SECOND: '두 번째'})
+        data = self.store.usage(
+            period='7d',
+            group='account',
+            pricing=pricing,
+            subscriptions={'claude-code': 20, 'codex': 200},
+            names={R_SECOND: '두 번째'},
+        )
         self.assertEqual(set(data['labels']), {FAMILY, R_SECOND, UNKNOWN, 'codex'})
         self.assertEqual(set(data['scope_options']['account']), {FAMILY, R_SECOND, UNKNOWN})
         subs = {s['route']: s for s in data['subscriptions']}
@@ -652,13 +907,22 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(subs[R_SECOND]['period_cost'], 2)
         self.assertIsNone(subs[R_SECOND]['monthly_usd'])
         self.assertEqual(subs['codex']['period_cost'], 1)
-        self.assertEqual((subs['claude-code']['period_tokens'], subs[R_SECOND]['period_tokens']), (1_000_000, 2_000_000))
+        self.assertEqual(
+            (subs['claude-code']['period_tokens'], subs[R_SECOND]['period_tokens']), (1_000_000, 2_000_000)
+        )
         # Without list prices each account still reports whether it was used in the period.
-        unpriced = {s['route']: s for s in self.store.usage(period='7d', subscriptions={'claude-code': 20}, names={R_SECOND: '두 번째'})['subscriptions']}
+        unpriced = {
+            s['route']: s
+            for s in self.store.usage(period='7d', subscriptions={'claude-code': 20}, names={R_SECOND: '두 번째'})[
+                'subscriptions'
+            ]
+        }
         self.assertEqual((unpriced[R_SECOND]['period_cost'], unpriced[R_SECOND]['period_tokens']), (None, 2_000_000))
         session = next(s for s in data['sessions'] if s['session'] == 'mixed')
         self.assertEqual(session['accounts'], sorted([FAMILY, R_SECOND, UNKNOWN]))
-        self.assertEqual({a['route']: a['label'] for a in data['claude_accounts']}, {FAMILY: 'Pro', R_SECOND: '두 번째'})
+        self.assertEqual(
+            {a['route']: a['label'] for a in data['claude_accounts']}, {FAMILY: 'Pro', R_SECOND: '두 번째'}
+        )
         scoped = self.store.usage(period='7d', group='model', scope='account:' + R_SECOND, pricing=pricing)
         self.assertEqual(scoped['totals']['requests'], 2)
         # The route view still shows one Claude Code service.
@@ -666,17 +930,36 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(sorted(by_route['labels']), ['claude-code', 'codex'])
         # Its total split by account, 계정 미확인 included, adds up to the service.
         split = {e['account']: e for e in by_route['claude_split']}
-        self.assertEqual({k: (v['tokens'], v['requests'], v['cost']) for k, v in split.items()},
-                         {FAMILY: (1_000_000, 1, 1), R_SECOND: (2_000_000, 2, 2), UNKNOWN: (1_000_000, 1, 1)})
-        claude = sum(r['uncached_input'] + r['cached_input'] + r['output'] + r['cache_creation'] for r in by_route['rows'] if r['route'] == 'claude-code')
+        self.assertEqual(
+            {k: (v['tokens'], v['requests'], v['cost']) for k, v in split.items()},
+            {FAMILY: (1_000_000, 1, 1), R_SECOND: (2_000_000, 2, 2), UNKNOWN: (1_000_000, 1, 1)},
+        )
+        claude = sum(
+            r['uncached_input'] + r['cached_input'] + r['output'] + r['cache_creation']
+            for r in by_route['rows']
+            if r['route'] == 'claude-code'
+        )
         self.assertEqual(sum(e['tokens'] for e in by_route['claude_split']), claude)
         # A cloud supplement read with the second login joins that account's part.
         from llm_usage.reconciliation import snapshot, total
+
         with self.store.connect() as c:
             self.store.save_state(c, 'claude_cloud_account:k-second', R_SECOND)
-            snapshot(self.store, c, source='claude-cloud', scope_id='claude:cloud-only', route='claude-code', provider='Anthropic',
-                     model='claude-test', session='cloud-only', start=NOW - 7200, end=NOW - 7100, tokens=500,
-                     parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=500), account_key='k-second')
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:cloud-only',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                session='cloud-only',
+                start=NOW - 7200,
+                end=NOW - 7100,
+                tokens=500,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=500),
+                account_key='k-second',
+            )
         supplemented = self.store.usage(period='7d', group='route', pricing=pricing)
         split = {e['account']: e['tokens'] for e in supplemented['claude_split']}
         self.assertEqual(split[R_SECOND], 2_000_500)
@@ -687,17 +970,37 @@ class AccountTests(unittest.TestCase):
 
     def test_weekly_report_splits_claude_code_by_account(self):
         from llm_usage import reports
+
         accounts(self.store, self.cfg, NOW)
         _, this_monday = reports.last_week(NOW)
         with self.store.connect() as c:
             # NOW minus a week always lies in the last finished week.
             for i, account in enumerate((FAMILY, R_SECOND, R_SECOND, UNKNOWN)):
-                self.store.event(c, f'w{i}', NOW - 7 * 86400, 'Anthropic', 'claude-code', 'claude-test',
-                                 dict(uncached_input=1_000_000), account=account)
-            self.store.event(c, 'this-week', this_monday.timestamp(), 'Anthropic', 'claude-code', 'claude-test', dict(output=10), account=R_SECOND)
+                self.store.event(
+                    c,
+                    f'w{i}',
+                    NOW - 7 * 86400,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(uncached_input=1_000_000),
+                    account=account,
+                )
+            self.store.event(
+                c,
+                'this-week',
+                this_monday.timestamp(),
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=10),
+                account=R_SECOND,
+            )
         report = reports.build(self.store, NOW)
-        self.assertEqual([(a['account'], a['tokens']) for a in report['accounts']],
-                         [(R_SECOND, 2_000_000), (FAMILY, 1_000_000), (UNKNOWN, 1_000_000)])
+        self.assertEqual(
+            [(a['account'], a['tokens']) for a in report['accounts']],
+            [(R_SECOND, 2_000_000), (FAMILY, 1_000_000), (UNKNOWN, 1_000_000)],
+        )
         # 계정 미확인 is one of the parts, so they add up to the service.
         service = next(r['tokens'] for r in report['routes'] if r['route'] == 'claude-code')
         self.assertEqual(sum(a['tokens'] for a in report['accounts']), service)
@@ -710,32 +1013,58 @@ class AccountTests(unittest.TestCase):
 
     def test_monthly_settlement_names_accounts_and_skips_ones_not_seen_yet(self):
         from llm_usage import monthly
+
         accounts(self.store, self.cfg, NOW)
         last = monthly.shift(monthly.month_start(NOW), -1)
         with self.store.connect() as c:
-            self.store.event(c, 'm1', last.timestamp() + 86400, 'Anthropic', 'claude-code', 'claude-test',
-                             dict(uncached_input=1_000_000), account=FAMILY)
-        settled = monthly.build(self.store, last, NOW, {'claude-test': dict(input=1, output=1)}, {'claude-code': 20, R_SECOND: 100}, {})
+            self.store.event(
+                c,
+                'm1',
+                last.timestamp() + 86400,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(uncached_input=1_000_000),
+                account=FAMILY,
+            )
+        settled = monthly.build(
+            self.store, last, NOW, {'claude-test': dict(input=1, output=1)}, {'claude-code': 20, R_SECOND: 100}, {}
+        )
         # The second account was first seen this month: last month has nothing to settle for it.
-        self.assertEqual([(s['route'], s.get('label'), s['value']) for s in settled['subscriptions']], [(FAMILY, 'Pro', 1.0)])
+        self.assertEqual(
+            [(s['route'], s.get('label'), s['value']) for s in settled['subscriptions']], [(FAMILY, 'Pro', 1.0)]
+        )
 
     def test_monthly_rebuild_settles_the_same_accounts_as_the_first_time(self):
         from llm_usage import monthly
+
         accounts(self.store, self.cfg, NOW)
         last = monthly.shift(monthly.month_start(NOW), -1)
         with self.store.connect() as c:
-            self.store.event(c, 'm1', last.timestamp() + 86400, 'Anthropic', 'claude-code', 'claude-test',
-                             dict(uncached_input=1_000_000), account=FAMILY)
+            self.store.event(
+                c,
+                'm1',
+                last.timestamp() + 86400,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(uncached_input=1_000_000),
+                account=FAMILY,
+            )
         # The original account's subscription was ended before last month began.
-        first = monthly.build(self.store, last, NOW, None, {'claude-code': 20}, {FAMILY: {'since': last.timestamp() - 1}})
+        first = monthly.build(
+            self.store, last, NOW, None, {'claude-code': 20}, {FAMILY: {'since': last.timestamp() - 1}}
+        )
         self.assertEqual(first['subscriptions'], [])
         # A rebuild has no end dates to go by; it settles what the first settlement did.
         self.assertEqual(monthly.build(self.store, last, NOW + 60, None, stored=first)['subscriptions'], [])
 
     def test_hook_installer_merges_with_existing_hooks_once(self):
         settings_file = self.h.default / 'settings.json'
-        existing = {'statusLine': {'type': 'command', 'command': 'echo x'},
-                    'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'paseo hooks claude Stop'}]}]}}
+        existing = {
+            'statusLine': {'type': 'command', 'command': 'echo x'},
+            'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'paseo hooks claude Stop'}]}]},
+        }
         settings_file.write_text(json.dumps(existing))
         script = self.h.inbox / 'claudehook.py'
         self.assertTrue(cli.install_account_hooks(settings_file, script, self.h.inbox))
@@ -753,10 +1082,20 @@ class AccountTests(unittest.TestCase):
 
     def test_hook_script_is_silent_and_never_fails(self):
         env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CONFIG_DIR'}
-        env['HOME'] = str(self.h.home); env['CLAUDE_CONFIG_DIR'] = str(self.h.managed)
-        for body in (b'{"hook_event_name":"UserPromptSubmit","session_id":"abc-1","prompt":"PRIVATE PROMPT"}', b'not json', b''):
-            result = subprocess.run([sys.executable, claudehook.__file__, '--directory', str(self.h.inbox)], input=body,
-                                    capture_output=True, env=env, timeout=20)
+        env['HOME'] = str(self.h.home)
+        env['CLAUDE_CONFIG_DIR'] = str(self.h.managed)
+        for body in (
+            b'{"hook_event_name":"UserPromptSubmit","session_id":"abc-1","prompt":"PRIVATE PROMPT"}',
+            b'not json',
+            b'',
+        ):
+            result = subprocess.run(
+                [sys.executable, claudehook.__file__, '--directory', str(self.h.inbox)],
+                input=body,
+                capture_output=True,
+                env=env,
+                timeout=20,
+            )
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
         with closing(sqlite3.connect(self.h.inbox / 'claude-accounts.db')) as c:
             rows = c.execute('SELECT session,event,account,home FROM markers').fetchall()
@@ -771,7 +1110,8 @@ class AccountTests(unittest.TestCase):
         with self.store.connect() as c:
             rows = describe(c, {R_SECOND: 'Max'}, ended={R_SECOND})
         self.assertEqual([r['route'] for r in rows], [FAMILY, R_SECOND])
-        self.assertTrue(rows[1]['ended']); self.assertEqual(rows[1]['custom_name'], 'Max')
+        self.assertTrue(rows[1]['ended'])
+        self.assertEqual(rows[1]['custom_name'], 'Max')
         self.assertNotIn('account_key', json.dumps(rows))
         self.assertEqual(rows[1]['homes'], [{'kind': 'zerosub', 'name': 'claude-0123abcd'}])
 

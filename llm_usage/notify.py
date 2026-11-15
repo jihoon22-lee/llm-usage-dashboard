@@ -5,6 +5,7 @@ Discord/Slack-compatible webhook URL, or a Telegram bot token and chat). Their
 values are secrets: they are never written to the statistics DB, logs or API
 responses. Only transitions are sent (a quota becoming low, not every poll).
 """
+
 import http.client
 import ipaddress
 import json
@@ -17,117 +18,183 @@ from urllib.parse import urlsplit
 
 from .store import KST
 
-CHANNEL_KEYS=('ntfy_url','webhook_url','telegram_token','telegram_chat')
-EVENTS={'low':'잔여 적음','exhausted':'소진','recovered':'초기화 후 회복','spike':'사용량 급증',
-        'collector':'수집기 재시작','source':'수집 실패 지속','budget':'프로젝트 예산','report':'주간 리포트',
-        'unused':'초기화 전 남은 한도'}
+CHANNEL_KEYS = ('ntfy_url', 'webhook_url', 'telegram_token', 'telegram_chat')
+EVENTS = {
+    'low': '잔여 적음',
+    'exhausted': '소진',
+    'recovered': '초기화 후 회복',
+    'spike': '사용량 급증',
+    'collector': '수집기 재시작',
+    'source': '수집 실패 지속',
+    'budget': '프로젝트 예산',
+    'report': '주간 리포트',
+    'unused': '초기화 전 남은 한도',
+}
 # Events that stay off until turned on in the settings.
-OFF_BY_DEFAULT={'unused'}
-SOURCE_ERROR_MINUTES=30
-COLLECTOR_GAP_MINUTES=10
-STATE_KEY='notify:state'
-SOURCE='외부 알림'
+OFF_BY_DEFAULT = {'unused'}
+SOURCE_ERROR_MINUTES = 30
+COLLECTOR_GAP_MINUTES = 10
+STATE_KEY = 'notify:state'
+SOURCE = '외부 알림'
 
 
-def wanted(notify,kind):
+def wanted(notify, kind):
     """Whether the settings send this kind of message."""
-    return ((notify or {}).get('events') or {}).get(kind,kind not in OFF_BY_DEFAULT)
+    return ((notify or {}).get('events') or {}).get(kind, kind not in OFF_BY_DEFAULT)
 
 
 def notification_url(value):
     """Parse a secret HTTPS endpoint without ever echoing it in a validation error."""
     try:
-        if not isinstance(value,str) or not value or any(ch.isspace() or ord(ch)<32 or ord(ch)==127 for ch in value) or '\\' in value:
+        if (
+            not isinstance(value, str)
+            or not value
+            or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
+            or '\\' in value
+        ):
             raise ValueError
-        parts=urlsplit(value)
-        if parts.scheme!='https' or not parts.netloc or any(ch in parts.netloc for ch in '@%'):
+        parts = urlsplit(value)
+        if parts.scheme != 'https' or not parts.netloc or any(ch in parts.netloc for ch in '@%'):
             raise ValueError
-        host=parts.hostname
-        if not host or parts.netloc.endswith(':') or (parts.port is not None and not 1<=parts.port<=65535):raise ValueError
+        host = parts.hostname
+        if not host or parts.netloc.endswith(':') or (parts.port is not None and not 1 <= parts.port <= 65535):
+            raise ValueError
         if ':' in host:
             # Older urlsplit accepts trailing text after a closing IPv6 bracket.
             # Validate the entire authority before exposing it as a masked hint.
-            if not re.fullmatch(r'\[[0-9A-Fa-f:.]+\](?::[0-9]+)?',parts.netloc):raise ValueError
+            if not re.fullmatch(r'\[[0-9A-Fa-f:.]+\](?::[0-9]+)?', parts.netloc):
+                raise ValueError
             ipaddress.IPv6Address(host)
         else:
-            if not re.fullmatch(r'[^:\[\]]+(?::[0-9]+)?',parts.netloc):raise ValueError
-            ascii_host=host.encode('idna').decode('ascii').removesuffix('.')
-            if len(ascii_host)>253 or not all(re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?',label) for label in ascii_host.split('.')):
+            if not re.fullmatch(r'[^:\[\]]+(?::[0-9]+)?', parts.netloc):
+                raise ValueError
+            ascii_host = host.encode('idna').decode('ascii').removesuffix('.')
+            if len(ascii_host) > 253 or not all(
+                re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?', label) for label in ascii_host.split('.')
+            ):
                 raise ValueError
         return parts
-    except (ValueError,UnicodeError):
+    except (ValueError, UnicodeError):
         raise ValueError('알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.') from None
 
 
 def configured(notify):
-    notify=notify or {}
-    return [name for name,keys in (('ntfy',('ntfy_url',)),('webhook',('webhook_url',)),('telegram',('telegram_token','telegram_chat')))
-            if all(notify.get(k) for k in keys)]
+    notify = notify or {}
+    return [
+        name
+        for name, keys in (
+            ('ntfy', ('ntfy_url',)),
+            ('webhook', ('webhook_url',)),
+            ('telegram', ('telegram_token', 'telegram_chat')),
+        )
+        if all(notify.get(k) for k in keys)
+    ]
 
 
 def masked(notify):
     """What the settings page may show: which channels are set, never their values."""
-    notify=notify or {}
+    notify = notify or {}
+
     def hint(url):
-        try:return notification_url(url).netloc
-        except ValueError:return '설정됨'
-    return dict(channels={'ntfy':hint(notify['ntfy_url']) if notify.get('ntfy_url') else None,
-                          'webhook':hint(notify['webhook_url']) if notify.get('webhook_url') else None,
-                          'telegram':'설정됨' if notify.get('telegram_token') and notify.get('telegram_chat') else None},
-                events={k:wanted(notify,k) for k in EVENTS},
-                quiet=notify.get('quiet'))
+        try:
+            return notification_url(url).netloc
+        except ValueError:
+            return '설정됨'
+
+    return dict(
+        channels={
+            'ntfy': hint(notify['ntfy_url']) if notify.get('ntfy_url') else None,
+            'webhook': hint(notify['webhook_url']) if notify.get('webhook_url') else None,
+            'telegram': '설정됨' if notify.get('telegram_token') and notify.get('telegram_chat') else None,
+        },
+        events={k: wanted(notify, k) for k in EVENTS},
+        quiet=notify.get('quiet'),
+    )
 
 
-def _open(request,timeout):
+def _open(request, timeout):
     """Like every other outbound call, a redirect is not followed: it would repeat the request
     as a GET without the message, and the answer would read as a delivery."""
     from .limits import NoRedirect
-    return urllib.request.build_opener(NoRedirect).open(request,timeout=timeout)
+
+    return urllib.request.build_opener(NoRedirect).open(request, timeout=timeout)
 
 
-def _post(url,payload,timeout):
-    data=json.dumps(payload,ensure_ascii=False).encode()
-    request=urllib.request.Request(url,data=data,headers={'Content-Type':'application/json'})
-    with _open(request,timeout=timeout) as response:response.read(256)
+def _post(url, payload, timeout):
+    data = json.dumps(payload, ensure_ascii=False).encode()
+    request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    with _open(request, timeout=timeout) as response:
+        response.read(256)
 
 
-def send(notify,title,body,timeout=10):
+def send(notify, title, body, timeout=10):
     """Send to every configured channel. Returns {channel: error text} for failures;
     error text names only the status or exception type, never a URL or token."""
-    errors={}
+    errors = {}
     for channel in configured(notify):
         try:
-            if channel=='ntfy':
-                parts=notification_url(notify['ntfy_url']);topic=parts.path.strip('/')
-                if not topic or '/' in topic:raise ValueError('topic')
-                _post(f'{parts.scheme}://{parts.netloc}',dict(topic=topic,title=title,message=body,tags=['bar_chart']),timeout)
-            elif channel=='webhook':
+            if channel == 'ntfy':
+                parts = notification_url(notify['ntfy_url'])
+                topic = parts.path.strip('/')
+                if not topic or '/' in topic:
+                    raise ValueError('topic')
+                _post(
+                    f'{parts.scheme}://{parts.netloc}',
+                    dict(topic=topic, title=title, message=body, tags=['bar_chart']),
+                    timeout,
+                )
+            elif channel == 'webhook':
                 notification_url(notify['webhook_url'])
-                text=f'**{title}**\n{body}'
-                _post(notify['webhook_url'],dict(content=text,text=text),timeout)
+                text = f'**{title}**\n{body}'
+                _post(notify['webhook_url'], dict(content=text, text=text), timeout)
             else:
-                _post(f"https://api.telegram.org/bot{notify['telegram_token']}/sendMessage",
-                      dict(chat_id=notify['telegram_chat'],text=f'{title}\n{body}'),timeout)
-        except urllib.error.HTTPError as exc:errors[channel]=f'HTTP {exc.code}';exc.close()
+                _post(
+                    f"https://api.telegram.org/bot{notify['telegram_token']}/sendMessage",
+                    dict(chat_id=notify['telegram_chat'], text=f'{title}\n{body}'),
+                    timeout,
+                )
+        except urllib.error.HTTPError as exc:
+            errors[channel] = f'HTTP {exc.code}'
+            exc.close()
         # http.client errors (a malformed URL, a broken status line) carry the request line,
         # which holds the Telegram token: only the type is kept.
-        except (OSError,ValueError,http.client.HTTPException) as exc:errors[channel]=type(exc).__name__
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            errors[channel] = type(exc).__name__
     return errors
 
 
-def quiet_now(notify,now):
-    quiet=(notify or {}).get('quiet')
-    if not quiet or len(quiet)!=2:return False
-    start,end=quiet;hour=datetime.fromtimestamp(now,KST).hour
-    return start<=hour<end if start<end else hour>=start or hour<end
+def quiet_now(notify, now):
+    quiet = (notify or {}).get('quiet')
+    if not quiet or len(quiet) != 2:
+        return False
+    start, end = quiet
+    hour = datetime.fromtimestamp(now, KST).hour
+    return start <= hour < end if start < end else hour >= start or hour < end
 
 
-SERVICE={'codex':'Codex','claude-code':'Claude','antigravity':'Antigravity','opencode-go':'OpenCode Go','devin':'Devin'}
-WINDOWS={'five_hour':'5시간','seven_day':'주간','seven_day_opus':'Opus 주간','seven_day_sonnet':'Sonnet 주간',
-         'seven_day_oauth_apps':'앱 주간','seven_day_cowork':'Cowork 주간','seven_day_omelette':'추가 주간 한도',
-         'seven_day_overage_included':'추가 포함량 주간','rolling':'5시간','daily':'일간','weekly':'주간','monthly':'월간'}
+SERVICE = {
+    'codex': 'Codex',
+    'claude-code': 'Claude',
+    'antigravity': 'Antigravity',
+    'opencode-go': 'OpenCode Go',
+    'devin': 'Devin',
+}
+WINDOWS = {
+    'five_hour': '5시간',
+    'seven_day': '주간',
+    'seven_day_opus': 'Opus 주간',
+    'seven_day_sonnet': 'Sonnet 주간',
+    'seven_day_oauth_apps': '앱 주간',
+    'seven_day_cowork': 'Cowork 주간',
+    'seven_day_omelette': '추가 주간 한도',
+    'seven_day_overage_included': '추가 포함량 주간',
+    'rolling': '5시간',
+    'daily': '일간',
+    'weekly': '주간',
+    'monthly': '월간',
+}
 # '<family>[-<pool>]-<window>[-n]', e.g. 'gemini-5h', '3p-weekly-2', 'gemini-argon-wtu-weekly'.
-AGY_BUCKET=re.compile(r'(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?')
+AGY_BUCKET = re.compile(r'(gemini|3p)(?:-([a-z0-9-]+?))?-(5h|weekly)(?:-(\d+))?')
 
 
 def _window(row):
@@ -137,46 +204,65 @@ def _window(row):
 def _label(row):
     """The same names the dashboard shows (bucketName/quotaLabel in web/format.js)."""
     from .claude_accounts import family
-    bucket=row['bucket'];service=SERVICE.get(family(row['route']),row['route'])
+
+    bucket = row['bucket']
+    service = SERVICE.get(family(row['route']), row['route'])
     # Several Claude accounts: 'Claude(Max 5x) 5시간'.
-    if row.get('account_label'):service+=f"({row['account_label']})"
-    agy=AGY_BUCKET.fullmatch(bucket) if row['route']=='antigravity' else None
+    if row.get('account_label'):
+        service += f"({row['account_label']})"
+    agy = AGY_BUCKET.fullmatch(bucket) if row['route'] == 'antigravity' else None
     if agy:
-        return f"{service} {'5시간' if agy[3]=='5h' else '주간'} {'3rd party' if agy[1]=='3p' else 'Gemini'}"+''.join(f' {part}' for part in (agy[2],agy[4]) if part)
-    name=_window(row)
+        return (
+            f"{service} {'5시간' if agy[3] == '5h' else '주간'} {'3rd party' if agy[1] == '3p' else 'Gemini'}"
+            + ''.join(f' {part}' for part in (agy[2], agy[4]) if part)
+        )
+    name = _window(row)
     return name if name.startswith(service) else f'{service} {name}'
 
 
 def model_quota(row):
     """A model's own window inside its service's shared one (modelQuota in web/format.js)."""
-    from .claude_accounts import FAMILY,family
-    return ((row.get('scope') or {}).get('role') in ('model','unknown')
-            or (row['route']=='codex' and ' · ' in row['bucket'] and row['bucket'].split(' · ')[0]!='codex')
-            or (family(row['route'])==FAMILY and row['bucket'].startswith('seven_day_')))
+    from .claude_accounts import FAMILY, family
+
+    return (
+        (row.get('scope') or {}).get('role') in ('model', 'unknown')
+        or (row['route'] == 'codex' and ' · ' in row['bucket'] and row['bucket'].split(' · ')[0] != 'codex')
+        or (family(row['route']) == FAMILY and row['bucket'].startswith('seven_day_'))
+    )
 
 
-def same_window(a,b,bucket):
+def same_window(a, b, bucket):
     """Two reported resets of one window. Readings move it by seconds and two sources can
     differ by hours, while the next window resets at least a whole window later."""
     from .insights import window_seconds
-    return a is not None and b is not None and abs(a-b)<=(window_seconds(bucket) or 0)/2
+
+    return a is not None and b is not None and abs(a - b) <= (window_seconds(bucket) or 0) / 2
 
 
-def other_accounts(rows,row):
+def other_accounts(rows, row):
     """When one Claude account's window is exhausted, the other accounts' current value in
     the same window ('Claude(Max 5x) 5시간 92.0%'), as on the dashboard. No recommendation."""
-    from .claude_accounts import FAMILY,UNKNOWN,family
-    if family(row['route'])!=FAMILY:return []
-    return [f"{_label(r)} {'사용 불가' if r.get('blocked_by') else format(r['remaining'],'.1f')+'%'}" for r in rows
-            if r['route'] not in (row['route'],UNKNOWN) and family(r['route'])==FAMILY and r['bucket']==row['bucket']
-            and r.get('status')=='fresh' and r.get('remaining') is not None and not (r.get('scope') or {}).get('identity_unverified')]
+    from .claude_accounts import FAMILY, UNKNOWN, family
+
+    if family(row['route']) != FAMILY:
+        return []
+    return [
+        f"{_label(r)} {'사용 불가' if r.get('blocked_by') else format(r['remaining'], '.1f') + '%'}"
+        for r in rows
+        if r['route'] not in (row['route'], UNKNOWN)
+        and family(r['route']) == FAMILY
+        and r['bucket'] == row['bucket']
+        and r.get('status') == 'fresh'
+        and r.get('remaining') is not None
+        and not (r.get('scope') or {}).get('identity_unverified')
+    ]
 
 
 def _until(seconds):
-    return f'{round(seconds/60)}분' if seconds<3600 else f'{round(seconds/3600)}시간'
+    return f'{round(seconds / 60)}분' if seconds < 3600 else f'{round(seconds / 3600)}시간'
 
 
-def quota_messages(rows,previous,low_percent,unused=None,now=None):
+def quota_messages(rows, previous, low_percent, unused=None, now=None):
     """(messages, new state) from quota rows; the first sight of a bucket only records it.
 
     unused: (percent, hours). A shared window longer than a day with at least `percent` left
@@ -185,37 +271,87 @@ def quota_messages(rows,previous,low_percent,unused=None,now=None):
     and never told on its own. An idle window whose reset keeps moving away never gets that
     close to it. The notice carries its reset, after which a held one is dropped."""
     from .insights import window_seconds
-    state={};messages=[];now=now or time.time()
+
+    state = {}
+    messages = []
+    now = now or time.time()
     for row in rows:
-        if row.get('status')!='fresh' or row.get('remaining') is None or row.get('blocked_by') or (row.get('scope') or {}).get('identity_unverified'):continue
-        key=f"{row['route']}:{row['bucket']}"+(f":{row['account_epoch']}" if row.get('account_epoch') else '');remaining=row['remaining']
-        now_state=dict(zero=remaining<=0,low=remaining<=low_percent,resets=row.get('resets'))
-        state[key]=now_state;before=previous.get(key)
-        if before is None:continue
-        label=_label(row)
-        resets=row.get('resets');told=before.get('unused')
-        if told is not None:now_state['unused']=told
-        if (unused and resets and not model_quota(row) and not same_window(told,resets,row['bucket'])
-                and (window_seconds(row['bucket']) or 0)>86400 and remaining>=unused[0] and 0<resets-now<=unused[1]*3600):
-            now_state['unused']=resets
+        if (
+            row.get('status') != 'fresh'
+            or row.get('remaining') is None
+            or row.get('blocked_by')
+            or (row.get('scope') or {}).get('identity_unverified')
+        ):
+            continue
+        key = f"{row['route']}:{row['bucket']}" + (f":{row['account_epoch']}" if row.get('account_epoch') else '')
+        remaining = row['remaining']
+        now_state = dict(zero=remaining <= 0, low=remaining <= low_percent, resets=row.get('resets'))
+        state[key] = now_state
+        before = previous.get(key)
+        if before is None:
+            continue
+        label = _label(row)
+        resets = row.get('resets')
+        told = before.get('unused')
+        if told is not None:
+            now_state['unused'] = told
+        if (
+            unused
+            and resets
+            and not model_quota(row)
+            and not same_window(told, resets, row['bucket'])
+            and (window_seconds(row['bucket']) or 0) > 86400
+            and remaining >= unused[0]
+            and 0 < resets - now <= unused[1] * 3600
+        ):
+            now_state['unused'] = resets
             # Model windows as long as this one that reset with it (not a 5-hour one near it).
-            models=[f"{_window(r)} {r['remaining']:.0f}%" for r in rows
-                    if r['route']==row['route'] and model_quota(r) and window_seconds(r['bucket'])==window_seconds(row['bucket'])
-                    and r.get('status')=='fresh' and r.get('remaining') is not None
-                    and not (r.get('scope') or {}).get('identity_unverified') and same_window(r.get('resets'),resets,r['bucket'])]
-            messages.append(('unused',f'{label} {remaining:.0f}% 남음 · {_until(resets-now)} 후 초기화',
-                             f"초기화 {_when(resets)}"+(f" · 모델별 추가 한도 {', '.join(models)}" if models else '')
-                             +f" · 남은 한도 알림 기준 {unused[0]:g}% 이상 · {unused[1]:g}시간 이내",resets))
+            models = [
+                f"{_window(r)} {r['remaining']:.0f}%"
+                for r in rows
+                if r['route'] == row['route']
+                and model_quota(r)
+                and window_seconds(r['bucket']) == window_seconds(row['bucket'])
+                and r.get('status') == 'fresh'
+                and r.get('remaining') is not None
+                and not (r.get('scope') or {}).get('identity_unverified')
+                and same_window(r.get('resets'), resets, r['bucket'])
+            ]
+            messages.append(
+                (
+                    'unused',
+                    f'{label} {remaining:.0f}% 남음 · {_until(resets - now)} 후 초기화',
+                    f"초기화 {_when(resets)}"
+                    + (f" · 모델별 추가 한도 {', '.join(models)}" if models else '')
+                    + f" · 남은 한도 알림 기준 {unused[0]:g}% 이상 · {unused[1]:g}시간 이내",
+                    resets,
+                )
+            )
         if now_state['zero'] and not before['zero']:
-            others=other_accounts(rows,row)
-            messages.append(('exhausted',f'{label} 소진',f"잔여 0% · 초기화 {_when(row.get('resets'))}"+(' · 다른 계정 '+', '.join(others) if others else '')))
+            others = other_accounts(rows, row)
+            messages.append(
+                (
+                    'exhausted',
+                    f'{label} 소진',
+                    f"잔여 0% · 초기화 {_when(row.get('resets'))}"
+                    + (' · 다른 계정 ' + ', '.join(others) if others else ''),
+                )
+            )
         elif now_state['low'] and not before['low']:
-            messages.append(('low',f'{label} 잔여 {remaining:.1f}%',f"잔여 적음 기준 {low_percent}% 이하 · 초기화 {_when(row.get('resets'))}"))
+            messages.append(
+                (
+                    'low',
+                    f'{label} 잔여 {remaining:.1f}%',
+                    f"잔여 적음 기준 {low_percent}% 이하 · 초기화 {_when(row.get('resets'))}",
+                )
+            )
         # The same reset can differ by a second between readings; only a new one is a recovery.
-        elif before['low'] and not now_state['low'] and abs((before.get('resets') or 0)-(now_state['resets'] or 0))>2:
-            messages.append(('recovered',f'{label} 회복',f'초기화 후 잔여 {remaining:.1f}%'))
+        elif (
+            before['low'] and not now_state['low'] and abs((before.get('resets') or 0) - (now_state['resets'] or 0)) > 2
+        ):
+            messages.append(('recovered', f'{label} 회복', f'초기화 후 잔여 {remaining:.1f}%'))
     # Buckets that are not current right now keep their last state.
-    return messages,{**previous,**state}
+    return messages, {**previous, **state}
 
 
 def brief_line(limits):
@@ -223,97 +359,132 @@ def brief_line(limits):
 
     Only current (fresh) observations of the shared windows are listed; a window whose
     longer window is exhausted reads 사용 불가. Nothing current says so instead of 0%."""
-    parts=[]
+    parts = []
     for row in limits.get('limits') or []:
-        if row.get('status')!='fresh' or row.get('remaining') is None:continue
-        if row['route']=='codex' and ' · ' in row['bucket'] and not row['bucket'].startswith('codex ·'):continue
-        value='사용 불가' if row.get('blocked_by') else f"{row['remaining']:.0f}%"
+        if row.get('status') != 'fresh' or row.get('remaining') is None:
+            continue
+        if row['route'] == 'codex' and ' · ' in row['bucket'] and not row['bucket'].startswith('codex ·'):
+            continue
+        value = '사용 불가' if row.get('blocked_by') else f"{row['remaining']:.0f}%"
         parts.append(f'{_label(row)} {value}')
     return ' · '.join(parts) if parts else '한도 최신값 없음'
 
 
 def _when(ts):
-    return datetime.fromtimestamp(ts,KST).strftime('%m-%d %H:%M KST') if ts else '미제공'
+    return datetime.fromtimestamp(ts, KST).strftime('%m-%d %H:%M KST') if ts else '미제공'
 
 
-def budget_level(usage,budget):
+def budget_level(usage, budget):
     """(level 0/80/100, ratio) of month-to-date usage against a token and/or USD budget."""
-    ratios=[]
-    if budget.get('tokens'):ratios.append(usage.get('tokens',0)/budget['tokens'])
-    if budget.get('usd') and usage.get('cost') is not None:ratios.append(usage['cost']/budget['usd'])
-    ratio=max(ratios,default=0)
-    return (100 if ratio>=1 else 80 if ratio>=.8 else 0),ratio
+    ratios = []
+    if budget.get('tokens'):
+        ratios.append(usage.get('tokens', 0) / budget['tokens'])
+    if budget.get('usd') and usage.get('cost') is not None:
+        ratios.append(usage['cost'] / budget['usd'])
+    ratio = max(ratios, default=0)
+    return (100 if ratio >= 1 else 80 if ratio >= 0.8 else 0), ratio
 
 
-def budget_messages(month,budgets,previous):
+def budget_messages(month, budgets, previous):
     """Crossing 80% or 100% of a project's monthly budget, once per level per month."""
-    state=previous if previous.get('month')==month['month'] else dict(month=month['month'],levels={})
-    messages=[]
-    for project,budget in (budgets or {}).items():
-        level,ratio=budget_level(month['projects'].get(project,{}),budget)
-        if level>state['levels'].get(project,0):
-            messages.append(('budget',f'{project} 월 예산 {"초과" if level==100 else "80% 도달"}',f"{month['month']} 사용 {ratio*100:.0f}%"))
-        state['levels'][project]=max(level,state['levels'].get(project,0))
-    return messages,state
+    state = previous if previous.get('month') == month['month'] else dict(month=month['month'], levels={})
+    messages = []
+    for project, budget in (budgets or {}).items():
+        level, ratio = budget_level(month['projects'].get(project, {}), budget)
+        if level > state['levels'].get(project, 0):
+            messages.append(
+                (
+                    'budget',
+                    f'{project} 월 예산 {"초과" if level == 100 else "80% 도달"}',
+                    f"{month['month']} 사용 {ratio * 100:.0f}%",
+                )
+            )
+        state['levels'][project] = max(level, state['levels'].get(project, 0))
+    return messages, state
 
 
-def evaluate(store,notify,now=None,limits=None,spike=None,sources=None,month=None,budgets=None):
+def evaluate(store, notify, now=None, limits=None, spike=None, sources=None, month=None, budgets=None):
     """Compare with the last evaluation, send what changed, and remember it."""
-    now=now or time.time()
-    with store.connect() as c:previous=store.state(c,STATE_KEY,{}) or {}
-    messages=[]
+    now = now or time.time()
+    with store.connect() as c:
+        previous = store.state(c, STATE_KEY, {}) or {}
+    messages = []
     if limits is not None:
         # Only while turned on, so a window already due when it is turned on is still told.
-        unused=((limits['unused_percent'],limits['unused_hours']) if wanted(notify,'unused') and limits.get('unused_percent') and limits.get('unused_hours')
-                else None)
-        quota,previous_quota=quota_messages(limits['limits'],previous.get('quota',{}),limits.get('low_percent',15),unused,now)
-        messages+=quota;previous['quota']=previous_quota
+        unused = (
+            (limits['unused_percent'], limits['unused_hours'])
+            if wanted(notify, 'unused') and limits.get('unused_percent') and limits.get('unused_hours')
+            else None
+        )
+        quota, previous_quota = quota_messages(
+            limits['limits'], previous.get('quota', {}), limits.get('low_percent', 15), unused, now
+        )
+        messages += quota
+        previous['quota'] = previous_quota
     if month is not None:
-        budget,previous['budget']=budget_messages(month,budgets,previous.get('budget') or {})
-        messages+=budget
-    if spike and spike.get('hour_start')!=previous.get('spike_hour'):
-        previous['spike_hour']=spike['hour_start']
-        messages.append(('spike','사용량 급증',f"{_when(spike['hour_start'])}부터 1시간 {spike['tokens']/1e6:.1f}M 토큰 · 평소 상위 5% 기준의 {spike['ratio']:.1f}배"))
+        budget, previous['budget'] = budget_messages(month, budgets, previous.get('budget') or {})
+        messages += budget
+    if spike and spike.get('hour_start') != previous.get('spike_hour'):
+        previous['spike_hour'] = spike['hour_start']
+        messages.append(
+            (
+                'spike',
+                '사용량 급증',
+                f"{_when(spike['hour_start'])}부터 1시간 {spike['tokens'] / 1e6:.1f}M 토큰 · 평소 상위 5% 기준의 {spike['ratio']:.1f}배",
+            )
+        )
     if sources is not None:
         from .claude_accounts import source_label
-        failing=previous.get('failing',{})
+
+        failing = previous.get('failing', {})
         # Per-account sources read with the account's name, as on the dashboard.
-        labels={r['route']:r['account_label'] for r in (limits or {}).get('limits') or [] if r.get('account_label')}
+        labels = {r['route']: r['account_label'] for r in (limits or {}).get('limits') or [] if r.get('account_label')}
         for source in sources:
-            name=source['name']
-            if name==SOURCE:continue  # its own failures are already the source status
-            if source.get('status')!='error':failing.pop(name,None);continue
-            since=failing.setdefault(name,dict(since=now,sent=False))
-            if not since['sent'] and now-since['since']>=SOURCE_ERROR_MINUTES*60:
-                since['sent']=True
-                messages.append(('source',f'{source_label(name,labels)} 수집 실패 지속',f"{SOURCE_ERROR_MINUTES}분 넘게 실패 · {source.get('detail') or ''}".strip(' ·')))
-        previous['failing']=failing
-    with store.connect() as c:store.save_state(c,STATE_KEY,previous)
-    return deliver(store,notify,messages,now)
+            name = source['name']
+            if name == SOURCE:
+                continue  # its own failures are already the source status
+            if source.get('status') != 'error':
+                failing.pop(name, None)
+                continue
+            since = failing.setdefault(name, dict(since=now, sent=False))
+            if not since['sent'] and now - since['since'] >= SOURCE_ERROR_MINUTES * 60:
+                since['sent'] = True
+                messages.append(
+                    (
+                        'source',
+                        f'{source_label(name, labels)} 수집 실패 지속',
+                        f"{SOURCE_ERROR_MINUTES}분 넘게 실패 · {source.get('detail') or ''}".strip(' ·'),
+                    )
+                )
+        previous['failing'] = failing
+    with store.connect() as c:
+        store.save_state(c, STATE_KEY, previous)
+    return deliver(store, notify, messages, now)
 
 
-OUTBOX_KEY='notify:outbox'
-LOG_KEY='notify:log'
-LOG_KEEP=50
+OUTBOX_KEY = 'notify:outbox'
+LOG_KEY = 'notify:log'
+LOG_KEEP = 50
 # Held or failed messages are retried until they expire; a weekly report stays useful longer.
-OUTBOX_TTL={'report':7*86400}
-DEFAULT_TTL=24*3600
-MAX_ATTEMPTS=6
+OUTBOX_TTL = {'report': 7 * 86400}
+DEFAULT_TTL = 24 * 3600
+MAX_ATTEMPTS = 6
 # More held messages than this are sent as one digest when quiet hours end.
-DIGEST_OVER=3
+DIGEST_OVER = 3
 
 
-def _log(c,store,entries):
-    log=(store.state(c,LOG_KEY,[]) or [])+entries
-    store.save_state(c,LOG_KEY,log[-LOG_KEEP:])
+def _log(c, store, entries):
+    log = (store.state(c, LOG_KEY, []) or []) + entries
+    store.save_state(c, LOG_KEY, log[-LOG_KEEP:])
 
 
 def recent_log(store):
     """Newest first: what was sent, held for quiet hours, retried or dropped."""
-    with store.connect() as c:return list(reversed(store.state(c,LOG_KEY,[]) or []))
+    with store.connect() as c:
+        return list(reversed(store.state(c, LOG_KEY, []) or []))
 
 
-def deliver(store,notify,messages,now):
+def deliver(store, notify, messages, now):
     """Send what the settings enable; hold it during quiet hours or after a failed send.
 
     Held messages wait in an outbox (persisted state) and go out on the first evaluation
@@ -321,63 +492,119 @@ def deliver(store,notify,messages,now):
     channel failed is retried each evaluation until it expires. The outcome is recorded
     as the '외부 알림' source and in a short history, without any channel secret."""
     # A message may carry when it stops being true (until); a held one is dropped then.
-    sending=[dict(kind=k,title=t,body=b,ts=now,attempts=0,**({'until':rest[0]} if rest else {})) for k,t,b,*rest in messages if wanted(notify,k)]
-    if not configured(notify):return []
+    sending = [
+        dict(kind=k, title=t, body=b, ts=now, attempts=0, **({'until': rest[0]} if rest else {}))
+        for k, t, b, *rest in messages
+        if wanted(notify, k)
+    ]
+    if not configured(notify):
+        return []
     with store.connect() as c:
-        outbox=[m for m in (store.state(c,OUTBOX_KEY,[]) or []) if wanted(notify,m['kind'])]
-        fresh=[m for m in outbox if now-m['ts']<=OUTBOX_TTL.get(m['kind'],DEFAULT_TTL) and m['attempts']<MAX_ATTEMPTS and now<m.get('until',now+1)]
-        expired=[m for m in outbox if m not in fresh]
-        log=[dict(ts=now,kind=m['kind'],title=m['title'],status='expired') for m in expired]
-        if quiet_now(notify,now):
-            log+=[dict(ts=now,kind=m['kind'],title=m['title'],status='held') for m in sending]
-            store.save_state(c,OUTBOX_KEY,fresh+sending);_log(c,store,log)
+        outbox = [m for m in (store.state(c, OUTBOX_KEY, []) or []) if wanted(notify, m['kind'])]
+        fresh = [
+            m
+            for m in outbox
+            if now - m['ts'] <= OUTBOX_TTL.get(m['kind'], DEFAULT_TTL)
+            and m['attempts'] < MAX_ATTEMPTS
+            and now < m.get('until', now + 1)
+        ]
+        expired = [m for m in outbox if m not in fresh]
+        log = [dict(ts=now, kind=m['kind'], title=m['title'], status='expired') for m in expired]
+        if quiet_now(notify, now):
+            log += [dict(ts=now, kind=m['kind'], title=m['title'], status='held') for m in sending]
+            store.save_state(c, OUTBOX_KEY, fresh + sending)
+            _log(c, store, log)
             return []
-        store.save_state(c,OUTBOX_KEY,[]);_log(c,store,log)
-    queue=fresh+sending
-    if not queue:return []
+        store.save_state(c, OUTBOX_KEY, [])
+        _log(c, store, log)
+    queue = fresh + sending
+    if not queue:
+        return []
     # A weekly report's body is its content, so it is sent whole instead of as a digest line.
-    held=[m for m in fresh if m['attempts']==0 and m['kind']!='report']
-    if len(held)>DIGEST_OVER:
-        digest=dict(kind='digest',title=f'방해 금지 동안 알림 {len(held)}건',
-                    body='\n'.join(f"{_when(m['ts'])} {m['title']}" for m in held),ts=now,attempts=0,parts=held)
-        queue=[digest]+[m for m in queue if m not in held]
-    failures={};sent=[];retry=[];log=[]
+    held = [m for m in fresh if m['attempts'] == 0 and m['kind'] != 'report']
+    if len(held) > DIGEST_OVER:
+        digest = dict(
+            kind='digest',
+            title=f'방해 금지 동안 알림 {len(held)}건',
+            body='\n'.join(f"{_when(m['ts'])} {m['title']}" for m in held),
+            ts=now,
+            attempts=0,
+            parts=held,
+        )
+        queue = [digest] + [m for m in queue if m not in held]
+    failures = {}
+    sent = []
+    retry = []
+    log = []
     for message in queue:
         # A held or retried message says when it happened: the situation may have changed since.
-        late='parts' not in message and message['ts']<now
-        errors=send(notify,message['title'],message['body']+(f" · {_when(message['ts'])} 발생" if late else ''))
+        late = 'parts' not in message and message['ts'] < now
+        errors = send(notify, message['title'], message['body'] + (f" · {_when(message['ts'])} 발생" if late else ''))
         failures.update(errors)
-        parts=message.get('parts') or [message]
-        if errors and len(errors)==len(configured(notify)):
-            for part in parts:retry.append({**part,'attempts':part['attempts']+1})
-            log.append(dict(ts=now,kind=message['kind'],title=message['title'],status='failed',
-                            error=' · '.join(f'{k} {v}' for k,v in sorted(errors.items()))))
+        parts = message.get('parts') or [message]
+        if errors and len(errors) == len(configured(notify)):
+            for part in parts:
+                retry.append({**part, 'attempts': part['attempts'] + 1})
+            log.append(
+                dict(
+                    ts=now,
+                    kind=message['kind'],
+                    title=message['title'],
+                    status='failed',
+                    error=' · '.join(f'{k} {v}' for k, v in sorted(errors.items())),
+                )
+            )
         else:
-            sent+=[(m['kind'],m['title'],m['body']) for m in parts]
-            log.append(dict(ts=now,kind=message['kind'],title=message['title'],
-                            status='resent' if message['attempts'] or message['ts']<now else 'sent',
-                            channels=[ch for ch in configured(notify) if ch not in errors]))
+            sent += [(m['kind'], m['title'], m['body']) for m in parts]
+            log.append(
+                dict(
+                    ts=now,
+                    kind=message['kind'],
+                    title=message['title'],
+                    status='resent' if message['attempts'] or message['ts'] < now else 'sent',
+                    channels=[ch for ch in configured(notify) if ch not in errors],
+                )
+            )
     with store.connect() as c:
         # Another evaluation may not run in between, but keep anything already queued.
-        store.save_state(c,OUTBOX_KEY,(store.state(c,OUTBOX_KEY,[]) or [])+retry)
-        _log(c,store,log)
-        store.source(c,SOURCE,'error' if failures else 'ok',
-                     ' · '.join(f'{k} {v}' for k,v in sorted(failures.items())) if failures else
-                     f'{len(sent)}건 전송'+(f' · 재시도 대기 {len(retry)}건' if retry else ''),now)
+        store.save_state(c, OUTBOX_KEY, (store.state(c, OUTBOX_KEY, []) or []) + retry)
+        _log(c, store, log)
+        store.source(
+            c,
+            SOURCE,
+            'error' if failures else 'ok',
+            ' · '.join(f'{k} {v}' for k, v in sorted(failures.items()))
+            if failures
+            else f'{len(sent)}건 전송' + (f' · 재시도 대기 {len(retry)}건' if retry else ''),
+            now,
+        )
     return sent
 
 
-def record_failure(store,exc,what='알림 판단'):
+def record_failure(store, exc, what='알림 판단'):
     """An exception in evaluation is shown, not swallowed; collection continues. `what`
     names the step that failed (the weekly report and the monthly settlement run beside it)."""
-    with store.connect() as c:store.source(c,SOURCE,'error',f'{what} 실패 ({type(exc).__name__})')
+    with store.connect() as c:
+        store.source(c, SOURCE, 'error', f'{what} 실패 ({type(exc).__name__})')
 
 
-def collector_started(store,notify,now=None):
+def collector_started(store, notify, now=None):
     """Called once at collector start, before the first heartbeat is written."""
-    now=now or time.time()
-    with store.connect() as c:last=(store.state(c,'collector',{}) or {}).get('checked')
-    if last and now-last>=COLLECTOR_GAP_MINUTES*60:
-        minutes=round((now-last)/60)
-        return deliver(store,notify,[('collector','수집기 재시작',f'약 {minutes}분 동안 수집이 멈춘 뒤 다시 시작했습니다. 그 사이 한도 관측은 비어 있습니다.')],now)
+    now = now or time.time()
+    with store.connect() as c:
+        last = (store.state(c, 'collector', {}) or {}).get('checked')
+    if last and now - last >= COLLECTOR_GAP_MINUTES * 60:
+        minutes = round((now - last) / 60)
+        return deliver(
+            store,
+            notify,
+            [
+                (
+                    'collector',
+                    '수집기 재시작',
+                    f'약 {minutes}분 동안 수집이 멈춘 뒤 다시 시작했습니다. 그 사이 한도 관측은 비어 있습니다.',
+                )
+            ],
+            now,
+        )
     return []

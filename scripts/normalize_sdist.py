@@ -4,6 +4,7 @@ Setuptools honors SOURCE_DATE_EPOCH for wheels but currently records wall-clock
 metadata in source archives. Contents are unchanged; tar/gzip timestamps and
 builder identities are normalized so a workflow retry can verify existing assets.
 """
+
 import gzip
 import io
 from pathlib import Path
@@ -27,11 +28,11 @@ def normalize(path, epoch):
     output = io.BytesIO()
     with gzip.GzipFile(filename='', mode='wb', fileobj=output, mtime=int(epoch), compresslevel=9) as compressed:
         with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as archive:
-            for member, content in sorted(entries,key=lambda entry:entry[0].name):
-                archive.addfile(member,io.BytesIO(content) if content is not None else None)
+            for member, content in sorted(entries, key=lambda entry: entry[0].name):
+                archive.addfile(member, io.BytesIO(content) if content is not None else None)
     path.write_bytes(output.getvalue())
 
 
 if __name__ == '__main__':
-    source, = Path(sys.argv[1]).glob('*.tar.gz')
-    normalize(source,int(sys.argv[2]))
+    (source,) = Path(sys.argv[1]).glob('*.tar.gz')
+    normalize(source, int(sys.argv[2]))

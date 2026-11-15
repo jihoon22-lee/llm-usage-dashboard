@@ -1,5 +1,6 @@
 """개요 (/api/overview): each figure equals the usage tab's for the same span, and the facts
 describe recorded use only (no forecast, expected pace or advice)."""
+
 import json
 from pathlib import Path
 import socket
@@ -14,8 +15,10 @@ from llm_usage.store import Store, stamp
 from llm_usage.webapp import create_app
 
 NOW = stamp('2026-11-05T03:00:00Z')  # Thursday 11-05 12:00 KST
-PRICING = {'gpt-test': dict(input=1, cached=0.1, output=10, cache_write=1),
-           'claude-x': dict(input=3, cached=0.3, output=15, cache_write=3)}
+PRICING = {
+    'gpt-test': dict(input=1, cached=0.1, output=10, cache_write=1),
+    'claude-x': dict(input=3, cached=0.3, output=15, cache_write=3),
+}
 SPAN = dict(group='route', pricing=PRICING, sections='core', now=NOW)
 
 
@@ -31,16 +34,43 @@ def keys(value):
 
 class OverviewTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.store = Store(Path(self.tmp.name)/'usage.db')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(Path(self.tmp.name) / 'usage.db')
         with self.store.connect() as c:
             for day in range(40):
-                ts = NOW-day*86400-3600
-                self.store.event(c, f'c{day}', ts, 'OpenAI', 'codex', 'gpt-test', dict(uncached_input=1000*(day+1), output=100), project='alpha')
-                self.store.event(c, f'a{day}', ts-1800, 'Anthropic', 'claude-code', 'claude-x', dict(cached_input=5000, output=50),
-                                 project='beta' if day % 2 else None)
+                ts = NOW - day * 86400 - 3600
+                self.store.event(
+                    c,
+                    f'c{day}',
+                    ts,
+                    'OpenAI',
+                    'codex',
+                    'gpt-test',
+                    dict(uncached_input=1000 * (day + 1), output=100),
+                    project='alpha',
+                )
+                self.store.event(
+                    c,
+                    f'a{day}',
+                    ts - 1800,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-x',
+                    dict(cached_input=5000, output=50),
+                    project='beta' if day % 2 else None,
+                )
             # One day far above the others (10-26).
-            self.store.event(c, 'peak', NOW-10*86400, 'OpenAI', 'codex', 'gpt-test', dict(uncached_input=2_000_000), project='alpha')
+            self.store.event(
+                c,
+                'peak',
+                NOW - 10 * 86400,
+                'OpenAI',
+                'codex',
+                'gpt-test',
+                dict(uncached_input=2_000_000),
+                project='alpha',
+            )
             # A Codex account day above this PC's records: its residual counts in totals, on no model or project.
             self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-30', tokens=9_000_000)], NOW)
 
@@ -61,7 +91,7 @@ class OverviewTests(unittest.TestCase):
         self.assertGreater(last30['reconciliation']['residual_tokens'], 0)
         # The bars and the part no single day holds make up the 30-day total.
         recent = data['recent']
-        self.assertEqual(sum(s['tokens'] for s in recent['services'])+recent['unallocated_tokens'], recent['tokens'])
+        self.assertEqual(sum(s['tokens'] for s in recent['services']) + recent['unallocated_tokens'], recent['tokens'])
         self.assertEqual((len(recent['days']), recent['days'][-1], recent['active_days']), (30, '2026-11-05', 30))
         # Hours and days not reached yet are absent, not zero: 13:00–23:00 KST and Friday to Sunday.
         self.assertEqual((len(data['today']['points']), data['today']['points'].count(None)), (24, 11))
@@ -72,17 +102,17 @@ class OverviewTests(unittest.TestCase):
         data = self.build()
         self.assertTrue(data['models'] and data['projects'])
         for row in data['models']:
-            scoped = self.store.usage(period='30d', scope='model:'+row['name'], **SPAN)
+            scoped = self.store.usage(period='30d', scope='model:' + row['name'], **SPAN)
             self.assertEqual(row['tokens'], token_total(scoped['totals']), row)
         for row in data['projects']:
-            scoped = self.store.usage(period='30d', scope='project:'+row['name'], **SPAN)
+            scoped = self.store.usage(period='30d', scope='project:' + row['name'], **SPAN)
             self.assertEqual(row['tokens'], token_total(scoped['totals']), row)
-        names = [r['name'] for r in data['models']+data['projects']]
+        names = [r['name'] for r in data['models'] + data['projects']]
         self.assertNotIn(RESIDUAL, names)
         # Records without a project are listed as the usage tab names them.
         self.assertIn('미분류', [r['name'] for r in data['projects']])
         self.assertEqual(data['models'][0]['route'], 'codex')
-        self.assertTrue(all(0 < r['share'] <= 100 for r in data['models']+data['projects']))
+        self.assertTrue(all(0 < r['share'] <= 100 for r in data['models'] + data['projects']))
 
     def test_ranks_carry_the_cost_the_usage_tab_shows(self):
         data = self.build()
@@ -90,9 +120,9 @@ class OverviewTests(unittest.TestCase):
         total = period['cost']['period']
         self.assertAlmostEqual(data['recent']['cost'], total)
         for row in data['models']:
-            scoped = self.store.usage(period='30d', scope='model:'+row['name'], **SPAN)
+            scoped = self.store.usage(period='30d', scope='model:' + row['name'], **SPAN)
             self.assertAlmostEqual(row['cost'], scoped['cost']['period'], msg=row)
-            self.assertAlmostEqual(row['cost_share'], row['cost']/total*100)
+            self.assertAlmostEqual(row['cost_share'], row['cost'] / total * 100)
         self.assertAlmostEqual(sum(r['cost'] for r in data['projects']), total)
         # The token-type split of the same period adds up to its estimate.
         self.assertAlmostEqual(sum(period['cost']['by_type'].values()), total, places=3)
@@ -100,10 +130,20 @@ class OverviewTests(unittest.TestCase):
 
     def test_unpriced_use_has_no_cost_instead_of_zero(self):
         with self.store.connect() as c:
-            self.store.event(c, 'new', NOW-7200, 'Other', 'codex', 'model-without-rate', dict(uncached_input=50_000_000), project='gamma')
+            self.store.event(
+                c,
+                'new',
+                NOW - 7200,
+                'Other',
+                'codex',
+                'model-without-rate',
+                dict(uncached_input=50_000_000),
+                project='gamma',
+            )
         data = self.build()
         row = next(r for r in data['models'] if r['name'] == 'model-without-rate')
-        self.assertIsNone(row['cost']); self.assertIsNone(row['cost_share'])
+        self.assertIsNone(row['cost'])
+        self.assertIsNone(row['cost_share'])
         project = next(r for r in data['projects'] if r['name'] == 'gamma')
         self.assertIsNone(project['cost'])
         self.assertIsNone(self.store.usage(period='30d', group='route', sections='core', now=NOW)['cost']['by_type'])
@@ -111,55 +151,88 @@ class OverviewTests(unittest.TestCase):
     def test_cost_fact_names_the_model_whose_cost_outweighs_its_tokens(self):
         # Output-heavy use: few tokens, most of the cost.
         with self.store.connect() as c:
-            self.store.event(c, 'dear', NOW-7200, 'Anthropic', 'claude-code', 'claude-x', dict(output=400_000), project='beta')
+            self.store.event(
+                c, 'dear', NOW - 7200, 'Anthropic', 'claude-code', 'claude-x', dict(output=400_000), project='beta'
+            )
         data = self.build()
         fact = next(f for f in data['facts'] if f['kind'] == 'cost_share')
         self.assertEqual(fact['model'], 'claude-x')
-        self.assertGreaterEqual(fact['cost_share']-fact['token_share'], overview.COST_SHARE_GAP)
+        self.assertGreaterEqual(fact['cost_share'] - fact['token_share'], overview.COST_SHARE_GAP)
         row = next(r for r in data['models'] if r['name'] == 'claude-x')
-        self.assertAlmostEqual(fact['cost_share'], row['cost_share']); self.assertAlmostEqual(fact['token_share'], row['share'])
+        self.assertAlmostEqual(fact['cost_share'], row['cost_share'])
+        self.assertAlmostEqual(fact['token_share'], row['share'])
         self.assertEqual(overview._cost_facts({'m': 10}, {}, 10, None), [])
         self.assertEqual(overview._cost_facts({'a': 50, 'b': 50}, {'a': 5.0, 'b': 5.0}, 100, 10.0), [])
 
     def test_facts_are_observations_without_forecasts(self):
         with self.store.connect() as c:
-            self.store.save_state(c, 'report:2026-10-26', dict(
-                week='2026-10-26', start='2026-10-26', end='2026-11-01', totals=dict(tokens=1000),
-                routes=[dict(route='codex', tokens=600, change_pct=150.0), dict(route='claude-code', tokens=400, change_pct=-5.0)],
-                exhausted=[dict(route='codex', bucket='codex · 10080분', count=2, display_name='주간')],
-                quota_use=[dict(route='codex', bucket='codex · 10080분', zero_hours=12.5, streak=3)]))
-            self.store.save_state(c, 'month:2026-10', dict(month='2026-10', partial=False, subscriptions=[
-                dict(route='codex', monthly_usd=200, value=900, ratio=4.5, tokens=10),
-                dict(route='claude-code', monthly_usd=100, value=40, ratio=0.4, tokens=5)]))
+            self.store.save_state(
+                c,
+                'report:2026-10-26',
+                dict(
+                    week='2026-10-26',
+                    start='2026-10-26',
+                    end='2026-11-01',
+                    totals=dict(tokens=1000),
+                    routes=[
+                        dict(route='codex', tokens=600, change_pct=150.0),
+                        dict(route='claude-code', tokens=400, change_pct=-5.0),
+                    ],
+                    exhausted=[dict(route='codex', bucket='codex · 10080분', count=2, display_name='주간')],
+                    quota_use=[dict(route='codex', bucket='codex · 10080분', zero_hours=12.5, streak=3)],
+                ),
+            )
+            self.store.save_state(
+                c,
+                'month:2026-10',
+                dict(
+                    month='2026-10',
+                    partial=False,
+                    subscriptions=[
+                        dict(route='codex', monthly_usd=200, value=900, ratio=4.5, tokens=10),
+                        dict(route='claude-code', monthly_usd=100, value=40, ratio=0.4, tokens=5),
+                    ],
+                ),
+            )
         data = self.build(subscriptions={'codex': 200, 'claude-code': 100, 'devin': 20})
         facts = {f['kind']: f for f in data['facts']}
         self.assertEqual([f['kind'] for f in data['facts']][:3], ['exhausted', 'zero_hours', 'service_change'])
-        self.assertEqual((facts['exhausted']['count'], facts['exhausted']['streak'], facts['exhausted']['display_name']), (2, 3, '주간'))
+        self.assertEqual(
+            (facts['exhausted']['count'], facts['exhausted']['streak'], facts['exhausted']['display_name']),
+            (2, 3, '주간'),
+        )
         self.assertEqual(facts['zero_hours']['hours'], 12.5)
         # A small service's change (claude-code −5%) is not named.
         self.assertEqual((facts['service_change']['route'], facts['service_change']['change_pct']), ('codex', 150.0))
-        self.assertEqual((facts['idle_subscription']['route'], facts['idle_subscription']['collected']), ('devin', True))
-        self.assertEqual((facts['value_below_price']['route'], facts['value_below_price']['ratio']), ('claude-code', 0.4))
+        self.assertEqual(
+            (facts['idle_subscription']['route'], facts['idle_subscription']['collected']), ('devin', True)
+        )
+        self.assertEqual(
+            (facts['value_below_price']['route'], facts['value_below_price']['ratio']), ('claude-code', 0.4)
+        )
         self.assertEqual(facts['peak_day']['day'], '2026-10-26')
         self.assertGreaterEqual(facts['peak_day']['ratio'], overview.PEAK_DAY_RATIO)
         self.assertLessEqual(len(data['facts']), overview.FACTS)
         month = data['month']
         self.assertEqual((month['month'], month['price'], month['value']), ('2026-10', 300, 940))
-        self.assertAlmostEqual(month['ratio'], 940/300)
+        self.assertAlmostEqual(month['ratio'], 940 / 300)
         forbidden = {'forecast', 'projection', 'projected', 'expected', 'pace', 'baseline', 'month_end'}
         self.assertFalse(forbidden & set(keys(data)), forbidden & set(keys(data)))
         json.dumps(data)
 
     def test_an_empty_store_has_nothing_to_say(self):
         with tempfile.TemporaryDirectory() as folder:
-            data = overview.build(Store(Path(folder)/'usage.db'), NOW, pricing=PRICING)
+            data = overview.build(Store(Path(folder) / 'usage.db'), NOW, pricing=PRICING)
         self.assertEqual((data['today']['tokens'], data['week']['tokens'], data['recent']['tokens']), (0, 0, 0))
-        self.assertEqual((data['recent']['services'], data['models'], data['projects'], data['month'], data['facts']), ([], [], [], None, []))
+        self.assertEqual(
+            (data['recent']['services'], data['models'], data['projects'], data['month'], data['facts']),
+            ([], [], [], None, []),
+        )
         self.assertEqual(data['recent']['active_days'], 0)
 
     def test_a_priced_service_without_a_record_source_is_not_called_unused(self):
         with self.store.connect() as c:
-            self.store.source(c, 'devin-records', 'unavailable', 'sessions.db 없음', NOW-60)
+            self.store.source(c, 'devin-records', 'unavailable', 'sessions.db 없음', NOW - 60)
         data = self.build(subscriptions={'devin': 20})
         idle = next(f for f in data['facts'] if f['kind'] == 'idle_subscription')
         self.assertEqual((idle['route'], idle['collected']), ('devin', False))
@@ -169,11 +242,23 @@ class OverviewWebTests(unittest.TestCase):
     def test_overview_api_answers_the_tab(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            app = create_app(dict(database=str(root/'usage.db'), origin='https://pc.example', secret_key='t', allowed_logins=['owner'],
-                                  config_file=str(root/'config.json'), subscription_prices={'codex': 20}))
+            app = create_app(
+                dict(
+                    database=str(root / 'usage.db'),
+                    origin='https://pc.example',
+                    secret_key='t',
+                    allowed_logins=['owner'],
+                    config_file=str(root / 'config.json'),
+                    subscription_prices={'codex': 20},
+                )
+            )
             env = {'REMOTE_ADDR': '', 'gunicorn.socket': SimpleNamespace(family=socket.AF_UNIX)}
-            response = app.test_client().get('/api/overview', base_url='https://pc.example', headers={'Tailscale-User-Login': 'owner'},
-                                             environ_overrides=env)
+            response = app.test_client().get(
+                '/api/overview',
+                base_url='https://pc.example',
+                headers={'Tailscale-User-Login': 'owner'},
+                environ_overrides=env,
+            )
             self.assertEqual(response.status_code, 200)
             data = response.get_json()
             self.assertLessEqual({'today', 'week', 'recent', 'models', 'projects', 'month', 'facts'}, set(data))

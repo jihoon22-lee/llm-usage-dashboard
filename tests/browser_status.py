@@ -4,6 +4,7 @@ Checks a single alert on mobile, the stopped-collector banner, the per-service
 "partly old" overview state, the Antigravity window note and the unused status
 line. --preview-assets serves this checkout's web assets.
 """
+
 from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
 import argparse
 import sys
@@ -29,22 +30,30 @@ output.mkdir(parents=True, exist_ok=True)
 def limits_fixture():
     now = time.time()
     with tempfile.TemporaryDirectory() as folder:
-        store = Store(Path(folder)/'usage.db')
+        store = Store(Path(folder) / 'usage.db')
         with store.connect() as c:
-            store.limit(c, 'antigravity', 'gemini-5h', 60.0, now+4*3600, now-60, 'antigravity-app')
-            store.limit(c, 'antigravity', '3p-5h', 100.0, now+4*3600, now-60, 'antigravity-app')
-            store.limit(c, 'antigravity', '3p-weekly', 0.0, now+5*86400, now-3600, 'antigravity-app')
-            store.limit(c, 'codex', 'codex · 10080분', 10.0, now+5*86400, now-60, 'codex')
+            store.limit(c, 'antigravity', 'gemini-5h', 60.0, now + 4 * 3600, now - 60, 'antigravity-app')
+            store.limit(c, 'antigravity', '3p-5h', 100.0, now + 4 * 3600, now - 60, 'antigravity-app')
+            store.limit(c, 'antigravity', '3p-weekly', 0.0, now + 5 * 86400, now - 3600, 'antigravity-app')
+            store.limit(c, 'codex', 'codex · 10080분', 10.0, now + 5 * 86400, now - 60, 'codex')
         return store.limits(now)
 
 
 def sources(collector_age):
     now = time.time()
     # A failure that began minutes after a success stays in 수집 상태, not in the alert chips.
-    return [dict(name='수집기', status='ok' if collector_age < 600 else 'stale', checked=now-collector_age, detail='idle'),
-            dict(name='codex-account-usage', status='error', checked=now-60, last_success=now-300, detail='HTTP 503'),
-            dict(name='claude-code', status='idle', checked=now-3*86400,
-                 detail='최근 24시간 상태줄 수신 없음 · 터미널(TUI) 실행 중에만 수신 · 한도는 계정/앱 조회로 표시')]
+    return [
+        dict(
+            name='수집기', status='ok' if collector_age < 600 else 'stale', checked=now - collector_age, detail='idle'
+        ),
+        dict(name='codex-account-usage', status='error', checked=now - 60, last_success=now - 300, detail='HTTP 503'),
+        dict(
+            name='claude-code',
+            status='idle',
+            checked=now - 3 * 86400,
+            detail='최근 24시간 상태줄 수신 없음 · 터미널(TUI) 실행 중에만 수신 · 한도는 계정/앱 조회로 표시',
+        ),
+    ]
 
 
 def preview(page, collector_age):
@@ -55,29 +64,39 @@ def preview(page, collector_age):
         if path == '/api/limits':
             route.fulfill(json=limits)
         elif path == '/api/usage':
-            data = fixture_json(route.request); data['sources'] = sources(collector_age)
-            data['spike'] = None; data['unpriced_models'] = []  # only the fixture quota alerts
+            data = fixture_json(route.request)
+            data['sources'] = sources(collector_age)
+            data['spike'] = None
+            data['unpriced_models'] = []  # only the fixture quota alerts
             route.fulfill(json=data)
         elif args.preview_assets and path == '/':
-            route.fulfill(path=args.preview_assets.resolve()/'index.html', content_type='text/html',headers=CSP_HEADERS)
+            route.fulfill(
+                path=args.preview_assets.resolve() / 'index.html', content_type='text/html', headers=CSP_HEADERS
+            )
         elif args.preview_assets and path.startswith('/assets/'):
             name = Path(path).name
-            route.fulfill(path=args.preview_assets.resolve()/name,
-                          content_type='text/css' if name.endswith('.css') else 'text/javascript')
+            route.fulfill(
+                path=args.preview_assets.resolve() / name,
+                content_type='text/css' if name.endswith('.css') else 'text/javascript',
+            )
         else:
             route.fallback()
-    page.route(origin+'/**', serve)
+
+    page.route(origin + '/**', serve)
 
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
     errors = []
     for width, mobile in ((1440, False), (390, True)):
-        page = browser.new_page(service_workers='block',viewport={'width': width, 'height': 900}, is_mobile=mobile, has_touch=mobile)
+        page = browser.new_page(
+            service_workers='block', viewport={'width': width, 'height': 900}, is_mobile=mobile, has_touch=mobile
+        )
         fixture_page(page)
-        page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        watch_csp(page, errors)
         preview(page, 30)
-        assert page.goto(origin+'/?view=quota').status == 200
+        assert page.goto(origin + '/?view=quota').status == 200
         expect(page.locator('#refresh')).to_be_enabled()
         # One low quota is the only alert; it must be visible on mobile too.
         chips = page.locator('#alerts .alert-chip')
@@ -96,13 +115,16 @@ with sync_playwright() as p:
         page.locator('#data-status').click()
         expect(page.locator('#sources')).to_contain_text('claude-code · 미사용')
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-        page.screenshot(path=str(output/f'status-{width}.png'), full_page=True)
+        page.screenshot(path=str(output / f'status-{width}.png'), full_page=True)
         page.close()
-    page = browser.new_page(service_workers='block',viewport={'width': 390, 'height': 900}, is_mobile=True, has_touch=True)
+    page = browser.new_page(
+        service_workers='block', viewport={'width': 390, 'height': 900}, is_mobile=True, has_touch=True
+    )
     fixture_page(page)
-    page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    watch_csp(page, errors)
     preview(page, 1500)
-    assert page.goto(origin+'/').status == 200
+    assert page.goto(origin + '/').status == 200
     expect(page.locator('#refresh')).to_be_enabled()
     banner = page.locator('#collector-banner')
     expect(banner).to_be_visible()

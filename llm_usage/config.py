@@ -6,13 +6,23 @@ from pathlib import Path
 
 
 def config_path():
-    return Path(os.environ.get('LLM_USAGE_CONFIG', Path.home()/'.config/llm-usage/config.json'))
+    return Path(os.environ.get('LLM_USAGE_CONFIG', Path.home() / '.config/llm-usage/config.json'))
 
 
 # Keys the web UI may edit. They are stored in local.json next to the database
 # because systemd sandboxes mount ~/.config read-only (ProtectHome=read-only).
-LOCAL_KEYS = {'subscription_prices', 'thresholds', 'refresh_seconds', 'value_alert_usd', 'notify', 'project_budgets',
-              'ended_subscriptions', 'claude_account_names', 'residual_label', 'subscription_price_history'}
+LOCAL_KEYS = {
+    'subscription_prices',
+    'thresholds',
+    'refresh_seconds',
+    'value_alert_usd',
+    'notify',
+    'project_budgets',
+    'ended_subscriptions',
+    'claude_account_names',
+    'residual_label',
+    'subscription_price_history',
+}
 
 
 def local_path(config):
@@ -81,11 +91,11 @@ def update_local(patch, config):
                     data = {}
                 if not isinstance(data, dict):
                     raise ValueError('invalid local settings')
-                current = {**config, **{k:v for k,v in data.items() if k in LOCAL_KEYS}}
+                current = {**config, **{k: v for k, v in data.items() if k in LOCAL_KEYS}}
                 changes = patch(current) if callable(patch) else patch
                 data.update(changes)
                 atomic_json(path, data)
-                config.update({k:v for k,v in data.items() if k in LOCAL_KEYS})
+                config.update({k: v for k, v in data.items() if k in LOCAL_KEYS})
                 return data
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
@@ -93,6 +103,7 @@ def update_local(patch, config):
 
 def atomic_json(path, data):
     import tempfile
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=path.parent)

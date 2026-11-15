@@ -1,4 +1,5 @@
 """Incremental, restart-safe local collectors. No transcript text is persisted."""
+
 import fcntl
 import hashlib
 import json
@@ -25,438 +26,697 @@ SQL_RECORD_ERRORS = (sqlite3.IntegrityError, sqlite3.ProgrammingError, sqlite3.I
 RECORD_ERRORS = (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, *SQL_RECORD_ERRORS)
 
 # 4 reads the reasoning effort (Codex turn settings, Claude responses) from records read before.
-PARSER_VERSION=4
+PARSER_VERSION = 4
 
 
 def model_provider(model):
-    m=(model or "").lower()
-    for provider,terms in [('Anthropic',('claude',)),('OpenAI',('gpt','o1','o3','o4','codex')),('Google',('gemini',)),('Meta',('muse-spark',)),('Z.ai',('glm',)),('MiniMax',('minimax',)),('Moonshot',('kimi','moonshot')),('Alibaba',('qwen',)),('DeepSeek',('deepseek',)),('Cognition',('swe',))]:
-        if any(term in m for term in terms):return provider
+    m = (model or "").lower()
+    for provider, terms in [
+        ('Anthropic', ('claude',)),
+        ('OpenAI', ('gpt', 'o1', 'o3', 'o4', 'codex')),
+        ('Google', ('gemini',)),
+        ('Meta', ('muse-spark',)),
+        ('Z.ai', ('glm',)),
+        ('MiniMax', ('minimax',)),
+        ('Moonshot', ('kimi', 'moonshot')),
+        ('Alibaba', ('qwen',)),
+        ('DeepSeek', ('deepseek',)),
+        ('Cognition', ('swe',)),
+    ]:
+        if any(term in m for term in terms):
+            return provider
     return 'Unknown'
 
 
 def repair_provider_labels(store):
     with store.connect() as c:
-        if store.state(c,'provider-labels-v2'):return
+        if store.state(c, 'provider-labels-v2'):
+            return
         # Stored model IDs remain useful even if the original tool removed its message.
-        for table in ('events','codex_points'):
-            rows=c.execute(f"SELECT DISTINCT model,route FROM {table} WHERE provider IN ('Unknown','Other')").fetchall()
+        for table in ('events', 'codex_points'):
+            rows = c.execute(
+                f"SELECT DISTINCT model,route FROM {table} WHERE provider IN ('Unknown','Other')"
+            ).fetchall()
             for row in rows:
-                maker=model_provider(row['model'])
-                if maker=='Unknown' and row['route']=='codex':maker='OpenAI'
-                c.execute(f"UPDATE {table} SET provider=? WHERE model=? AND route=? AND provider IN ('Unknown','Other')",
-                          (maker,row['model'],row['route']))
-        store.save_state(c,'provider-labels-v2',True)
+                maker = model_provider(row['model'])
+                if maker == 'Unknown' and row['route'] == 'codex':
+                    maker = 'OpenAI'
+                c.execute(
+                    f"UPDATE {table} SET provider=? WHERE model=? AND route=? AND provider IN ('Unknown','Other')",
+                    (maker, row['model'], row['route']),
+                )
+        store.save_state(c, 'provider-labels-v2', True)
         store.bump_data_version(c)
 
 
 # Status rows no current collector writes; left alone they linger as warnings.
-RETIRED_SOURCES=('codex-records',)
+RETIRED_SOURCES = ('codex-records',)
 
 
 def retire_legacy_sources(store):
     with store.connect() as c:
-        if store.state(c,'legacy-sources-v1'):return
-        marks=','.join('?' for _ in RETIRED_SOURCES)
-        c.execute(f'DELETE FROM sources WHERE name IN ({marks})',RETIRED_SOURCES)
-        c.execute(f'DELETE FROM source_health WHERE name IN ({marks})',RETIRED_SOURCES)
-        store.save_state(c,'legacy-sources-v1',True)
+        if store.state(c, 'legacy-sources-v1'):
+            return
+        marks = ','.join('?' for _ in RETIRED_SOURCES)
+        c.execute(f'DELETE FROM sources WHERE name IN ({marks})', RETIRED_SOURCES)
+        c.execute(f'DELETE FROM source_health WHERE name IN ({marks})', RETIRED_SOURCES)
+        store.save_state(c, 'legacy-sources-v1', True)
 
 
-def parse_line(store,c,route,d,state):
-    typ=d.get('type');p=d.get('payload',{})
-    if route=='codex':
-        if typ=='session_meta' and not state.get('session'):
+def parse_line(store, c, route, d, state):
+    typ = d.get('type')
+    p = d.get('payload', {})
+    if route == 'codex':
+        if typ == 'session_meta' and not state.get('session'):
             # Fork rollouts embed a second, parent session_meta. The first ID owns this file.
-            state['session']=p.get('id') or p.get('session_id')
-            state['provider']=p.get('model_provider') or 'openai'
-            state['project']=project_label(p.get('cwd'))
-            state['agent_kind']=_codex_kind(p)
-            creator=p.get('creator_account_id')
-            if isinstance(creator,str) and re.fullmatch(r'[A-Za-z0-9-]{1,100}',creator):
-                state['account']='codex-account:'+identity(creator)
+            state['session'] = p.get('id') or p.get('session_id')
+            state['provider'] = p.get('model_provider') or 'openai'
+            state['project'] = project_label(p.get('cwd'))
+            state['agent_kind'] = _codex_kind(p)
+            creator = p.get('creator_account_id')
+            if isinstance(creator, str) and re.fullmatch(r'[A-Za-z0-9-]{1,100}', creator):
+                state['account'] = 'codex-account:' + identity(creator)
             if p.get('forked_from_id'):
-                state['fork_started']=stamp(p.get('timestamp') or d.get('timestamp'))
-        elif typ=='turn_context':
-            if not state.get('fork_started') or (stamp(d.get('timestamp')) or state['fork_started'])>=state['fork_started']:
-                state['has_turn_context']=True
-                if p.get('model'):state['model']=p['model']
-                if state.get('session') and store.turn_effort(c,state['session'],stamp(d.get('timestamp')),p.get('effort') or p.get('reasoning_effort')):
-                    state['_effort']=True
-        elif typ=='token_usage_record':
-            ts=stamp(d.get('timestamp'))
-            if not state.get('session') or not ts:return
-            if state.get('fork_started') and (ts<state['fork_started'] or not state.get('has_turn_context')):return
-            route_name='codex' if state.get('provider','openai')=='openai' else 'codex:'+state['provider']
-            provider=model_provider(state.get('model',''))
-            if provider=='Unknown' and state.get('provider')=='openai':provider='OpenAI'
-            from .codex_usage import record
-            record(store,c,p,ts,state,provider,route_name)
-        elif typ=='event_msg' and p.get('type')=='token_count':
-            ts=stamp(d.get('timestamp'))
-            if p.get('rate_limits') and ts:codex_limits(store,c,p['rate_limits'],ts,'codex-local')
-            usage=(p.get('info') or {}).get('total_token_usage')
-            if not usage or not state.get('session') or not ts:return
-            if state.get('fork_started') and (ts < state['fork_started'] or not state.get('has_turn_context')):
-                changed=store.discard_codex_point(c,state['session'],ts,usage)
-                if changed:state['_dirty']=changed
+                state['fork_started'] = stamp(p.get('timestamp') or d.get('timestamp'))
+        elif typ == 'turn_context':
+            if (
+                not state.get('fork_started')
+                or (stamp(d.get('timestamp')) or state['fork_started']) >= state['fork_started']
+            ):
+                state['has_turn_context'] = True
+                if p.get('model'):
+                    state['model'] = p['model']
+                if state.get('session') and store.turn_effort(
+                    c, state['session'], stamp(d.get('timestamp')), p.get('effort') or p.get('reasoning_effort')
+                ):
+                    state['_effort'] = True
+        elif typ == 'token_usage_record':
+            ts = stamp(d.get('timestamp'))
+            if not state.get('session') or not ts:
                 return
-            route_name='codex' if state.get('provider','openai')=='openai' else 'codex:'+state['provider']
-            provider=model_provider(state.get('model',''))
-            if provider=='Unknown' and state.get('provider')=='openai':provider='OpenAI'
-            changed=store.codex_point(c,state['session'],ts,provider,route_name,
-                                     state.get('model'),usage,p['info'].get('last_token_usage') or usage)
-            if changed:state['_dirty']=changed
+            if state.get('fork_started') and (ts < state['fork_started'] or not state.get('has_turn_context')):
+                return
+            route_name = 'codex' if state.get('provider', 'openai') == 'openai' else 'codex:' + state['provider']
+            provider = model_provider(state.get('model', ''))
+            if provider == 'Unknown' and state.get('provider') == 'openai':
+                provider = 'OpenAI'
+            from .codex_usage import record
+
+            record(store, c, p, ts, state, provider, route_name)
+        elif typ == 'event_msg' and p.get('type') == 'token_count':
+            ts = stamp(d.get('timestamp'))
+            if p.get('rate_limits') and ts:
+                codex_limits(store, c, p['rate_limits'], ts, 'codex-local')
+            usage = (p.get('info') or {}).get('total_token_usage')
+            if not usage or not state.get('session') or not ts:
+                return
+            if state.get('fork_started') and (ts < state['fork_started'] or not state.get('has_turn_context')):
+                changed = store.discard_codex_point(c, state['session'], ts, usage)
+                if changed:
+                    state['_dirty'] = changed
+                return
+            route_name = 'codex' if state.get('provider', 'openai') == 'openai' else 'codex:' + state['provider']
+            provider = model_provider(state.get('model', ''))
+            if provider == 'Unknown' and state.get('provider') == 'openai':
+                provider = 'OpenAI'
+            changed = store.codex_point(
+                c,
+                state['session'],
+                ts,
+                provider,
+                route_name,
+                state.get('model'),
+                usage,
+                p['info'].get('last_token_usage') or usage,
+            )
+            if changed:
+                state['_dirty'] = changed
             from .codex_usage import bind_pending
-            keys=('input_tokens','cached_input_tokens','output_tokens','cache_write_input_tokens','reasoning_output_tokens')
-            bind_pending(c,state,identity('codex-point',state['session'],ts,[max(0,int(usage.get(k) or 0)) for k in keys]))
-    elif typ=='assistant':
+
+            keys = (
+                'input_tokens',
+                'cached_input_tokens',
+                'output_tokens',
+                'cache_write_input_tokens',
+                'reasoning_output_tokens',
+            )
+            bind_pending(
+                c, state, identity('codex-point', state['session'], ts, [max(0, int(usage.get(k) or 0)) for k in keys])
+            )
+    elif typ == 'assistant':
         from .claude_usage import ingest_message
-        ingest_message(store,c,route,d)
+
+        ingest_message(store, c, route, d)
 
 
 # Bytes just before the read offset identify the consumed prefix (as a digest only).
-TAIL_BYTES=64
+TAIL_BYTES = 64
 
 
-def _prefix_changed(path,checkpoint):
+def _prefix_changed(path, checkpoint):
     """An in-place rewrite that grows (or keeps) the size reuses the inode; resuming
     from the old offset would then start in the middle of a different line."""
-    offset=checkpoint.get('offset',0)
-    if not offset:return False
+    offset = checkpoint.get('offset', 0)
+    if not offset:
+        return False
     with path.open('rb') as f:
-        f.seek(max(0,offset-TAIL_BYTES));tail=f.read(offset-max(0,offset-TAIL_BYTES))
-    if checkpoint.get('tail'):return hashlib.sha256(tail).hexdigest()!=checkpoint['tail']
+        f.seek(max(0, offset - TAIL_BYTES))
+        tail = f.read(offset - max(0, offset - TAIL_BYTES))
+    if checkpoint.get('tail'):
+        return hashlib.sha256(tail).hexdigest() != checkpoint['tail']
     return not tail.endswith(b'\n')
 
 
-def _misaligned_errors(c,path,key):
+def _misaligned_errors(c, path, key):
     """Errors recorded at offsets that are no longer line starts came from reading a
     rewritten file mid-line; such a file is read again from the start once."""
-    offsets=[int(r[0]) for r in c.execute('SELECT record FROM import_errors WHERE source=?',(key,)) if str(r[0]).isdigit()]
-    if not offsets:return False
+    offsets = [
+        int(r[0]) for r in c.execute('SELECT record FROM import_errors WHERE source=?', (key,)) if str(r[0]).isdigit()
+    ]
+    if not offsets:
+        return False
     with path.open('rb') as f:
         for offset in offsets:
-            if not offset:continue
-            f.seek(offset-1)
-            if f.read(1)!=b'\n':return True
+            if not offset:
+                continue
+            f.seek(offset - 1)
+            if f.read(1) != b'\n':
+                return True
     return False
 
 
-def collect_file(store,path,route):
-    stat=path.stat();key='file:'+str(path)
+def collect_file(store, path, route):
+    stat = path.stat()
+    key = 'file:' + str(path)
     with store.connect() as c:
-        checkpoint=store.state(c,key,{})
-        repair_fork=checkpoint.get('parser_version',0)<PARSER_VERSION
-        unchanged=checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino
-        packed=compressed(path)
-        misaligned=False if packed else _misaligned_errors(c,path,key)
+        checkpoint = store.state(c, key, {})
+        repair_fork = checkpoint.get('parser_version', 0) < PARSER_VERSION
+        unchanged = (
+            checkpoint.get('size') == stat.st_size
+            and checkpoint.get('mtime') == stat.st_mtime_ns
+            and checkpoint.get('inode') == stat.st_ino
+        )
+        packed = compressed(path)
+        misaligned = False if packed else _misaligned_errors(c, path, key)
         if not repair_fork and unchanged and not misaligned:
-            return store.error_count(c,key)
-        offset=checkpoint.get('offset',0);state=checkpoint.get('parser',{})
+            return store.error_count(c, key)
+        offset = checkpoint.get('offset', 0)
+        state = checkpoint.get('parser', {})
         # A resumed file may not repeat session_meta after a code upgrade.
-        project=state.get('project')
-        if isinstance(project,str) and ('/' in project or '\\' in project or ':' in project):
-            state['project']=project_label(project)
-        rewritten=(checkpoint.get('size')==stat.st_size and checkpoint.get('mtime')!=stat.st_mtime_ns) or misaligned
-        if (packed or repair_fork or rewritten or checkpoint.get('inode')!=stat.st_ino or stat.st_size<offset
-                or _prefix_changed(path,checkpoint)):
+        project = state.get('project')
+        if isinstance(project, str) and ('/' in project or '\\' in project or ':' in project):
+            state['project'] = project_label(project)
+        rewritten = (
+            checkpoint.get('size') == stat.st_size and checkpoint.get('mtime') != stat.st_mtime_ns
+        ) or misaligned
+        if (
+            packed
+            or repair_fork
+            or rewritten
+            or checkpoint.get('inode') != stat.st_ino
+            or stat.st_size < offset
+            or _prefix_changed(path, checkpoint)
+        ):
             # Event IDs deduplicate the lines read again.
-            offset=0;state={}
-            c.execute('DELETE FROM import_errors WHERE source=?',(key,))
+            offset = 0
+            state = {}
+            c.execute('DELETE FROM import_errors WHERE source=?', (key,))
         with open_record(path) as f:
             f.seek(offset)
             while True:
-                start=f.tell();line=f.readline()
-                if not line:break
+                start = f.tell()
+                line = f.readline()
+                if not line:
+                    break
                 if not line.endswith(b'\n'):
-                    f.seek(start);break
-                try:parse_line(store,c,route,json.loads(line),state)
+                    f.seek(start)
+                    break
+                try:
+                    parse_line(store, c, route, json.loads(line), state)
                 except RECORD_ERRORS as exc:
-                    store.import_error(c,key,start,type(exc).__name__)
+                    store.import_error(c, key, start, type(exc).__name__)
             if state.get('_dirty'):
-                store.rebuild_codex(c,state.pop('_dirty'),
-                                    dict(session=state.get('session'),project=state.get('project'),
-                                         agent_kind=state.get('agent_kind')))
-            if state.pop('_effort',None):store.apply_turn_efforts(c,state['session'])
-            end=f.tell();f.seek(max(0,end-TAIL_BYTES));tail=hashlib.sha256(f.read(end-max(0,end-TAIL_BYTES))).hexdigest()
-            store.save_state(c,key,dict(parser_version=PARSER_VERSION,offset=end,tail=tail,size=stat.st_size,mtime=stat.st_mtime_ns,inode=stat.st_ino,parser=state))
-            return store.error_count(c,key)
+                store.rebuild_codex(
+                    c,
+                    state.pop('_dirty'),
+                    dict(
+                        session=state.get('session'), project=state.get('project'), agent_kind=state.get('agent_kind')
+                    ),
+                )
+            if state.pop('_effort', None):
+                store.apply_turn_efforts(c, state['session'])
+            end = f.tell()
+            f.seek(max(0, end - TAIL_BYTES))
+            tail = hashlib.sha256(f.read(end - max(0, end - TAIL_BYTES))).hexdigest()
+            store.save_state(
+                c,
+                key,
+                dict(
+                    parser_version=PARSER_VERSION,
+                    offset=end,
+                    tail=tail,
+                    size=stat.st_size,
+                    mtime=stat.st_mtime_ns,
+                    inode=stat.st_ino,
+                    parser=state,
+                ),
+            )
+            return store.error_count(c, key)
 
-def changed_files(store,root,paths):
+
+def changed_files(store, root, paths):
     """The record files that need collect_file(): changed since their checkpoint or
     carrying recorded errors. One query replaces a connection per unchanged file,
     which mattered with thousands of finished session files."""
-    prefix='file:'+str(root)+'/'
+    prefix = 'file:' + str(root) + '/'
     with store.connect() as c:
-        saved={r[0]:r[1] for r in c.execute('SELECT key,data FROM state WHERE substr(key,1,?)=?',(len(prefix),prefix))}
-        failing={r[0] for r in c.execute('SELECT DISTINCT source FROM import_errors WHERE substr(source,1,?)=?',(len(prefix),prefix))}
+        saved = {
+            r[0]: r[1] for r in c.execute('SELECT key,data FROM state WHERE substr(key,1,?)=?', (len(prefix), prefix))
+        }
+        failing = {
+            r[0]
+            for r in c.execute(
+                'SELECT DISTINCT source FROM import_errors WHERE substr(source,1,?)=?', (len(prefix), prefix)
+            )
+        }
     for path in paths:
-        key='file:'+str(path)
-        try:stat=path.stat()
-        except OSError:continue
-        try:checkpoint=json.loads(saved[key]) if key in saved else {}
-        except ValueError:checkpoint={}
-        unchanged=(checkpoint.get('parser_version',0)>=PARSER_VERSION and checkpoint.get('size')==stat.st_size
-                   and checkpoint.get('mtime')==stat.st_mtime_ns and checkpoint.get('inode')==stat.st_ino)
-        if unchanged and key not in failing:continue
+        key = 'file:' + str(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        try:
+            checkpoint = json.loads(saved[key]) if key in saved else {}
+        except ValueError:
+            checkpoint = {}
+        unchanged = (
+            checkpoint.get('parser_version', 0) >= PARSER_VERSION
+            and checkpoint.get('size') == stat.st_size
+            and checkpoint.get('mtime') == stat.st_mtime_ns
+            and checkpoint.get('inode') == stat.st_ino
+        )
+        if unchanged and key not in failing:
+            continue
         yield path
 
 
-def collect_opencode(store,path):
-    src=open_readonly(path)
+def collect_opencode(store, path):
+    src = open_readonly(path)
     try:
         with store.connect() as c:
-            key='opencode:'+str(path)
-            checkpoint=store.state(c,key,0)
-            if not store.state(c,key+':details-v1'):checkpoint=0
-            newest=checkpoint
-            cols={r[1] for r in src.execute('PRAGMA table_info(message)')}
-            has_session='session_id' in cols and src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
-            sel=('SELECT m.id,m.time_created,m.time_updated,m.data,m.session_id,s.directory,s.parent_id '
-                 'FROM message m LEFT JOIN session s ON s.id=m.session_id' if has_session else
-                 'SELECT id,time_created,time_updated,data,'+('session_id' if 'session_id' in cols else 'NULL')+',NULL,NULL FROM message')
+            key = 'opencode:' + str(path)
+            checkpoint = store.state(c, key, 0)
+            if not store.state(c, key + ':details-v1'):
+                checkpoint = 0
+            newest = checkpoint
+            cols = {r[1] for r in src.execute('PRAGMA table_info(message)')}
+            has_session = (
+                'session_id' in cols
+                and src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone()
+                is not None
+            )
+            sel = (
+                'SELECT m.id,m.time_created,m.time_updated,m.data,m.session_id,s.directory,s.parent_id '
+                'FROM message m LEFT JOIN session s ON s.id=m.session_id'
+                if has_session
+                else 'SELECT id,time_created,time_updated,data,'
+                + ('session_id' if 'session_id' in cols else 'NULL')
+                + ',NULL,NULL FROM message'
+            )
+
             def ingest(row):
-                mid,created,updated,raw,sid,directory,parent_id=row
+                mid, created, updated, raw, sid, directory, parent_id = row
                 try:
-                    d=json.loads(raw)
-                    if d.get('role')=='assistant' and d.get('tokens'):
-                        t=d['tokens'];cache=t.get('cache',{});model=d.get('modelID','unknown')
+                    d = json.loads(raw)
+                    if d.get('role') == 'assistant' and d.get('tokens'):
+                        t = d['tokens']
+                        cache = t.get('cache', {})
+                        model = d.get('modelID', 'unknown')
                         # OpenCode output excludes reasoning, input excludes cache read/write.
-                        store.event(c,identity('opencode',mid),created/1000,model_provider(model),d.get('providerID','opencode'),model,
-                                    dict(uncached_input=t.get('input',0),cached_input=cache.get('read',0),cache_creation=cache.get('write',0),
-                                         output=t.get('output',0)+t.get('reasoning',0),reasoning=t.get('reasoning',0),
-                                         reasoning_observed=int(t.get('reasoning') is not None)),
-                                    session=sid,project=project_label(directory),
-                                    agent_kind='sub' if parent_id else 'main')
-                    c.execute('DELETE FROM import_errors WHERE source=? AND record=?',(key,mid))
+                        store.event(
+                            c,
+                            identity('opencode', mid),
+                            created / 1000,
+                            model_provider(model),
+                            d.get('providerID', 'opencode'),
+                            model,
+                            dict(
+                                uncached_input=t.get('input', 0),
+                                cached_input=cache.get('read', 0),
+                                cache_creation=cache.get('write', 0),
+                                output=t.get('output', 0) + t.get('reasoning', 0),
+                                reasoning=t.get('reasoning', 0),
+                                reasoning_observed=int(t.get('reasoning') is not None),
+                            ),
+                            session=sid,
+                            project=project_label(directory),
+                            agent_kind='sub' if parent_id else 'main',
+                        )
+                    c.execute('DELETE FROM import_errors WHERE source=? AND record=?', (key, mid))
                 except RECORD_ERRORS as exc:
-                    store.import_error(c,key,mid,type(exc).__name__)
+                    store.import_error(c, key, mid, type(exc).__name__)
+
             # Retry a bounded batch even if a repaired row retains its old time_updated.
-            retries=c.execute('SELECT record FROM import_errors WHERE source=? ORDER BY checked LIMIT 200',(key,)).fetchall()
+            retries = c.execute(
+                'SELECT record FROM import_errors WHERE source=? ORDER BY checked LIMIT 200', (key,)
+            ).fetchall()
             for failed in retries:
-                row=src.execute(sel+' WHERE m.id=?' if has_session else sel+' WHERE id=?',(failed['record'],)).fetchone()
-                if row and row[2]<checkpoint:ingest(row)
+                row = src.execute(
+                    sel + ' WHERE m.id=?' if has_session else sel + ' WHERE id=?', (failed['record'],)
+                ).fetchone()
+                if row and row[2] < checkpoint:
+                    ingest(row)
                 elif row is None:
                     # Rotate missing IDs too, so they cannot starve later retries.
-                    store.import_error(c,key,failed['record'],'MissingRecord')
-            for row in src.execute(sel+(' WHERE m.time_updated>=? ORDER BY m.time_updated' if has_session else ' WHERE time_updated>=? ORDER BY time_updated'),(checkpoint,)):
-                newest=max(newest,row[2]);ingest(row)
-            store.save_state(c,key,newest)
-            store.save_state(c,key+':details-v1',True)
-            return store.error_count(c,key)
-    finally:src.close()
+                    store.import_error(c, key, failed['record'], 'MissingRecord')
+            for row in src.execute(
+                sel
+                + (
+                    ' WHERE m.time_updated>=? ORDER BY m.time_updated'
+                    if has_session
+                    else ' WHERE time_updated>=? ORDER BY time_updated'
+                ),
+                (checkpoint,),
+            ):
+                newest = max(newest, row[2])
+                ingest(row)
+            store.save_state(c, key, newest)
+            store.save_state(c, key + ':details-v1', True)
+            return store.error_count(c, key)
+    finally:
+        src.close()
 
 
-def local_sources(store,settings):
-    from .claude_accounts import observed_homes,transcript_sources
-    with store.connect() as c:known=observed_homes(store,c)
-    return transcript_sources(settings,known)
+def local_sources(store, settings):
+    from .claude_accounts import observed_homes, transcript_sources
+
+    with store.connect() as c:
+        known = observed_homes(store, c)
+    return transcript_sources(settings, known)
 
 
-def collect_local(store,settings,*,include_derived=True):
-    progress=time.monotonic()
+def collect_local(store, settings, *, include_derived=True):
+    progress = time.monotonic()
+
     def heartbeat():
         nonlocal progress
-        if time.monotonic()-progress<5:return
+        if time.monotonic() - progress < 5:
+            return
         sd_notify('WATCHDOG=1')
         with store.connect() as c:
-            current=store.state(c,'collector',{})
-            if current.get('status')=='collecting':
-                store.save_state(c,'collector',{**current,'checked':time.time()})
-        progress=time.monotonic()
-    for source in local_sources(store,settings):
-        if source['kind'] in ('antigravity','devin'):continue
-        root=Path(source['path']);route=source['route'];name=source['name']
+            current = store.state(c, 'collector', {})
+            if current.get('status') == 'collecting':
+                store.save_state(c, 'collector', {**current, 'checked': time.time()})
+        progress = time.monotonic()
+
+    for source in local_sources(store, settings):
+        if source['kind'] in ('antigravity', 'devin'):
+            continue
+        root = Path(source['path'])
+        route = source['route']
+        name = source['name']
         try:
             if not root.exists():
-                with store.connect() as c:store.source(c,name,'unavailable','기록 경로를 사용할 수 없습니다.')
+                with store.connect() as c:
+                    store.source(c, name, 'unavailable', '기록 경로를 사용할 수 없습니다.')
                 continue
-            if source['kind']=='opencode':errors=collect_opencode(store,root);count=1
+            if source['kind'] == 'opencode':
+                errors = collect_opencode(store, root)
+                count = 1
             else:
-                paths=record_files(root)
-                count=len(paths)
-                for path in changed_files(store,root,paths):
+                paths = record_files(root)
+                count = len(paths)
+                for path in changed_files(store, root, paths):
                     try:
-                        collect_file(store,path,route)
+                        collect_file(store, path, route)
                         # The file was read: an earlier whole-file failure (a locked or
                         # briefly unreadable file) is over.
-                        with store.connect() as c:c.execute("DELETE FROM import_errors WHERE source=? AND record='file'",('file:'+str(path),))
-                    except (OSError,EOFError,ValueError,RecordReadError,*SQL_RECORD_ERRORS) as exc:
-                        with store.connect() as c:store.import_error(c,'file:'+str(path),'file',type(exc).__name__)
+                        with store.connect() as c:
+                            c.execute(
+                                "DELETE FROM import_errors WHERE source=? AND record='file'", ('file:' + str(path),)
+                            )
+                    except (OSError, EOFError, ValueError, RecordReadError, *SQL_RECORD_ERRORS) as exc:
+                        with store.connect() as c:
+                            store.import_error(c, 'file:' + str(path), 'file', type(exc).__name__)
                     # A full parser upgrade can span several minutes. This marks
                     # committed progress, while status remains explicitly collecting.
                     heartbeat()
                 # Errors of the files present now, as the per-file counts used to sum.
-                current={'file:'+str(path) for path in paths}
+                current = {'file:' + str(path) for path in paths}
                 with store.connect() as c:
-                    errors=sum(n for source,n in c.execute('SELECT source,COUNT(*) FROM import_errors WHERE substr(source,1,?)=? GROUP BY source',
-                               (len('file:'+str(root)+'/'),'file:'+str(root)+'/')) if source in current)
+                    errors = sum(
+                        n
+                        for source, n in c.execute(
+                            'SELECT source,COUNT(*) FROM import_errors WHERE substr(source,1,?)=? GROUP BY source',
+                            (len('file:' + str(root) + '/'), 'file:' + str(root) + '/'),
+                        )
+                        if source in current
+                    )
             with store.connect() as c:
                 # File-level failures are single corrupt lines that never recover;
                 # after 7 days archive them as a permanent count so the source can
                 # return to 'ok' while the loss stays reported.
-                aged=c.execute("DELETE FROM import_errors WHERE source LIKE ? AND checked<?",
-                               ('file:'+str(root)+'/%',time.time()-7*86400)).rowcount
-                perm=store.state(c,'permanent_errors:'+name,0)+aged
+                aged = c.execute(
+                    "DELETE FROM import_errors WHERE source LIKE ? AND checked<?",
+                    ('file:' + str(root) + '/%', time.time() - 7 * 86400),
+                ).rowcount
+                perm = store.state(c, 'permanent_errors:' + name, 0) + aged
                 if aged:
-                    store.save_state(c,'permanent_errors:'+name,perm)
-                    errors=c.execute('SELECT COUNT(*) FROM import_errors WHERE source LIKE ?',
-                                     ('file:'+str(root)+'/%',)).fetchone()[0]
-                unsupported=unsupported_files(root) if source['kind']=='jsonl' else 0
-                detail=f'{count}개 기록 파일 확인 · 해석 실패 {errors}건'+(f' · 누적 영구 실패 {perm}건' if perm else '')
-                if unsupported:detail+=f' · 미지원 압축 기록 {unsupported}개'
-                store.source(c,name,'partial' if errors or unsupported else 'ok',detail)
+                    store.save_state(c, 'permanent_errors:' + name, perm)
+                    errors = c.execute(
+                        'SELECT COUNT(*) FROM import_errors WHERE source LIKE ?', ('file:' + str(root) + '/%',)
+                    ).fetchone()[0]
+                unsupported = unsupported_files(root) if source['kind'] == 'jsonl' else 0
+                detail = f'{count}개 기록 파일 확인 · 해석 실패 {errors}건' + (
+                    f' · 누적 영구 실패 {perm}건' if perm else ''
+                )
+                if unsupported:
+                    detail += f' · 미지원 압축 기록 {unsupported}개'
+                store.source(c, name, 'partial' if errors or unsupported else 'ok', detail)
             heartbeat()
         except Exception as exc:
-            with store.connect() as c:store.source(c,name,'error',f'로컬 수집 실패 ({type(exc).__name__})')
+            with store.connect() as c:
+                store.source(c, name, 'error', f'로컬 수집 실패 ({type(exc).__name__})')
     if include_derived:
         from .antigravity import collect_databases
-        collect_databases(store,settings,model_provider)
+
+        collect_databases(store, settings, model_provider)
         from .devin import collect_databases as collect_devin
-        collect_devin(store,settings,model_provider)
+
+        collect_devin(store, settings, model_provider)
     with store.connect() as c:
         from .codex_usage import summary
-        summary(store,c)
+
+        summary(store, c)
         from .claude_usage import summary as claude_summary
-        claude_summary(store,c)
-        store.save_state(c,'last_local',time.time())
+
+        claude_summary(store, c)
+        store.save_state(c, 'last_local', time.time())
 
 
-def collect_antigravity_tokens(store,settings):
-    from .statusline import validate_observation,observation_key
-    errors=0
-    for folder in settings.get('status_inboxes',[]):
-        path=Path(folder)/'antigravity-tokens.db'
-        if not path.exists():continue
-        key='agy-tokens:'+str(path)
+def collect_antigravity_tokens(store, settings):
+    from .statusline import validate_observation, observation_key
+
+    errors = 0
+    for folder in settings.get('status_inboxes', []):
+        path = Path(folder) / 'antigravity-tokens.db'
+        if not path.exists():
+            continue
+        key = 'agy-tokens:' + str(path)
         try:
             with store.connect() as c:
-                stat=path.stat()
-                signature=[stat.st_ino,stat.st_size,stat.st_mtime_ns]
-                if store.state(c,key)==signature:continue
-                source=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=2)
+                stat = path.stat()
+                signature = [stat.st_ino, stat.st_size, stat.st_mtime_ns]
+                if store.state(c, key) == signature:
+                    continue
+                source = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
                 try:
-                    for first,last,raw in source.execute('SELECT first_seen,last_seen,data FROM observations ORDER BY last_seen'):
-                        if not all(isinstance(v,(int,float)) and 0<v<=time.time()+60 for v in (first,last)) or first>last:
+                    for first, last, raw in source.execute(
+                        'SELECT first_seen,last_seen,data FROM observations ORDER BY last_seen'
+                    ):
+                        if (
+                            not all(isinstance(v, (int, float)) and 0 < v <= time.time() + 60 for v in (first, last))
+                            or first > last
+                        ):
                             raise ValueError('invalid observation time')
-                        value=validate_observation(json.loads(raw))
-                        c.execute('INSERT INTO agy_token_observations VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
-                                  'first_seen=MIN(first_seen,excluded.first_seen),last_seen=MAX(last_seen,excluded.last_seen)',
-                                  (observation_key(value),first,last,json.dumps(value,sort_keys=True)))
-                    store.save_state(c,key,signature)
-                finally:source.close()
-        except (OSError,sqlite3.Error,ValueError,TypeError):errors+=1
+                        value = validate_observation(json.loads(raw))
+                        c.execute(
+                            'INSERT INTO agy_token_observations VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                            'first_seen=MIN(first_seen,excluded.first_seen),last_seen=MAX(last_seen,excluded.last_seen)',
+                            (observation_key(value), first, last, json.dumps(value, sort_keys=True)),
+                        )
+                    store.save_state(c, key, signature)
+                finally:
+                    source.close()
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            errors += 1
     # This runs on the 2-second loop: prune hourly and rewrite the source row only
     # when its status or text changes, so an idle loop does not write the database.
     with store.connect() as c:
-        if time.time()-(store.state(c,'agy-tokens:pruned',0) or 0)>=3600:
-            c.execute('DELETE FROM agy_token_observations WHERE last_seen<?',(time.time()-30*86400,))
-            store.save_state(c,'agy-tokens:pruned',time.time())
-        row=c.execute('SELECT data,last_seen FROM agy_token_observations ORDER BY last_seen DESC LIMIT 1').fetchone()
-        if errors:store.source_changed(c,'antigravity-tokens','error','토큰 관측 파일 읽기 실패 · 기존 관측은 유지합니다.')
+        if time.time() - (store.state(c, 'agy-tokens:pruned', 0) or 0) >= 3600:
+            c.execute('DELETE FROM agy_token_observations WHERE last_seen<?', (time.time() - 30 * 86400,))
+            store.save_state(c, 'agy-tokens:pruned', time.time())
+        row = c.execute('SELECT data,last_seen FROM agy_token_observations ORDER BY last_seen DESC LIMIT 1').fetchone()
+        if errors:
+            store.source_changed(c, 'antigravity-tokens', 'error', '토큰 관측 파일 읽기 실패 · 기존 관측은 유지합니다.')
         elif row:
-            value=json.loads(row['data'])
-            counters={k:v for k,v in value['totals'].items() if k!='context_window_size'}|value['current']
-            numeric=sum(type(v) is int for v in counters.values())
-            integrated=c.execute('SELECT 1 FROM antigravity_requests LIMIT 1').fetchone() is not None
-            detail=(f'토큰 숫자 {numeric}개 필드 수신 · '+('소비량은 대화 DB에서 별도 집계' if integrated else '소비량 합계 검증 대기') if numeric else
-                    '상태줄 수신 · 토큰 숫자 미제공 ('+value['context_state']+')')
-            if time.time()-row['last_seen']>600:detail+=' · 오래된 관측'
-            store.source_changed(c,'antigravity-tokens',('ok' if integrated else 'partial') if numeric else 'unavailable',detail,row['last_seen'])
-        else:store.source_changed(c,'antigravity-tokens','unavailable','토큰 관측 연결됨 · 다음 Antigravity 상태줄 수신 대기')
+            value = json.loads(row['data'])
+            counters = {k: v for k, v in value['totals'].items() if k != 'context_window_size'} | value['current']
+            numeric = sum(type(v) is int for v in counters.values())
+            integrated = c.execute('SELECT 1 FROM antigravity_requests LIMIT 1').fetchone() is not None
+            detail = (
+                f'토큰 숫자 {numeric}개 필드 수신 · '
+                + ('소비량은 대화 DB에서 별도 집계' if integrated else '소비량 합계 검증 대기')
+                if numeric
+                else '상태줄 수신 · 토큰 숫자 미제공 (' + value['context_state'] + ')'
+            )
+            if time.time() - row['last_seen'] > 600:
+                detail += ' · 오래된 관측'
+            store.source_changed(
+                c,
+                'antigravity-tokens',
+                ('ok' if integrated else 'partial') if numeric else 'unavailable',
+                detail,
+                row['last_seen'],
+            )
+        else:
+            store.source_changed(
+                c, 'antigravity-tokens', 'unavailable', '토큰 관측 연결됨 · 다음 Antigravity 상태줄 수신 대기'
+            )
 
 
 def status_files(folder):
     """(path, base route) of every status-line file; Claude homes other than the
     default write claude-code@<home tag>.json."""
-    folder=Path(folder)
-    found=[(folder/'claude-code.json','claude-code'),(folder/'antigravity.json','antigravity')]
-    try:found+=[(p,'claude-code') for p in sorted(folder.glob('claude-code@*.json')) if re.fullmatch(r'claude-code@[0-9a-f]{12}\.json',p.name)]
-    except OSError:pass
-    return [(p,route) for p,route in found if p.exists()]
+    folder = Path(folder)
+    found = [(folder / 'claude-code.json', 'claude-code'), (folder / 'antigravity.json', 'antigravity')]
+    try:
+        found += [
+            (p, 'claude-code')
+            for p in sorted(folder.glob('claude-code@*.json'))
+            if re.fullmatch(r'claude-code@[0-9a-f]{12}\.json', p.name)
+        ]
+    except OSError:
+        pass
+    return [(p, route) for p, route in found if p.exists()]
 
 
-def status_route(store,c,path,route,data):
+def status_route(store, c, path, route, data):
     """The quota route a status line reports for; None when its account is unknown."""
-    if route!='claude-code':return route
-    key=data.get('account')
-    if isinstance(key,str) and re.fullmatch('[0-9a-f]{64}',key):
+    if route != 'claude-code':
+        return route
+    key = data.get('account')
+    if isinstance(key, str) and re.fullmatch('[0-9a-f]{64}', key):
         from .claude_accounts import route_for
-        primary=store.state(c,'claude_primary_account')
-        if primary or key in (store.state(c,'claude_accounts:unbound-keys',[]) or []):
-            return route_for(key,primary)
-        known=c.execute('SELECT route FROM claude_accounts WHERE account_key=?', (key,)).fetchone()
-        if known:return known[0]
-        return 'claude-code' if path.name=='claude-code.json' else None
+
+        primary = store.state(c, 'claude_primary_account')
+        if primary or key in (store.state(c, 'claude_accounts:unbound-keys', []) or []):
+            return route_for(key, primary)
+        known = c.execute('SELECT route FROM claude_accounts WHERE account_key=?', (key,)).fetchone()
+        if known:
+            return known[0]
+        return 'claude-code' if path.name == 'claude-code.json' else None
     # Older wrappers did not identify the account; only the default home's file is used.
-    return 'claude-code' if path.name=='claude-code.json' else None
+    return 'claude-code' if path.name == 'claude-code.json' else None
 
 
-def collect_status(store,settings):
+def collect_status(store, settings):
     from .config import ended_routes
     from .store import USER_ENDED_DETAIL
-    collect_antigravity_tokens(store,settings)
-    ended=ended_routes(settings)
-    for folder in settings.get('status_inboxes',[]):
-        for path,base in status_files(folder):
+
+    collect_antigravity_tokens(store, settings)
+    ended = ended_routes(settings)
+    for folder in settings.get('status_inboxes', []):
+        for path, base in status_files(folder):
             # A Claude file names its account only inside (see status_route).
-            route=None if base=='claude-code' else base
+            route = None if base == 'claude-code' else base
             try:
-                data=json.loads(path.read_text())
+                data = json.loads(path.read_text())
                 with store.connect() as c:
-                    route=status_route(store,c,path,base,data)
-                    if route is None:continue
+                    route = status_route(store, c, path, base, data)
+                    if route is None:
+                        continue
                     # Kept (committed) before the event is read, so a file whose last event was already
                     # read, or whose event fails below, still names its account.
-                    if store.state(c,'status_route:'+str(path))!=route:store.save_state(c,'status_route:'+str(path),route);c.commit()
+                    if store.state(c, 'status_route:' + str(path)) != route:
+                        store.save_state(c, 'status_route:' + str(path), route)
+                        c.commit()
                     if route in ended:
                         # Like the polled sources: an old ok/error must not stay live.
-                        store.source_changed(c,route,'ended',USER_ENDED_DETAIL);continue
-                    checked=data['checked']
-                    if checked<=store.state(c,'status:'+str(path),0):continue
-                    count=status_limits(store,c,route,data['data'],checked)
-                    store.source(c,route,'ok' if count else 'unavailable','' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',checked)
-                    store.save_state(c,'status:'+str(path),checked)
-            except (OSError,ValueError,KeyError,TypeError,AttributeError):
+                        store.source_changed(c, route, 'ended', USER_ENDED_DETAIL)
+                        continue
+                    checked = data['checked']
+                    if checked <= store.state(c, 'status:' + str(path), 0):
+                        continue
+                    count = status_limits(store, c, route, data['data'], checked)
+                    store.source(
+                        c,
+                        route,
+                        'ok' if count else 'unavailable',
+                        '' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',
+                        checked,
+                    )
+                    store.save_state(c, 'status:' + str(path), checked)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 with store.connect() as c:
                     # Unread, a file fails the account it last reported; a file of another home
                     # never read is no account's (the default home's is the original account's).
-                    if route is None:route=store.state(c,'status_route:'+str(path)) or ('claude-code' if path.name=='claude-code.json' else None)
-                    if route is None:continue
-                    if route in ended:store.source_changed(c,route,'ended',USER_ENDED_DETAIL)
-                    else:store.source(c,route,'error','상태줄 이벤트를 읽지 못했습니다.')
+                    if route is None:
+                        route = store.state(c, 'status_route:' + str(path)) or (
+                            'claude-code' if path.name == 'claude-code.json' else None
+                        )
+                    if route is None:
+                        continue
+                    if route in ended:
+                        store.source_changed(c, route, 'ended', USER_ENDED_DETAIL)
+                    else:
+                        store.source(c, route, 'error', '상태줄 이벤트를 읽지 못했습니다.')
 
 
-def prepare_normalization(store,settings):
+def prepare_normalization(store, settings):
     """Never discard retained history before a complete, reviewable replacement exists."""
     with store.connect() as c:
-        version=store.state(c,'normalized_version',0)
+        version = store.state(c, 'normalized_version', 0)
         # A full scan; only a pre-v3 store needs the count.
-        retained=c.execute("SELECT COUNT(*) FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'").fetchone()[0] if version<3 else 0
-    if version<3 and retained:
-        with tempfile.TemporaryDirectory(prefix='normalization-',dir=Path(store.path).parent) as folder:
-            staged=Store(Path(folder)/'usage.db',thresholds=settings.get('thresholds'))
-            collect_local(staged,settings,include_derived=False)
+        retained = (
+            c.execute(
+                "SELECT COUNT(*) FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'"
+            ).fetchone()[0]
+            if version < 3
+            else 0
+        )
+    if version < 3 and retained:
+        with tempfile.TemporaryDirectory(prefix='normalization-', dir=Path(store.path).parent) as folder:
+            staged = Store(Path(folder) / 'usage.db', thresholds=settings.get('thresholds'))
+            collect_local(staged, settings, include_derived=False)
             with store.connect() as c:
-                c.execute('ATTACH DATABASE ? AS staged',(staged.path,))
+                c.execute('ATTACH DATABASE ? AS staged', (staged.path,))
                 c.execute('BEGIN IMMEDIATE')
-                bad=c.execute("SELECT COUNT(*) FROM staged.sources WHERE status!='ok' AND name!='antigravity-records'").fetchone()[0]
+                bad = c.execute(
+                    "SELECT COUNT(*) FROM staged.sources WHERE status!='ok' AND name!='antigravity-records'"
+                ).fetchone()[0]
                 # Every retained observation must survive or have explicit proof that
                 # it is inherited. Merely finding a partial copy of a session is unsafe.
-                missing=c.execute("""SELECT COUNT(*) FROM events e WHERE
+                missing = c.execute("""SELECT COUNT(*) FROM events e WHERE
                   (e.route IN ('codex','claude-code') OR e.route LIKE 'codex:%')
                   AND NOT EXISTS (SELECT 1 FROM staged.events n WHERE n.id=e.id)
                   AND NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=e.id AND e.route!='claude-code')
-                  AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=e.id AND e.route!='claude-code')""").fetchone()[0]
-                missing+=c.execute('''SELECT COUNT(*) FROM codex_points p
+                  AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=e.id AND e.route!='claude-code')""").fetchone()[
+                    0
+                ]
+                missing += c.execute('''SELECT COUNT(*) FROM codex_points p
                   WHERE NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=p.id)
                   AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=p.id)''').fetchone()[0]
-                missing+=c.execute('''SELECT COUNT(*) FROM codex_responses p WHERE NOT EXISTS
+                missing += c.execute('''SELECT COUNT(*) FROM codex_responses p WHERE NOT EXISTS
                   (SELECT 1 FROM staged.codex_responses n WHERE n.id=p.id AND n.session=p.session AND n.usage=p.usage
                    AND (p.account IS NULL OR n.account IS NULL OR p.account=n.account))''').fetchone()[0]
                 if bad or missing:
-                    store.source(c,'normalization','error','원본을 모두 복구할 수 없어 보정을 보류했습니다. 기존 통계를 유지합니다.')
+                    store.source(
+                        c,
+                        'normalization',
+                        'error',
+                        '원본을 모두 복구할 수 없어 보정을 보류했습니다. 기존 통계를 유지합니다.',
+                    )
                     return False
                 c.execute('DELETE FROM codex_points')
                 c.execute('INSERT INTO codex_points SELECT * FROM staged.codex_points')
@@ -474,7 +734,9 @@ def prepare_normalization(store,settings):
                   (SELECT e.account FROM main.events e WHERE e.id=staged.events.id),
                   (SELECT e.account FROM main.events e WHERE e.id=staged.events.parent_id)) WHERE account IS NULL''')
                 c.execute("DELETE FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
-                c.execute("INSERT INTO events SELECT * FROM staged.events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
+                c.execute(
+                    "INSERT INTO events SELECT * FROM staged.events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'"
+                )
                 # Native projection and cloud/telemetry deduplication require the
                 # same evidence that produced the copied events and checkpoints.
                 c.execute('INSERT OR IGNORE INTO usage_aliases SELECT * FROM staged.usage_aliases')
@@ -483,166 +745,223 @@ def prepare_normalization(store,settings):
                 c.execute("DELETE FROM state WHERE key LIKE 'file:%' OR key LIKE 'permanent_errors:%'")
                 c.execute("DELETE FROM import_errors WHERE source LIKE 'file:%'")
                 c.execute("INSERT INTO state SELECT * FROM staged.state WHERE key LIKE 'file:%'")
-                store.save_state(c,'normalized_version',3)
+                store.save_state(c, 'normalized_version', 3)
                 store.bump_data_version(c)
     with store.connect() as c:
-        if version<4:
-            for row in c.execute('SELECT DISTINCT session FROM codex_points').fetchall():store.rebuild_codex(c,row['session'])
-            store.save_state(c,'normalized_version',4)
-        store.source(c,'normalization','ok','카운터 초기화 구간을 구분한 집계')
+        if version < 4:
+            for row in c.execute('SELECT DISTINCT session FROM codex_points').fetchall():
+                store.rebuild_codex(c, row['session'])
+            store.save_state(c, 'normalized_version', 4)
+        store.source(c, 'normalization', 'ok', '카운터 초기화 구간을 구분한 집계')
     return True
 
 
 def _codex_meta(line):
     try:
-        d=json.loads(line)
+        d = json.loads(line)
     except ValueError:
         return None
-    return d.get('payload',{}) if d.get('type')=='session_meta' else None
+    return d.get('payload', {}) if d.get('type') == 'session_meta' else None
 
 
 def _codex_kind(meta):
-    source=meta.get('source')
-    if meta.get('thread_source')=='subagent' or (isinstance(source,dict) and source.get('subagent')):return 'sub'
-    if meta.get('forked_from_id') or meta.get('parent_thread_id'):return 'fork'
+    source = meta.get('source')
+    if meta.get('thread_source') == 'subagent' or (isinstance(source, dict) and source.get('subagent')):
+        return 'sub'
+    if meta.get('forked_from_id') or meta.get('parent_thread_id'):
+        return 'fork'
     return 'main'
 
 
-def backfill_jsonl(store,path,route):
+def backfill_jsonl(store, path, route):
     """Attribute pre-migration events from one JSONL record file."""
     if route.startswith('codex'):
-        meta=None
+        meta = None
         with open_record(path) as f:
             for line in f:
-                if b'session_meta' not in line:continue
-                meta=_codex_meta(line)
-                if meta:break
-        sid=(meta or {}).get('id') or (meta or {}).get('session_id')
-        if not sid:return
+                if b'session_meta' not in line:
+                    continue
+                meta = _codex_meta(line)
+                if meta:
+                    break
+        sid = (meta or {}).get('id') or (meta or {}).get('session_id')
+        if not sid:
+            return
         with store.connect() as c:
-            c.execute('''UPDATE events SET session=?,project=?,agent_kind=? WHERE session IS NULL
+            c.execute(
+                '''UPDATE events SET session=?,project=?,agent_kind=? WHERE session IS NULL
               AND id IN (SELECT id FROM codex_points WHERE session=?)''',
-                      (sid,project_label(meta.get('cwd')),_codex_kind(meta),identity(sid)))
+                (sid, project_label(meta.get('cwd')), _codex_kind(meta), identity(sid)),
+            )
             store.bump_data_version(c)
-    elif route=='claude-code':
-        updates={}
+    elif route == 'claude-code':
+        updates = {}
         with open_record(path) as f:
             for line in f:
-                if b'"assistant"' not in line:continue
-                try:d=json.loads(line)
-                except ValueError:continue
-                if d.get('type')!='assistant':continue
-                mid=(d.get('message') or {}).get('id')
+                if b'"assistant"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get('type') != 'assistant':
+                    continue
+                mid = (d.get('message') or {}).get('id')
                 if mid and mid not in updates:
-                    updates[mid]=(d.get('sessionId'),project_label(d.get('cwd')),
-                                  'sub' if d.get('isSidechain') else 'main',identity('claude-code',mid))
+                    updates[mid] = (
+                        d.get('sessionId'),
+                        project_label(d.get('cwd')),
+                        'sub' if d.get('isSidechain') else 'main',
+                        identity('claude-code', mid),
+                    )
         if updates:
             with store.connect() as c:
-                c.executemany('UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
-                              list(updates.values()))
+                c.executemany(
+                    'UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
+                    list(updates.values()),
+                )
                 store.bump_data_version(c)
 
 
-def backfill_opencode(store,path):
-    src=open_readonly(path)
+def backfill_opencode(store, path):
+    src = open_readonly(path)
     try:
-        has_session=src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
-        cols={r[1] for r in src.execute('PRAGMA table_info(message)')}
-        rows=src.execute(('SELECT m.id,m.session_id,s.directory,s.parent_id FROM message m '
-                          'LEFT JOIN session s ON s.id=m.session_id') if has_session else
-                         'SELECT id,'+('session_id' if 'session_id' in cols else 'NULL')+',NULL,NULL FROM message').fetchall()
-    finally:src.close()
+        has_session = (
+            src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
+        )
+        cols = {r[1] for r in src.execute('PRAGMA table_info(message)')}
+        rows = src.execute(
+            ('SELECT m.id,m.session_id,s.directory,s.parent_id FROM message m LEFT JOIN session s ON s.id=m.session_id')
+            if has_session
+            else 'SELECT id,' + ('session_id' if 'session_id' in cols else 'NULL') + ',NULL,NULL FROM message'
+        ).fetchall()
+    finally:
+        src.close()
     with store.connect() as c:
-        c.executemany('UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
-                      [(sid,project_label(d),'sub' if p else 'main',identity('opencode',mid))
-                       for mid,sid,d,p in rows])
+        c.executemany(
+            'UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
+            [(sid, project_label(d), 'sub' if p else 'main', identity('opencode', mid)) for mid, sid, d, p in rows],
+        )
         store.bump_data_version(c)
 
 
-def backfill_devin(store,settings):
+def backfill_devin(store, settings):
     from .devin import roots, open_db
-    for name,path in roots(settings):
-        if not path.exists():continue
-        src,tmp=open_db(path)
+
+    for name, path in roots(settings):
+        if not path.exists():
+            continue
+        src, tmp = open_db(path)
         try:
-            has_sessions=src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() is not None
-            dirs={r['id']:r['working_directory'] for r in src.execute('SELECT id,working_directory FROM sessions')} if has_sessions else {}
-            updates=[]
+            has_sessions = (
+                src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() is not None
+            )
+            dirs = (
+                {r['id']: r['working_directory'] for r in src.execute('SELECT id,working_directory FROM sessions')}
+                if has_sessions
+                else {}
+            )
+            updates = []
             for row in src.execute('SELECT session_id,chat_message FROM message_nodes'):
-                try:d=json.loads(row['chat_message'])
-                except (ValueError,TypeError):continue
-                if d.get('role')!='assistant':continue
-                rid=((d.get('metadata') or {}).get('metrics') or {}) and (d.get('metadata') or {}).get('request_id')
-                if not rid:continue
-                updates.append((row['session_id'],project_label(dirs.get(row['session_id'])),'main',
-                                identity('devin',rid)))
+                try:
+                    d = json.loads(row['chat_message'])
+                except (ValueError, TypeError):
+                    continue
+                if d.get('role') != 'assistant':
+                    continue
+                rid = ((d.get('metadata') or {}).get('metrics') or {}) and (d.get('metadata') or {}).get('request_id')
+                if not rid:
+                    continue
+                updates.append(
+                    (row['session_id'], project_label(dirs.get(row['session_id'])), 'main', identity('devin', rid))
+                )
         finally:
             src.close()
             if tmp:
-                import shutil;shutil.rmtree(tmp,ignore_errors=True)
+                import shutil
+
+                shutil.rmtree(tmp, ignore_errors=True)
         with store.connect() as c:
-            c.executemany('UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',updates)
+            c.executemany('UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL', updates)
             store.bump_data_version(c)
 
 
-def backfill_attribution(store,settings):
+def backfill_attribution(store, settings):
     """One-time session/project/agent_kind attribution for pre-migration events."""
     with store.connect() as c:
-        if store.state(c,'backfill_v2'):return
-        store.source(c,'session-backfill','partial','세션·프로젝트 귀속 백필 진행 중')
-    failures=[]
-    for source in local_sources(store,settings):
-        kind=source.get('kind');route=source.get('route') or '';root=Path(source['path'])
-        if kind in ('antigravity','devin') or not root.exists():continue
+        if store.state(c, 'backfill_v2'):
+            return
+        store.source(c, 'session-backfill', 'partial', '세션·프로젝트 귀속 백필 진행 중')
+    failures = []
+    for source in local_sources(store, settings):
+        kind = source.get('kind')
+        route = source.get('route') or ''
+        root = Path(source['path'])
+        if kind in ('antigravity', 'devin') or not root.exists():
+            continue
         try:
-            if kind=='opencode':backfill_opencode(store,root)
-            elif route=='claude-code' or route.startswith('codex'):
-                for path in record_files(root):backfill_jsonl(store,path,route)
-        except (OSError,sqlite3.Error,EOFError,RecordReadError):
+            if kind == 'opencode':
+                backfill_opencode(store, root)
+            elif route == 'claude-code' or route.startswith('codex'):
+                for path in record_files(root):
+                    backfill_jsonl(store, path, route)
+        except (OSError, sqlite3.Error, EOFError, RecordReadError):
             failures.append(source['name'])
-    try:backfill_devin(store,settings)
-    except (OSError,sqlite3.Error):failures.append('devin')
+    try:
+        backfill_devin(store, settings)
+    except (OSError, sqlite3.Error):
+        failures.append('devin')
     with store.connect() as c:
         if failures:
             # Leave the flag unset so the next collector run retries.
-            store.source(c,'session-backfill','error','백필 실패 ('+','.join(failures)+') · 다음 수집에서 재시도')
+            store.source(
+                c, 'session-backfill', 'error', '백필 실패 (' + ','.join(failures) + ') · 다음 수집에서 재시도'
+            )
         else:
-            store.save_state(c,'backfill_v2',True)
-            store.source(c,'session-backfill','ok','기존 기록의 세션·프로젝트 귀속 완료')
+            store.save_state(c, 'backfill_v2', True)
+            store.source(c, 'session-backfill', 'ok', '기존 기록의 세션·프로젝트 귀속 완료')
 
 
-def write_summaries(store,settings):
+def write_summaries(store, settings):
     """Opt-in (statusline_summary: true): the one-line quota summary the status-line
     wrapper appends below the tool's own line. Inboxes the service cannot write
     (Windows homes under the read-only sandbox) are skipped."""
     from .config import ended_routes
     from .notify import brief_line
-    line=brief_line(store.limits(ended=ended_routes(settings),names=settings.get('claude_account_names')))
-    for folder in settings.get('status_inboxes',[]):
+
+    line = brief_line(store.limits(ended=ended_routes(settings), names=settings.get('claude_account_names')))
+    for folder in settings.get('status_inboxes', []):
         try:
-            path=Path(folder);tmp=path/'summary.txt.tmp'
-            tmp.write_text(line+'\n');os.replace(tmp,path/'summary.txt')
-        except OSError:pass
+            path = Path(folder)
+            tmp = path / 'summary.txt.tmp'
+            tmp.write_text(line + '\n')
+            os.replace(tmp, path / 'summary.txt')
+        except OSError:
+            pass
 
 
-DAY=86400
-RETRY_AFTER_FAILURE=3600
+DAY = 86400
+RETRY_AFTER_FAILURE = 3600
 # The idle loop turns every 2 seconds; its heartbeat is written this often. The page calls
 # the collector stopped after stale_seconds (60 at the least), a restart notice after 10 minutes.
-HEARTBEAT_SECONDS=30
-LOCAL_SETTINGS_SOURCE='웹 설정'
+HEARTBEAT_SECONDS = 30
+LOCAL_SETTINGS_SOURCE = '웹 설정'
 
 
-def report_local_settings(store,settings):
+def report_local_settings(store, settings):
     """Say so when local.json cannot be read: the collector then runs on the base settings."""
-    problem=local_problem(settings)
+    problem = local_problem(settings)
     with store.connect() as c:
         if problem:
-            store.source_changed(c,LOCAL_SETTINGS_SOURCE,'error',
-                                 f'local.json을 읽지 못했습니다 ({problem}) · 웹에서 바꾼 알림·구독료·종료 구독 설정이 적용되지 않습니다.')
-        elif c.execute('SELECT 1 FROM sources WHERE name=?',(LOCAL_SETTINGS_SOURCE,)).fetchone():
-            c.execute('DELETE FROM sources WHERE name=?',(LOCAL_SETTINGS_SOURCE,))
-            c.execute('DELETE FROM source_health WHERE name=?',(LOCAL_SETTINGS_SOURCE,))
+            store.source_changed(
+                c,
+                LOCAL_SETTINGS_SOURCE,
+                'error',
+                f'local.json을 읽지 못했습니다 ({problem}) · 웹에서 바꾼 알림·구독료·종료 구독 설정이 적용되지 않습니다.',
+            )
+        elif c.execute('SELECT 1 FROM sources WHERE name=?', (LOCAL_SETTINGS_SOURCE,)).fetchone():
+            c.execute('DELETE FROM sources WHERE name=?', (LOCAL_SETTINGS_SOURCE,))
+            c.execute('DELETE FROM source_health WHERE name=?', (LOCAL_SETTINGS_SOURCE,))
 
 
 def sd_notify(message):
@@ -650,152 +969,231 @@ def sd_notify(message):
 
     With WatchdogSec set on the unit, a loop that stops pinging (a hang, not only
     an exit) is restarted by systemd."""
-    address=os.environ.get('NOTIFY_SOCKET')
-    if not address:return
-    if address.startswith('@'):address='\0'+address[1:]
+    address = os.environ.get('NOTIFY_SOCKET')
+    if not address:
+        return
+    if address.startswith('@'):
+        address = '\0' + address[1:]
     try:
-        with socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM) as sock:
-            sock.connect(address);sock.sendall(message.encode())
-    except OSError:pass
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(address)
+            sock.sendall(message.encode())
+    except OSError:
+        pass
 
 
-def due(last,ok,now):
+def due(last, ok, now):
     """Daily jobs; a failed run is retried after an hour instead of a day."""
-    return now-last>=(DAY if ok else RETRY_AFTER_FAILURE)
+    return now - last >= (DAY if ok else RETRY_AFTER_FAILURE)
 
 
-def sync_thresholds(store,settings,seen):
+def sync_thresholds(store, settings, seen):
     """Apply thresholds edited in the web UI (local.json) without a restart.
 
     Returns the local.json mtime to pass back as `seen` on the next call.
     """
-    try:mtime=local_path(settings).stat().st_mtime_ns
-    except OSError:mtime=None
-    if mtime!=seen:
-        store.thresholds={**Store.DEFAULT_THRESHOLDS,**(with_local(settings).get('thresholds') or {})}
+    try:
+        mtime = local_path(settings).stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    if mtime != seen:
+        store.thresholds = {**Store.DEFAULT_THRESHOLDS, **(with_local(settings).get('thresholds') or {})}
     return mtime
 
 
-def run(settings,once=False):
-    store=Store(settings['database'],thresholds=settings.get('thresholds'))
-    lock=Path(settings['database']).parent/'collector.lock'
+def run(settings, once=False):
+    store = Store(settings['database'], thresholds=settings.get('thresholds'))
+    lock = Path(settings['database']).parent / 'collector.lock'
     with lock.open('w') as handle:
-        try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if once:return
-            fcntl.flock(handle,fcntl.LOCK_EX)
+            if once:
+                return
+            fcntl.flock(handle, fcntl.LOCK_EX)
         repair_provider_labels(store)
         retire_legacy_sources(store)
         store.rebuild_rollup()
-        last_local=last_limits=last_accounts=0
+        last_local = last_limits = last_accounts = 0
         with store.connect() as c:
-            backup=store.state(c,'backup',{}) or {};verify=store.state(c,'verify',{}) or {}
+            backup = store.state(c, 'backup', {}) or {}
+            verify = store.state(c, 'verify', {}) or {}
         from .verify import VERIFY_FORMAT
-        last_backup,backup_ok=backup.get('ts',0),backup.get('ok',True)
-        last_verify,verify_ok=verify.get('ts',0) if verify.get('format')==VERIFY_FORMAT else 0,verify.get('ok',True)
-        local_seen=False;last_beat=0
-        from .notify import collector_started,evaluate as notify_evaluate,record_failure as notify_failure
-        try:collector_started(store,with_local(settings).get('notify'))
-        except Exception as exc:notify_failure(store,exc)  # never stops collection
+
+        last_backup, backup_ok = backup.get('ts', 0), backup.get('ok', True)
+        last_verify, verify_ok = (
+            verify.get('ts', 0) if verify.get('format') == VERIFY_FORMAT else 0,
+            verify.get('ok', True),
+        )
+        local_seen = False
+        last_beat = 0
+        from .notify import collector_started, evaluate as notify_evaluate, record_failure as notify_failure
+
+        try:
+            collector_started(store, with_local(settings).get('notify'))
+        except Exception as exc:
+            notify_failure(store, exc)  # never stops collection
         sd_notify('READY=1')
         while True:
             sd_notify('WATCHDOG=1')
-            local_seen=sync_thresholds(store,settings,local_seen)
+            local_seen = sync_thresholds(store, settings, local_seen)
             # Web-edited keys (ended subscriptions, account names) apply without a restart.
-            current_settings=with_local(settings)
-            collect_status(store,current_settings)
+            current_settings = with_local(settings)
+            collect_status(store, current_settings)
             # Often enough to see short-lived processes (a commit review lives ~20 s).
-            if time.time()-last_accounts>=5:
+            if time.time() - last_accounts >= 5:
                 # Which Claude account handles each session: hook markers and live processes.
                 from .claude_attribution import refresh as attribute_accounts
-                attribute_accounts(store,current_settings);last_accounts=time.time()
+
+                attribute_accounts(store, current_settings)
+                last_accounts = time.time()
             with store.connect() as c:
-                request=store.state(c,'refresh_request_id',0)
-                requested_at=store.state(c,'refresh_requested',0)
-                completed=store.state(c,'refresh_completed_id',0)
-            now=time.time()
-            manual=request>completed
-            collecting=once or manual or now-last_local>=300
+                request = store.state(c, 'refresh_request_id', 0)
+                requested_at = store.state(c, 'refresh_requested', 0)
+                completed = store.state(c, 'refresh_completed_id', 0)
+            now = time.time()
+            manual = request > completed
+            collecting = once or manual or now - last_local >= 300
             if collecting:
-                with store.connect() as c:store.save_state(c,'collector',dict(status='collecting',started=now,checked=now))
-                if prepare_normalization(store,settings):
-                    backfill_attribution(store,settings)
-                    collect_local(store,settings)
+                with store.connect() as c:
+                    store.save_state(c, 'collector', dict(status='collecting', started=now, checked=now))
+                if prepare_normalization(store, settings):
+                    backfill_attribution(store, settings)
+                    collect_local(store, settings)
                     from .telemetry import resolve
-                    with store.connect() as c:resolve(store,c)
+
+                    with store.connect() as c:
+                        resolve(store, c)
                     from .claude_attribution import refresh as attribute_accounts
-                    attribute_accounts(store,current_settings,evidence=False)
-                last_local=time.time()
-            if once or manual or now-last_limits>=300:
-                poll_limits(store,current_settings,manual=manual)
+
+                    attribute_accounts(store, current_settings, evidence=False)
+                last_local = time.time()
+            if once or manual or now - last_limits >= 300:
+                poll_limits(store, current_settings, manual=manual)
                 from .codex_activity_collect import collect as collect_activity
-                collect_activity(store,current_settings)
-                last_limits=time.time()
-                if current_settings.get('statusline_summary'):write_summaries(store,current_settings)
-                report_local_settings(store,settings)
+
+                collect_activity(store, current_settings)
+                last_limits = time.time()
+                if current_settings.get('statusline_summary'):
+                    write_summaries(store, current_settings)
+                report_local_settings(store, settings)
                 if not once:
                     from .pricing import load_pricing
                     from .reconciliation import held
-                    current=time.time();local=with_local(settings)
+
+                    current = time.time()
+                    local = with_local(settings)
                     # Three steps that fail apart: a broken one is named and never keeps the
                     # other two, or collection, from running.
                     try:
                         from .signals import usage_spike
+
                         with store.connect() as c:
-                            spike=usage_spike(c,current)
-                            sources=[dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
-                            month=store.project_month(c,current,load_pricing(local))
+                            spike = usage_spike(c, current)
+                            sources = [dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
+                            month = store.project_month(c, current, load_pricing(local))
                         from .config import ended_routes
-                        notify_evaluate(store,local.get('notify'),current,store.limits(current,ended_routes(local),local.get('claude_account_names')),
-                                        spike,sources,month,local.get('project_budgets'))
-                    except Exception as exc:notify_failure(store,exc)
+
+                        notify_evaluate(
+                            store,
+                            local.get('notify'),
+                            current,
+                            store.limits(current, ended_routes(local), local.get('claude_account_names')),
+                            spike,
+                            sources,
+                            month,
+                            local.get('project_budgets'),
+                        )
+                    except Exception as exc:
+                        notify_failure(store, exc)
                     # The weekly and monthly checks read the same supplements.
                     with held():
                         try:
-                            from .reports import ensure_report,summary as report_summary
-                            weekly=ensure_report(store,current,load_pricing(local))
+                            from .reports import ensure_report, summary as report_summary
+
+                            weekly = ensure_report(store, current, load_pricing(local))
                             if weekly:
                                 from .notify import deliver
-                                deliver(store,local.get('notify'),[('report',f"주간 리포트 {weekly['start']} ~ {weekly['end']}",report_summary(weekly,local.get('residual_label'),local.get('claude_account_names')))],current)
-                        except Exception as exc:notify_failure(store,exc,'주간 리포트 생성')
+
+                                deliver(
+                                    store,
+                                    local.get('notify'),
+                                    [
+                                        (
+                                            'report',
+                                            f"주간 리포트 {weekly['start']} ~ {weekly['end']}",
+                                            report_summary(
+                                                weekly, local.get('residual_label'), local.get('claude_account_names')
+                                            ),
+                                        )
+                                    ],
+                                    current,
+                                )
+                        except Exception as exc:
+                            notify_failure(store, exc, '주간 리포트 생성')
                         try:
                             from .monthly import ensure_months
-                            ensure_months(store,current,load_pricing(local),local.get('subscription_prices'),local.get('ended_subscriptions'),
-                                          local.get('subscription_price_history'))
-                        except Exception as exc:notify_failure(store,exc,'월 정산 생성')
+
+                            ensure_months(
+                                store,
+                                current,
+                                load_pricing(local),
+                                local.get('subscription_prices'),
+                                local.get('ended_subscriptions'),
+                                local.get('subscription_price_history'),
+                            )
+                        except Exception as exc:
+                            notify_failure(store, exc, '월 정산 생성')
             sd_notify('WATCHDOG=1')
-            if not once and due(last_backup,backup_ok,now):
+            if not once and due(last_backup, backup_ok, now):
                 from .backup import backup_now
-                result=backup_now(settings['database'])
+
+                result = backup_now(settings['database'])
                 with store.connect() as c:
-                    store.save_state(c,'backup',result)
+                    store.save_state(c, 'backup', result)
                     # Refresh the planner's statistics once a day; cheap when nothing changed.
                     c.execute('PRAGMA optimize')
-                last_backup=time.time();backup_ok=bool(result.get('ok'))
+                last_backup = time.time()
+                backup_ok = bool(result.get('ok'))
             sd_notify('WATCHDOG=1')
-            if not once and due(last_verify,verify_ok,now):
-                from .verify import failed,reconcile
+            if not once and due(last_verify, verify_ok, now):
+                from .verify import failed, reconcile
+
                 try:
-                    result=reconcile(settings['database'],settings)
-                    sections={section:{k:v for k,v in counts.items() if k!='mismatch_samples'}
-                              for section,counts in result.items()}
+                    result = reconcile(settings['database'], settings)
+                    sections = {
+                        section: {k: v for k, v in counts.items() if k != 'mismatch_samples'}
+                        for section, counts in result.items()
+                    }
                     # The hourly rollup must equal the events it summarises; rebuild it if not.
-                    rollup_ok=store.rollup_matches()
-                    if not rollup_ok:store.rebuild_rollup()
-                    outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=not failed(result) and rollup_ok,rollup=dict(matches=rollup_ok),**sections)
+                    rollup_ok = store.rollup_matches()
+                    if not rollup_ok:
+                        store.rebuild_rollup()
+                    outcome = dict(
+                        ts=time.time(),
+                        format=VERIFY_FORMAT,
+                        ok=not failed(result) and rollup_ok,
+                        rollup=dict(matches=rollup_ok),
+                        **sections,
+                    )
                 except Exception as e:
                     from .backup import error_text
-                    outcome=dict(ts=time.time(),format=VERIFY_FORMAT,ok=False,error=error_text(e))
-                with store.connect() as c:store.save_state(c,'verify',outcome)
-                last_verify=time.time();verify_ok=bool(outcome.get('ok'))
+
+                    outcome = dict(ts=time.time(), format=VERIFY_FORMAT, ok=False, error=error_text(e))
+                with store.connect() as c:
+                    store.save_state(c, 'verify', outcome)
+                last_verify = time.time()
+                verify_ok = bool(outcome.get('ok'))
             with store.connect() as c:
                 # After a pass, and twice a minute while idle: not a write every two seconds.
-                if collecting or manual or time.time()-last_beat>=HEARTBEAT_SECONDS:
-                    last_beat=time.time();store.save_state(c,'collector',dict(status='idle',checked=last_beat))
+                if collecting or manual or time.time() - last_beat >= HEARTBEAT_SECONDS:
+                    last_beat = time.time()
+                    store.save_state(c, 'collector', dict(status='idle', checked=last_beat))
                 # A request arriving during these calls stays pending for the next loop.
                 if manual:
-                    store.save_state(c,'refresh_completed_id',request)
-                    store.save_state(c,'refresh_completed',requested_at)
+                    store.save_state(c, 'refresh_completed_id', request)
+                    store.save_state(c, 'refresh_completed', requested_at)
                 store.prune_history(c)
-            if once:return
+            if once:
+                return
             time.sleep(2)

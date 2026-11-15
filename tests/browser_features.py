@@ -1,4 +1,5 @@
 """Portable Chromium regression checks using disposable synthetic data and local assets."""
+
 from browser_support import CSP_HEADERS, watch_csp, fixture_page, fixture_json, artifact_directory
 import argparse
 import json
@@ -16,71 +17,205 @@ origin = 'https://dashboard.test'
 output = artifact_directory(args.artifacts)
 output.mkdir(parents=True, exist_ok=True)
 now = time.time()
-SOURCES = [dict(name='수집기', status='ok', checked=now-20, detail='idle'),
-           dict(name='codex', status='error', checked=now-60, detail='HTTP 500'),
-           dict(name='claude-oauth', status='error', checked=now-60, last_success=now-300, detail='HTTP 503'),
-           dict(name='WSL .claude/projects', status='partial', checked=now-60, detail='12개 기록 파일 확인 · 해석 실패 1건'),
-           dict(name='claude-code', status='idle', checked=now-3*86400, detail='최근 24시간 상태줄 수신 없음'),
-           dict(name='normalization', status='ok', checked=now-60, detail='카운터 초기화 구간을 구분한 집계'),
-           dict(name='devin', status='ok', checked=now-60, detail='계정 사용량 조회')]
-SESSION = dict(session='fixture-session', project='fixture-project', kind='main', first_ts=now-7200, last_ts=now-600, requests=12,
-               totals=dict(uncached_input=10, cached_input=900, output=50, cache_creation=40, reasoning=0), cache_share=95.2, cost=1.25,
-               models=[dict(route='codex', model='gpt-fixture', requests=12, uncached_input=10, cached_input=900, output=50, cache_creation=40,
-                            reasoning=0, first_ts=now-7200, last_ts=now-600, cost=1.25)],
-               hours=[dict(hour=int(now//3600-2)*3600, requests=5, tokens=500), dict(hour=int(now//3600-1)*3600, requests=7, tokens=500)])
+SOURCES = [
+    dict(name='수집기', status='ok', checked=now - 20, detail='idle'),
+    dict(name='codex', status='error', checked=now - 60, detail='HTTP 500'),
+    dict(name='claude-oauth', status='error', checked=now - 60, last_success=now - 300, detail='HTTP 503'),
+    dict(name='WSL .claude/projects', status='partial', checked=now - 60, detail='12개 기록 파일 확인 · 해석 실패 1건'),
+    dict(name='claude-code', status='idle', checked=now - 3 * 86400, detail='최근 24시간 상태줄 수신 없음'),
+    dict(name='normalization', status='ok', checked=now - 60, detail='카운터 초기화 구간을 구분한 집계'),
+    dict(name='devin', status='ok', checked=now - 60, detail='계정 사용량 조회'),
+]
+SESSION = dict(
+    session='fixture-session',
+    project='fixture-project',
+    kind='main',
+    first_ts=now - 7200,
+    last_ts=now - 600,
+    requests=12,
+    totals=dict(uncached_input=10, cached_input=900, output=50, cache_creation=40, reasoning=0),
+    cache_share=95.2,
+    cost=1.25,
+    models=[
+        dict(
+            route='codex',
+            model='gpt-fixture',
+            requests=12,
+            uncached_input=10,
+            cached_input=900,
+            output=50,
+            cache_creation=40,
+            reasoning=0,
+            first_ts=now - 7200,
+            last_ts=now - 600,
+            cost=1.25,
+        )
+    ],
+    hours=[
+        dict(hour=int(now // 3600 - 2) * 3600, requests=5, tokens=500),
+        dict(hour=int(now // 3600 - 1) * 3600, requests=7, tokens=500),
+    ],
+)
 posts = []
-REPORT = dict(week='2026-09-21', start='2026-09-21', end='2026-09-27', built=now, change_pct=12.5,
-              totals=dict(tokens=3.2e9, requests=4100, cost=812.5), previous=dict(tokens=2.84e9, requests=3900, cost=700),
-              routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
-              models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
-              exhausted=[dict(route='claude-code', bucket='five_hour', count=2)], busiest_day='2026-09-24',
-              facts=[dict(kind='exhausted', week='2026-09-21', route='claude-code', bucket='five_hour', count=2, streak=3),
-                     dict(kind='zero_hours', week='2026-09-21', route='claude-code', bucket='five_hour', hours=3.5)],
-              accounts=[dict(account='claude-code', label='Pro', tokens=4e8, cost=None),
-                        dict(account='claude-code:unknown', label='계정 미확인', tokens=1e8, cost=None)],
-              projects=[dict(project='fixture-project', tokens=2e9, cost=500.0), dict(project='미분류', tokens=1e9, cost=None)],
-              quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=150.5, zero_hours=0,
-                              resets_observed=1, before_reset=dict(avg=41.0, min=41.0, max=41.0), exhausted=0, streak=0),
-                         dict(route='claude-code', bucket='five_hour', observed_hours=120, zero_hours=3.5, resets_observed=18,
-                              before_reset=dict(avg=22.4, min=0.0, max=80.0), exhausted=2, streak=3),
-                         dict(route='claude-code', bucket='seven_day', observed_hours=0.5, zero_hours=0, resets_observed=0,
-                              before_reset=None, exhausted=0, streak=0)])
+REPORT = dict(
+    week='2026-09-21',
+    start='2026-09-21',
+    end='2026-09-27',
+    built=now,
+    change_pct=12.5,
+    totals=dict(tokens=3.2e9, requests=4100, cost=812.5),
+    previous=dict(tokens=2.84e9, requests=3900, cost=700),
+    routes=[dict(route='codex', tokens=2.5e9, requests=3000, cost=700.0, change_pct=20.0)],
+    models=[dict(model='gpt-fixture', route='codex', tokens=2.5e9, cost=700.0)],
+    exhausted=[dict(route='claude-code', bucket='five_hour', count=2)],
+    busiest_day='2026-09-24',
+    facts=[
+        dict(kind='exhausted', week='2026-09-21', route='claude-code', bucket='five_hour', count=2, streak=3),
+        dict(kind='zero_hours', week='2026-09-21', route='claude-code', bucket='five_hour', hours=3.5),
+    ],
+    accounts=[
+        dict(account='claude-code', label='Pro', tokens=4e8, cost=None),
+        dict(account='claude-code:unknown', label='계정 미확인', tokens=1e8, cost=None),
+    ],
+    projects=[dict(project='fixture-project', tokens=2e9, cost=500.0), dict(project='미분류', tokens=1e9, cost=None)],
+    quota_use=[
+        dict(
+            route='codex',
+            bucket='codex · 10080분',
+            display_name='Codex 공통 · 주간',
+            observed_hours=150.5,
+            zero_hours=0,
+            resets_observed=1,
+            before_reset=dict(avg=41.0, min=41.0, max=41.0),
+            exhausted=0,
+            streak=0,
+        ),
+        dict(
+            route='claude-code',
+            bucket='five_hour',
+            observed_hours=120,
+            zero_hours=3.5,
+            resets_observed=18,
+            before_reset=dict(avg=22.4, min=0.0, max=80.0),
+            exhausted=2,
+            streak=3,
+        ),
+        dict(
+            route='claude-code',
+            bucket='seven_day',
+            observed_hours=0.5,
+            zero_hours=0,
+            resets_observed=0,
+            before_reset=None,
+            exhausted=0,
+            streak=0,
+        ),
+    ],
+)
 
 # This week so far: last week up to the same point (Wednesday 12:00 KST) is the comparison.
-THIS_WEEK = dict(start='2026-09-28', end='2026-10-04', tokens=1.5e9, requests=2000, cost=400.0,
-                 prior=dict(mode='previous', label='직전 기간', start='2026-09-21T00:00:00+09:00', end_exclusive='2026-09-23T12:00:00+09:00',
-                            current_end='2026-09-30T12:00:00+09:00', running=True, complete=True, current_tokens=1.5e9, requests=1800,
-                            cost=300.0, uncached_input=1.2e9, cached_input=0, output=0, cache_creation=0),
-                 accounts=None, routes=[dict(route='codex', tokens=1e9), dict(route='claude-code', tokens=5e8)])
+THIS_WEEK = dict(
+    start='2026-09-28',
+    end='2026-10-04',
+    tokens=1.5e9,
+    requests=2000,
+    cost=400.0,
+    prior=dict(
+        mode='previous',
+        label='직전 기간',
+        start='2026-09-21T00:00:00+09:00',
+        end_exclusive='2026-09-23T12:00:00+09:00',
+        current_end='2026-09-30T12:00:00+09:00',
+        running=True,
+        complete=True,
+        current_tokens=1.5e9,
+        requests=1800,
+        cost=300.0,
+        uncached_input=1.2e9,
+        cached_input=0,
+        output=0,
+        cache_creation=0,
+    ),
+    accounts=None,
+    routes=[dict(route='codex', tokens=1e9), dict(route='claude-code', tokens=5e8)],
+)
 
 # Settled months: September whole, August partial with its quota history already pruned.
-MONTHS = [dict(month='2026-09', start='2026-09-01', end='2026-09-30', built=now, partial=False, records_from=None,
-               totals=dict(tokens=5.2e9, requests=40000, cost=4100.0, residual_tokens=3e8),
-               subscriptions=[dict(route='codex', monthly_usd=200, value=3600.0, tokens=4.5e9, ratio=18.0),
-                              dict(route='claude-code', monthly_usd=100, value=500.0, tokens=7e8, ratio=5.0),
-                              dict(route='devin', monthly_usd=None, value=20.0, tokens=1e8, ratio=None)],
-               models=[dict(model='gpt-fixture', route='codex', tokens=4.5e9, cost=3600.0)],
-               projects=[dict(project='fixture-project', tokens=3e9, cost=2000.0)], accounts=None, residual=None,
-               quota_use=[dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간', observed_hours=600, zero_hours=12.5,
-                               resets_observed=4, before_reset=dict(avg=10.0, min=0.0, max=30.0), exhausted=2),
-                          # Exhaustions counted from readings outside any observed interval.
-                          dict(route='claude-code', bucket='five_hour', observed_hours=0, zero_hours=0, resets_observed=0,
-                               before_reset=None, exhausted=15)],
-               quota_from=1788222600),
-          dict(month='2026-08', start='2026-08-01', end='2026-08-31', built=now, partial=True, records_from='2026-08-20',
-               totals=dict(tokens=1e8, requests=900, cost=100.0, residual_tokens=0),
-               subscriptions=[dict(route='codex', monthly_usd=200, value=100.0, tokens=1e8, ratio=0.5)],
-               models=[], projects=[], accounts=None, residual=None, quota_use=None, quota_from=None)]
+MONTHS = [
+    dict(
+        month='2026-09',
+        start='2026-09-01',
+        end='2026-09-30',
+        built=now,
+        partial=False,
+        records_from=None,
+        totals=dict(tokens=5.2e9, requests=40000, cost=4100.0, residual_tokens=3e8),
+        subscriptions=[
+            dict(route='codex', monthly_usd=200, value=3600.0, tokens=4.5e9, ratio=18.0),
+            dict(route='claude-code', monthly_usd=100, value=500.0, tokens=7e8, ratio=5.0),
+            dict(route='devin', monthly_usd=None, value=20.0, tokens=1e8, ratio=None),
+        ],
+        models=[dict(model='gpt-fixture', route='codex', tokens=4.5e9, cost=3600.0)],
+        projects=[dict(project='fixture-project', tokens=3e9, cost=2000.0)],
+        accounts=None,
+        residual=None,
+        quota_use=[
+            dict(
+                route='codex',
+                bucket='codex · 10080분',
+                display_name='Codex 공통 · 주간',
+                observed_hours=600,
+                zero_hours=12.5,
+                resets_observed=4,
+                before_reset=dict(avg=10.0, min=0.0, max=30.0),
+                exhausted=2,
+            ),
+            # Exhaustions counted from readings outside any observed interval.
+            dict(
+                route='claude-code',
+                bucket='five_hour',
+                observed_hours=0,
+                zero_hours=0,
+                resets_observed=0,
+                before_reset=None,
+                exhausted=15,
+            ),
+        ],
+        quota_from=1788222600,
+    ),
+    dict(
+        month='2026-08',
+        start='2026-08-01',
+        end='2026-08-31',
+        built=now,
+        partial=True,
+        records_from='2026-08-20',
+        totals=dict(tokens=1e8, requests=900, cost=100.0, residual_tokens=0),
+        subscriptions=[dict(route='codex', monthly_usd=200, value=100.0, tokens=1e8, ratio=0.5)],
+        models=[],
+        projects=[],
+        accounts=None,
+        residual=None,
+        quota_use=None,
+        quota_from=None,
+    ),
+]
 
 
 def preview(page):
     def serve(route):
-        request = route.request; path = urlsplit(request.url).path
+        request = route.request
+        path = urlsplit(request.url).path
         if request.method == 'POST':
             posts.append((path, json.loads(request.post_data or '{}')))
             if path == '/api/config/notify':
-                route.fulfill(json=dict(channels=dict(ntfy='ntfy.sh', webhook='hooks.example', telegram=None),
-                                        events=dict(low=True, exhausted=True, recovered=True, spike=False, collector=True, source=True), quiet=[23, 7]))
+                route.fulfill(
+                    json=dict(
+                        channels=dict(ntfy='ntfy.sh', webhook='hooks.example', telegram=None),
+                        events=dict(low=True, exhausted=True, recovered=True, spike=False, collector=True, source=True),
+                        quiet=[23, 7],
+                    )
+                )
             elif path == '/api/notify/test':
                 route.fulfill(json=dict(channels=['ntfy', 'webhook'], errors={}))
             elif path == '/api/config/project-budgets':
@@ -92,15 +227,44 @@ def preview(page):
             data = fixture_json(route.request)
             if parse_qs(urlsplit(request.url).query).get('sections') != ['insights']:
                 data['sources'] = SOURCES
-                data['spike'] = dict(hour_start=int(now//3600)*3600, tokens=60e6, baseline=12e6, ratio=5.0, current=True)
+                data['spike'] = dict(
+                    hour_start=int(now // 3600) * 3600, tokens=60e6, baseline=12e6, ratio=5.0, current=True
+                )
                 data['unpriced_models'] = ['brand-new-model']
             data['project_budgets'] = {'fixture-project': dict(tokens=1000, usd=None)}
-            data['project_month'] = dict(month='2026-10', projects={'fixture-project': dict(tokens=900, cost=None, priced_share=0)})
-            data['projects'] = [dict(project='fixture-project', sessions=1, last_ts=now-600, requests=12, uncached_input=10,
-                                     cached_input=900, output=50, cache_creation=40, cost=1.25)]
+            data['project_month'] = dict(
+                month='2026-10', projects={'fixture-project': dict(tokens=900, cost=None, priced_share=0)}
+            )
+            data['projects'] = [
+                dict(
+                    project='fixture-project',
+                    sessions=1,
+                    last_ts=now - 600,
+                    requests=12,
+                    uncached_input=10,
+                    cached_input=900,
+                    output=50,
+                    cache_creation=40,
+                    cost=1.25,
+                )
+            ]
             data.setdefault('sessions', [])
-            data['sessions'] = [dict(session='fixture-session', route='codex', project='fixture-project', kind='main', first_ts=now-7200,
-                                     last_ts=now-600, requests=12, uncached_input=10, cached_input=900, output=50, cache_creation=40, cost=1.25)]
+            data['sessions'] = [
+                dict(
+                    session='fixture-session',
+                    route='codex',
+                    project='fixture-project',
+                    kind='main',
+                    first_ts=now - 7200,
+                    last_ts=now - 600,
+                    requests=12,
+                    uncached_input=10,
+                    cached_input=900,
+                    output=50,
+                    cache_creation=40,
+                    cost=1.25,
+                )
+            ]
             data['sessions_total'] = 1
             route.fulfill(json=data)
         elif path == '/api/reports':
@@ -110,28 +274,37 @@ def preview(page):
         elif path == '/api/config':
             data = fixture_json(route.request)
             data['project_budgets'] = {'fixture-project': dict(tokens=1000, usd=None)}
-            data['notify'] = dict(channels=dict(ntfy='ntfy.sh', webhook=None, telegram=None),
-                                  events=dict(low=True, exhausted=True, recovered=True, spike=True, collector=True, source=True), quiet=None)
+            data['notify'] = dict(
+                channels=dict(ntfy='ntfy.sh', webhook=None, telegram=None),
+                events=dict(low=True, exhausted=True, recovered=True, spike=True, collector=True, source=True),
+                quiet=None,
+            )
             route.fulfill(json=data)
         elif args.preview_assets and path == '/':
-            route.fulfill(path=args.preview_assets.resolve()/'index.html', content_type='text/html',headers=CSP_HEADERS)
+            route.fulfill(
+                path=args.preview_assets.resolve() / 'index.html', content_type='text/html', headers=CSP_HEADERS
+            )
         elif args.preview_assets and path.startswith('/assets/'):
             name = Path(path).name
-            route.fulfill(path=args.preview_assets.resolve()/name,
-                          content_type='text/css' if name.endswith('.css') else 'text/javascript')
+            route.fulfill(
+                path=args.preview_assets.resolve() / name,
+                content_type='text/css' if name.endswith('.css') else 'text/javascript',
+            )
         else:
             route.fallback()
-    page.route(origin+'/**', serve)
+
+    page.route(origin + '/**', serve)
 
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
     errors = []
-    page = browser.new_page(service_workers='block',viewport={'width': 1440, 'height': 1000})
+    page = browser.new_page(service_workers='block', viewport={'width': 1440, 'height': 1000})
     fixture_page(page)
-    page.on('pageerror', lambda error: errors.append(str(error)));watch_csp(page,errors)
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    watch_csp(page, errors)
     preview(page)
-    assert page.goto(origin+'/').status == 200
+    assert page.goto(origin + '/').status == 200
     expect(page.locator('#refresh')).to_be_enabled()
     page.evaluate("$('auto').checked=false;$('auto').dispatchEvent(new Event('change'))")
     alerts = page.locator('#alerts')
@@ -144,23 +317,29 @@ with sync_playwright() as p:
     expect(page.locator('#data-status')).to_have_text('조치 필요 1')
     page.locator('#data-status').click()
     expect(page.locator('#quality .q-ok, #quality .q-warn').first).to_be_visible()
-    assert page.locator('.source-summary > span').all_text_contents()==['조치 필요 1','일시 실패 1','일부만 확인 1','수집하지 않음 1','정상 3']
+    assert page.locator('.source-summary > span').all_text_contents() == [
+        '조치 필요 1',
+        '일시 실패 1',
+        '일부만 확인 1',
+        '수집하지 않음 1',
+        '정상 3',
+    ]
     action = page.locator('#sources .source-action')
     expect(action.locator('h4')).to_have_text('조치 필요 1개')
-    assert action.locator('.source strong').all_text_contents()==['codex']
+    assert action.locator('.source strong').all_text_contents() == ['codex']
     expect(action.locator('.source').first).to_be_visible()
     expect(action).to_contain_text('원인을 확인')
     retry = page.locator('#sources .source-retry')
-    assert retry.locator('.source strong').all_text_contents()==['claude-oauth']
+    assert retry.locator('.source strong').all_text_contents() == ['claude-oauth']
     expect(retry).to_contain_text('다음 수집 주기에 다시 시도')
     partly = page.locator('#sources .source-partly')
     expect(partly.locator('li').first).to_contain_text('WSL .claude/projects · 일부 미수집')
     expect(partly.locator('li').first).to_contain_text('해석 실패 1건')
-    assert partly.locator('.src-bad,.src-warn').count()==0
+    assert partly.locator('.src-bad,.src-warn').count() == 0
     quiet = page.locator('#sources .source-quiet')
     expect(quiet.locator('li').first).to_be_visible()
     expect(quiet.locator('li').first).to_contain_text('claude-code · 미사용')
-    assert quiet.locator('.src-bad,.src-warn').count()==0
+    assert quiet.locator('.src-bad,.src-warn').count() == 0
     normal = page.locator('#sources details[data-fold="ok"]')
     assert normal.get_attribute('open') is None
     expect(normal.locator(':scope > summary')).to_contain_text('정상 3개')
@@ -213,11 +392,15 @@ with sync_playwright() as p:
     assert week.evaluate(lines) == ['서비스별: Codex 1B · Claude 500M'], week.evaluate(lines)
     expect(week.locator('.hint')).to_have_count(0)
     assert reports.locator(':scope > *').first.get_attribute('class') == 'this-week'
-    assert reports.evaluate(lines) == ['상위 모델: gpt-fixture 2.5B', 'Claude 계정별: Pro 400M · 계정 미확인 100M',
-                                       '상위 프로젝트: fixture-project 2B · 미분류 1B'], reports.evaluate(lines)
+    assert reports.evaluate(lines) == [
+        '상위 모델: gpt-fixture 2.5B',
+        'Claude 계정별: Pro 400M · 계정 미확인 100M',
+        '상위 프로젝트: fixture-project 2B · 미분류 1B',
+    ], reports.evaluate(lines)
     # The week's facts lead its report without repeating which week it is.
     expect(reports.locator(':scope > .report-facts li > span:last-child')).to_have_text(
-        ['Claude 5시간 한도 2회 소진 · 3주 연속', 'Claude 5시간 한도가 0%로 머문 시간 3.5시간'])
+        ['Claude 5시간 한도 2회 소진 · 3주 연속', 'Claude 5시간 한도가 0%로 머문 시간 3.5시간']
+    )
     # Quota use: observed facts per window, the tightest first; nothing unobserved reads as 0.
     use = reports.locator('.quota-use tbody tr')
     expect(use).to_have_count(3)
@@ -242,10 +425,14 @@ with sync_playwright() as p:
     # A Claude account goes by its name now in the table, as in the facts above it, over the
     # plan label stored when the week was built.
     page.evaluate("setClaudeAccounts([{route:'claude-code',label:'Ultra'},{route:'claude-code:abc',label:'Max'}])")
-    page.evaluate("renderReports([{...%s,quota_use:[{route:'claude-code',bucket:'five_hour',account_label:'Pro',observed_hours:10,"
-                  "zero_hours:1,exhausted:1,streak:0,resets_observed:0,before_reset:null}]}])" % json.dumps(REPORT))
+    page.evaluate(
+        "renderReports([{...%s,quota_use:[{route:'claude-code',bucket:'five_hour',account_label:'Pro',observed_hours:10,"
+        "zero_hours:1,exhausted:1,streak:0,resets_observed:0,before_reset:null}]}])" % json.dumps(REPORT)
+    )
     expect(use.first.locator('td').first).to_have_text('Claude(Ultra) 5시간')
-    expect(reports.locator(':scope > .report-facts li').first).to_contain_text('Claude(Ultra) 5시간 한도 2회 소진 · 3주 연속')
+    expect(reports.locator(':scope > .report-facts li').first).to_contain_text(
+        'Claude(Ultra) 5시간 한도 2회 소진 · 3주 연속'
+    )
     page.evaluate('setClaudeAccounts([])')
     # Older reports without the field keep their exhaustion line; a week whose history was
     # pruned before it was built says so.
@@ -256,15 +443,42 @@ with sync_playwright() as p:
     page.evaluate("renderReports(%s)" % json.dumps([REPORT]))
     expect(week).to_contain_text('지난주 같은 시점 대비 +25.0%')
     # A week begun inside the stored records cannot be compared; nothing yet this week says so.
-    page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps({**THIS_WEEK, 'tokens': 0, 'requests': 0, 'routes': [],
-                                                                                 'prior': {**THIS_WEEK['prior'], 'complete': False}})))
+    page.evaluate(
+        "renderReports(%s,%s)"
+        % (
+            json.dumps([REPORT]),
+            json.dumps(
+                {
+                    **THIS_WEEK,
+                    'tokens': 0,
+                    'requests': 0,
+                    'routes': [],
+                    'prior': {**THIS_WEEK['prior'], 'complete': False},
+                }
+            ),
+        )
+    )
     expect(week).to_contain_text('지난주 같은 시점 기록 부족')
     expect(week).to_contain_text('이번 주에는 아직 사용 기록이 없습니다.')
     page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(THIS_WEEK)))
     # The running week shows its quota use so far like a finished week, with no streak; a
     # week whose start was pruned from the quota history says from when.
-    running = {**THIS_WEEK, 'quota_use': [dict(route='codex', bucket='codex · 10080분', display_name='Codex 공통 · 주간',
-               observed_hours=6, zero_hours=1.5, exhausted=1, resets_observed=0, before_reset=None)], 'quota_from': None}
+    running = {
+        **THIS_WEEK,
+        'quota_use': [
+            dict(
+                route='codex',
+                bucket='codex · 10080분',
+                display_name='Codex 공통 · 주간',
+                observed_hours=6,
+                zero_hours=1.5,
+                exhausted=1,
+                resets_observed=0,
+                before_reset=None,
+            )
+        ],
+        'quota_from': None,
+    }
     page.evaluate("renderReports(%s,%s)" % (json.dumps([REPORT]), json.dumps(running)))
     week_use = week.locator('.quota-use tbody tr')
     expect(week_use).to_have_count(1)
@@ -282,7 +496,9 @@ with sync_playwright() as p:
     expect(monthly.locator(':scope > .sub-row .value-bar')).to_have_count(2)
     # The bars of one list start at the same edge on one scale; only the last carries its labels.
     bars = monthly.locator(':scope > .sub-row .value-bar')
-    edges = bars.evaluate_all('els=>els.map(e=>{const r=e.getBoundingClientRect();return [Math.round(r.left),Math.round(r.width)];})')
+    edges = bars.evaluate_all(
+        'els=>els.map(e=>{const r=e.getBoundingClientRect();return [Math.round(r.left),Math.round(r.width)];})'
+    )
     assert len({tuple(e) for e in edges}) == 1, edges
     expect(monthly.locator(':scope > .sub-row .value-bar.labelled')).to_have_count(1)
     expect(bars.last).to_have_class('value-bar labelled')
@@ -303,7 +519,9 @@ with sync_playwright() as p:
     # Beside the hours, a bar shows their share of the observed time; 미관측 has an empty slot.
     zero_bar = month_use.first.locator('td').nth(2).locator('.cell-bar')
     expect(zero_bar).to_have_attribute('role', 'img')
-    assert zero_bar.get_attribute('aria-label').startswith('관측 ') and zero_bar.get_attribute('aria-label').endswith('%')
+    assert zero_bar.get_attribute('aria-label').startswith('관측 ') and zero_bar.get_attribute('aria-label').endswith(
+        '%'
+    )
     expect(month_use.nth(1).locator('td').nth(2).locator('.cell-bar')).to_have_class('cell-bar none')
     expect(monthly).to_contain_text('‘미관측’은 관측 시간으로 셀 연속 측정이 없었다는 뜻입니다.')
     expect(reports).not_to_contain_text('‘미관측’은 관측 시간으로')
@@ -324,11 +542,14 @@ with sync_playwright() as p:
     # Every value under 10배 puts the 10배 tick at the scale's end; its label stays inside the bar.
     ticks = older.locator('.value-bar.labelled').first.evaluate(
         "b=>{const r=b.getBoundingClientRect();return [...b.querySelectorAll('em')].map(e=>{const t=e.getBoundingClientRect();"
-        "return [e.textContent,t.left>=r.left-.5&&t.right<=r.right+.5];});}")
+        "return [e.textContent,t.left>=r.left-.5&&t.right<=r.right+.5];});}"
+    )
     assert ticks == [['1배', True], ['10배', True]], ticks
     # Account names that arrive after the settlements were drawn redraw them with the names.
-    page.evaluate("window.shownAccounts=claudeAccounts.list;setClaudeAccounts([{route:'claude-code',label:'Pro'},"
-                  "{route:'claude-code:abababababab',label:'두 번째'}])&&redrawReports()")
+    page.evaluate(
+        "window.shownAccounts=claudeAccounts.list;setClaudeAccounts([{route:'claude-code',label:'Pro'},"
+        "{route:'claude-code:abababababab',label:'두 번째'}])&&redrawReports()"
+    )
     expect(monthly.locator(':scope > .sub-row', has_text='Anthropic / Claude Code · Pro')).to_have_count(1)
     page.evaluate("setClaudeAccounts(window.shownAccounts)&&redrawReports()")
     expect(monthly.locator(':scope > .sub-row', has_text='Anthropic / Claude Code · Pro')).to_have_count(0)
@@ -348,14 +569,20 @@ with sync_playwright() as p:
     page.locator('#budgets-save').click()
     expect(page.locator('#budgets-msg')).to_contain_text('예산을 저장했습니다')
     path, body = posts[-1]
-    assert path == '/api/config/project-budgets' and body['budgets']['fixture-project'] == {'tokens': 1000, 'usd': 50}, body
+    assert path == '/api/config/project-budgets' and body['budgets']['fixture-project'] == {
+        'tokens': 1000,
+        'usd': 50,
+    }, body
     page.locator('#webhook-url').fill('https://hooks.example/abc')
     page.locator('#notify-events input[data-notify-event="spike"]').uncheck()
-    page.locator('#quiet-start').fill('23'); page.locator('#quiet-end').fill('7')
+    page.locator('#quiet-start').fill('23')
+    page.locator('#quiet-end').fill('7')
     page.locator('#notify-save').click()
     expect(page.locator('#notify-msg')).to_contain_text('저장했습니다.')
     path, body = posts[-1]
-    assert path == '/api/config/notify' and body['webhook_url'] == 'https://hooks.example/abc' and 'ntfy_url' not in body, body
+    assert (
+        path == '/api/config/notify' and body['webhook_url'] == 'https://hooks.example/abc' and 'ntfy_url' not in body
+    ), body
     assert body['events']['spike'] is False and body['events']['unused'] is False and body['quiet'] == [23, 7], body
     expect(page.locator('#webhook-state')).to_have_text('설정됨 · hooks.example')
     expect(page.locator('#webhook-url')).to_have_value('')
@@ -368,17 +595,21 @@ with sync_playwright() as p:
     page.locator('#tabs [data-view="quota"]').click()
     page.locator('.alert-chip', has_text='단가 미등록').click()
     expect(page.locator('#price-unset')).to_have_attribute('aria-pressed', 'true')
-    page.screenshot(path=str(output/'features-desktop.png'), full_page=True)
-    page.unroute_all(behavior='ignoreErrors'); page.close()
+    page.screenshot(path=str(output / 'features-desktop.png'), full_page=True)
+    page.unroute_all(behavior='ignoreErrors')
+    page.close()
     # Phones: tabs are fixed to the bottom edge and nothing scrolls sideways.
-    mobile = browser.new_page(service_workers='block',viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
+    mobile = browser.new_page(
+        service_workers='block', viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True
+    )
     fixture_page(mobile)
-    mobile.on('pageerror', lambda error: errors.append(str(error)));watch_csp(mobile,errors)
+    mobile.on('pageerror', lambda error: errors.append(str(error)))
+    watch_csp(mobile, errors)
     preview(mobile)
-    assert mobile.goto(origin+'/').status == 200
+    assert mobile.goto(origin + '/').status == 200
     expect(mobile.locator('#refresh')).to_be_enabled()
     box = mobile.locator('#tabs').bounding_box()
-    assert abs(box['y']+box['height']-844) <= 1, box
+    assert abs(box['y'] + box['height'] - 844) <= 1, box
     mobile.locator('#tabs [data-view="reports"]').click()
     expect(mobile.locator('#view-reports')).to_be_visible()
     # The weekly report tables fit a phone: short service names, no request or observed column.
@@ -386,11 +617,17 @@ with sync_playwright() as p:
     table = mobile.locator('#reports .report-table').first
     assert table.locator('tbody td').first.inner_text() == 'Codex', table.locator('tbody td').first.inner_text()
     expect(table.locator('th.col-req')).to_be_hidden()
-    wraps = mobile.evaluate("[...document.querySelectorAll('#reports .table-wrap, #monthly .table-wrap')].map(w=>[!!w.closest('#monthly'),w.scrollWidth,w.clientWidth])")
+    wraps = mobile.evaluate(
+        "[...document.querySelectorAll('#reports .table-wrap, #monthly .table-wrap')].map(w=>[!!w.closest('#monthly'),w.scrollWidth,w.clientWidth])"
+    )
     assert any(m and c > 0 for m, _, c in wraps) and all(s <= c for _, s, c in wraps), wraps
     assert mobile.evaluate('document.documentElement.scrollWidth<=innerWidth')
-    mobile.screenshot(path=str(output/'features-mobile.png'), full_page=True)
-    assert not [p for p in posts if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')], posts
+    mobile.screenshot(path=str(output / 'features-mobile.png'), full_page=True)
+    assert not [
+        p
+        for p in posts
+        if p[0] not in ('/api/config/notify', '/api/notify/test', '/api/refresh', '/api/config/project-budgets')
+    ], posts
     assert not errors, errors
     mobile.unroute_all(behavior='ignoreErrors')
     browser.close()

@@ -3,489 +3,943 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from llm_usage.store import Store,stamp,identity
-from llm_usage.reconciliation import snapshot,link,supplements,total
-from llm_usage.cloud import _ingest,IncompletePages
-from llm_usage.collect import model_provider,parse_line
-from llm_usage.telemetry import ingest,resolve
+from llm_usage.store import Store, stamp, identity
+from llm_usage.reconciliation import snapshot, link, supplements, total
+from llm_usage.cloud import _ingest, IncompletePages
+from llm_usage.collect import model_provider, parse_line
+from llm_usage.telemetry import ingest, resolve
 
 
 class ReconciliationTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.store=Store(Path(self.tmp.name)/'usage.db')
-        self.now=stamp('2026-10-12T12:00:00Z')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(Path(self.tmp.name) / 'usage.db')
+        self.now = stamp('2026-10-12T12:00:00Z')
 
-    def event(self,key='a',output=20):
+    def event(self, key='a', output=20):
         with self.store.connect() as c:
-            self.store.event(c,key,stamp('2026-10-12T09:30:00Z'),'Anthropic','claude-code','claude-test',dict(output=output),session='s',project='p')
-            link(c,'claude:s',key,'local')
+            self.store.event(
+                c,
+                key,
+                stamp('2026-10-12T09:30:00Z'),
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=output),
+                session='s',
+                project='p',
+            )
+            link(c, 'claude:s', key, 'local')
 
-    def evidence(self,tokens=100,start='2026-10-12T09:00:00Z',end='2026-10-12T10:00:00Z'):
+    def evidence(self, tokens=100, start='2026-10-12T09:00:00Z', end='2026-10-12T10:00:00Z'):
         with self.store.connect() as c:
-            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',
-                     model='claude-test',session='s',project='p',start=stamp(start),end=stamp(end),tokens=tokens,
-                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:s',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                session='s',
+                project='p',
+                start=stamp(start),
+                end=stamp(end),
+                tokens=tokens,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens),
+            )
 
-    def usage(self,**kw):return self.store.usage(now=self.now,**kw)
+    def usage(self, **kw):
+        return self.store.usage(now=self.now, **kw)
 
     def test_late_records_shrink_supplement_and_do_not_mutate_cached_body(self):
-        self.event();self.evidence()
-        a=self.usage(period='today');b=self.usage(period='today')
-        self.assertEqual(a,b)
-        self.assertEqual(total(a['totals']),100)
-        self.assertEqual(a['reconciliation']['supplemental_tokens'],80)
-        self.event('b',40)
-        u=self.usage(period='today')
-        self.assertEqual(total(u['totals']),100)
-        self.assertEqual(u['reconciliation']['supplemental_tokens'],40)
-        self.assertEqual(u['totals']['requests'],2)
+        self.event()
+        self.evidence()
+        a = self.usage(period='today')
+        b = self.usage(period='today')
+        self.assertEqual(a, b)
+        self.assertEqual(total(a['totals']), 100)
+        self.assertEqual(a['reconciliation']['supplemental_tokens'], 80)
+        self.event('b', 40)
+        u = self.usage(period='today')
+        self.assertEqual(total(u['totals']), 100)
+        self.assertEqual(u['reconciliation']['supplemental_tokens'], 40)
+        self.assertEqual(u['totals']['requests'], 2)
         self.assertTrue(self.store.rollup_matches())
 
     def test_supplemented_subscription_usage_is_not_no_usage(self):
         # Codex used only through its account total (no local records) was still used;
         # an account day crossing the selected period leaves 'no usage' unknown.
-        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)
-        subs=lambda **kw:{s['route']:s for s in self.usage(subscriptions={'codex':20,'devin':10},**kw)['subscriptions']}
-        inside=subs(period='custom',start='2026-10-11',end='2026-10-12')
-        self.assertEqual((inside['codex']['period_tokens'],inside['devin']['period_tokens']),(1000,0))
+        with self.store.connect() as c:
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-11', tokens=1000)], self.now)
+        subs = lambda **kw: {
+            s['route']: s for s in self.usage(subscriptions={'codex': 20, 'devin': 10}, **kw)['subscriptions']
+        }
+        inside = subs(period='custom', start='2026-10-11', end='2026-10-12')
+        self.assertEqual((inside['codex']['period_tokens'], inside['devin']['period_tokens']), (1000, 0))
         self.assertIsNone(subs(period='today')['codex']['period_tokens'])
         # An account day crossing the period's start is read first; the day wholly inside
         # the period still counts toward the subscription.
         with self.store.connect() as c:
-            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-09',tokens=700),dict(startDate='2026-10-10',tokens=900)],self.now)
-        self.assertEqual(subs(period='custom',start='2026-10-10',end='2026-10-11')['codex']['period_tokens'],900)
+            self.store.account_tokens(
+                c,
+                'codex',
+                [dict(startDate='2026-10-09', tokens=700), dict(startDate='2026-10-10', tokens=900)],
+                self.now,
+            )
+        self.assertEqual(subs(period='custom', start='2026-10-10', end='2026-10-11')['codex']['period_tokens'], 900)
         # Claude cloud supplements count toward the Claude subscription too.
-        self.event();self.evidence()
-        self.assertEqual(self.usage(period='today',subscriptions={'claude-code':20})['subscriptions'][0]['period_tokens'],100)
+        self.event()
+        self.evidence()
+        self.assertEqual(
+            self.usage(period='today', subscriptions={'claude-code': 20})['subscriptions'][0]['period_tokens'], 100
+        )
 
     def test_card_comparison_takes_account_days_ended_at_the_same_elapsed_time(self):
         # A running account day is in the period total but not set against a whole one:
         # each side of the card comparison counts the aggregates ended by its cut.
         with self.store.connect() as c:
-            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
-            self.store.account_tokens(c,'codex',[dict(startDate=day,tokens=tokens) for day,tokens in
-                                                 (('2026-09-20',50),('2026-10-03',100),('2026-10-04',200),('2026-10-11',300),('2026-10-12',400))],self.now)
-        body=self.usage(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
-        prior=body['prior']
-        self.assertEqual((prior['start'],prior['end_exclusive'],prior['current_end']),
-                         ('2026-09-28T00:00:00+09:00','2026-10-04T21:00:00+09:00','2026-10-12T21:00:00+09:00'))
-        self.assertEqual(total(body['totals']),700)
-        self.assertEqual((prior['current_tokens'],total(prior),prior['residual_tokens'],prior['complete']),(300,100,100,True))
+            self.store.event(c, 'old', stamp('2026-09-01T00:00:00Z'), 'OpenAI', 'codex', 'gpt-test', dict(output=5))
+            self.store.account_tokens(
+                c,
+                'codex',
+                [
+                    dict(startDate=day, tokens=tokens)
+                    for day, tokens in (
+                        ('2026-09-20', 50),
+                        ('2026-10-03', 100),
+                        ('2026-10-04', 200),
+                        ('2026-10-11', 300),
+                        ('2026-10-12', 400),
+                    )
+                ],
+                self.now,
+            )
+        body = self.usage(period='custom', start='2026-10-06', end='2026-10-13', sections='core')
+        prior = body['prior']
+        self.assertEqual(
+            (prior['start'], prior['end_exclusive'], prior['current_end']),
+            ('2026-09-28T00:00:00+09:00', '2026-10-04T21:00:00+09:00', '2026-10-12T21:00:00+09:00'),
+        )
+        self.assertEqual(total(body['totals']), 700)
+        self.assertEqual(
+            (prior['current_tokens'], total(prior), prior['residual_tokens'], prior['complete']), (300, 100, 100, True)
+        )
 
     def test_card_comparison_counts_a_finished_account_day_first_received_before_its_end(self):
         # A day whose count stopped changing before the day ended keeps that earliest
         # receipt; once the day is over it is a whole total like any other on both sides.
         with self.store.connect() as c:
-            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
-            namespace=self.store.account_namespace(c,'codex')
-            for day,tokens,seen in (('2026-09-20',50,'2026-09-21T01:00:00Z'),('2026-10-02',100,'2026-10-02T11:00:00Z'),
-                                    ('2026-10-10',300,'2026-10-10T11:00:00Z'),('2026-10-12',400,'2026-10-12T11:00:00Z')):
-                start=stamp(day+'T00:00:00Z')
-                for checked in (stamp(seen),max(stamp(seen),min(start+86400+3600,self.now))):
-                    snapshot(self.store,c,source='codex-account',scope_id='codex-day:'+day,route='codex',provider='OpenAI',
-                             model=None,start=start,end=start+86400,tokens=tokens,checked=checked,account_key=namespace)
-        prior=self.usage(period='custom',start='2026-10-06',end='2026-10-13',sections='core')['prior']
+            self.store.event(c, 'old', stamp('2026-09-01T00:00:00Z'), 'OpenAI', 'codex', 'gpt-test', dict(output=5))
+            namespace = self.store.account_namespace(c, 'codex')
+            for day, tokens, seen in (
+                ('2026-09-20', 50, '2026-09-21T01:00:00Z'),
+                ('2026-10-02', 100, '2026-10-02T11:00:00Z'),
+                ('2026-10-10', 300, '2026-10-10T11:00:00Z'),
+                ('2026-10-12', 400, '2026-10-12T11:00:00Z'),
+            ):
+                start = stamp(day + 'T00:00:00Z')
+                for checked in (stamp(seen), max(stamp(seen), min(start + 86400 + 3600, self.now))):
+                    snapshot(
+                        self.store,
+                        c,
+                        source='codex-account',
+                        scope_id='codex-day:' + day,
+                        route='codex',
+                        provider='OpenAI',
+                        model=None,
+                        start=start,
+                        end=start + 86400,
+                        tokens=tokens,
+                        checked=checked,
+                        account_key=namespace,
+                    )
+        prior = self.usage(period='custom', start='2026-10-06', end='2026-10-13', sections='core')['prior']
         # 10-02 (100) and 10-10 (300) ended by their cut; 10-12 is still open at 21:00 KST.
-        self.assertEqual((prior['current_tokens'],total(prior),prior['complete']),(300,100,True))
+        self.assertEqual((prior['current_tokens'], total(prior), prior['complete']), (300, 100, True))
 
     def test_card_comparison_needs_every_counted_source_to_reach_the_earlier_window(self):
         # Local records reach back, but account days begin inside the current window: the
         # earlier window's account share is missing, not zero.
         with self.store.connect() as c:
-            self.store.event(c,'old',stamp('2026-09-01T00:00:00Z'),'OpenAI','codex','gpt-test',dict(output=5))
-            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-08',tokens=300)],self.now)
-        span=dict(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
+            self.store.event(c, 'old', stamp('2026-09-01T00:00:00Z'), 'OpenAI', 'codex', 'gpt-test', dict(output=5))
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-08', tokens=300)], self.now)
+        span = dict(period='custom', start='2026-10-06', end='2026-10-13', sections='core')
         self.assertFalse(self.usage(**span)['prior']['complete'])
         # Account days alone (no local records) that cover both windows compare.
-        alone=Store(Path(self.tmp.name)/'alone.db')
+        alone = Store(Path(self.tmp.name) / 'alone.db')
         with alone.connect() as c:
-            alone.account_tokens(c,'codex',[dict(startDate=day,tokens=tokens) for day,tokens in
-                                            (('2026-09-20',50),('2026-10-01',100),('2026-10-08',300))],self.now)
-        prior=alone.usage(now=self.now,**span)['prior']
-        self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,100))
+            alone.account_tokens(
+                c,
+                'codex',
+                [
+                    dict(startDate=day, tokens=tokens)
+                    for day, tokens in (('2026-09-20', 50), ('2026-10-01', 100), ('2026-10-08', 300))
+                ],
+                self.now,
+            )
+        prior = alone.usage(now=self.now, **span)['prior']
+        self.assertEqual((prior['complete'], prior['current_tokens'], total(prior)), (True, 300, 100))
         # An older account day fully matched by local records leaves no residual, yet the
         # account evidence still reaches the earlier window.
-        matched=Store(Path(self.tmp.name)/'matched.db')
+        matched = Store(Path(self.tmp.name) / 'matched.db')
         with matched.connect() as c:
-            matched.event(c,'m',stamp('2026-09-20T03:00:00Z'),'OpenAI','codex','gpt-test',dict(output=100))
-            matched.account_tokens(c,'codex',[dict(startDate='2026-09-20',tokens=100),dict(startDate='2026-10-08',tokens=300)],self.now)
-        prior=matched.usage(now=self.now,**span)['prior']
-        self.assertEqual((prior['complete'],prior['current_tokens'],total(prior)),(True,300,0))
+            matched.event(c, 'm', stamp('2026-09-20T03:00:00Z'), 'OpenAI', 'codex', 'gpt-test', dict(output=100))
+            matched.account_tokens(
+                c,
+                'codex',
+                [dict(startDate='2026-09-20', tokens=100), dict(startDate='2026-10-08', tokens=300)],
+                self.now,
+            )
+        prior = matched.usage(now=self.now, **span)['prior']
+        self.assertEqual((prior['complete'], prior['current_tokens'], total(prior)), (True, 300, 0))
 
     def test_card_comparison_takes_evidence_coverage_within_the_scope(self):
         # Old cloud evidence of one project does not cover another project whose evidence
         # begins inside the current window, as with the local records of a scope.
         with self.store.connect() as c:
-            for scope_id,project,day,tokens in (('claude:a','a','2026-09-20',50),('claude:b','b','2026-10-08',70)):
-                snapshot(self.store,c,source='claude-cloud',scope_id=scope_id,route='claude-code',provider='Anthropic',model='claude-test',
-                         session=scope_id,project=project,start=stamp(day+'T01:00:00Z'),end=stamp(day+'T02:00:00Z'),tokens=tokens,
-                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
-        span=dict(period='custom',start='2026-10-06',end='2026-10-13',sections='core')
-        whole=self.usage(**span)['prior']
-        self.assertEqual((whole['complete'],whole['current_tokens'],total(whole)),(True,70,0))
-        self.assertFalse(self.usage(scope='project:b',**span)['prior']['complete'])
+            for scope_id, project, day, tokens in (
+                ('claude:a', 'a', '2026-09-20', 50),
+                ('claude:b', 'b', '2026-10-08', 70),
+            ):
+                snapshot(
+                    self.store,
+                    c,
+                    source='claude-cloud',
+                    scope_id=scope_id,
+                    route='claude-code',
+                    provider='Anthropic',
+                    model='claude-test',
+                    session=scope_id,
+                    project=project,
+                    start=stamp(day + 'T01:00:00Z'),
+                    end=stamp(day + 'T02:00:00Z'),
+                    tokens=tokens,
+                    parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens),
+                )
+        span = dict(period='custom', start='2026-10-06', end='2026-10-13', sections='core')
+        whole = self.usage(**span)['prior']
+        self.assertEqual((whole['complete'], whole['current_tokens'], total(whole)), (True, 70, 0))
+        self.assertFalse(self.usage(scope='project:b', **span)['prior']['complete'])
         # Both sessions were read with the primary Claude account, whose evidence reaches back.
-        self.assertTrue(self.usage(scope='account:claude-code',**span)['prior']['complete'])
+        self.assertTrue(self.usage(scope='account:claude-code', **span)['prior']['complete'])
 
     def test_codex_account_residual_is_one_item_apart_from_unknown_and_unassigned(self):
         # The Codex account total beyond this PC's records has no model or project. Under
         # model and project grouping it is one residual item rather than 'unknown' or
         # '미분류'; totals, series and the comparison include it in every grouping.
         from llm_usage.reconciliation import RESIDUAL
+
         with self.store.connect() as c:
-            self.store.event(c,'x',stamp('2026-10-07T03:00:00Z'),'OpenAI','codex','gpt-test',dict(uncached_input=100,output=50),session='t')
-            self.store.account_tokens(c,'codex',[dict(startDate='2026-10-07',tokens=1000),dict(startDate='2026-09-30',tokens=400)],self.now)
-        span=dict(period='custom',start='2026-10-05',end='2026-10-11',granularity='week',compare='previous')
-        views={group:self.usage(group=group,**span) for group in ('provider','route','model','project')}
-        sums=lambda series:[sum(total(v) for v in p['values'].values()) for p in series]
-        for group,body in views.items():
+            self.store.event(
+                c,
+                'x',
+                stamp('2026-10-07T03:00:00Z'),
+                'OpenAI',
+                'codex',
+                'gpt-test',
+                dict(uncached_input=100, output=50),
+                session='t',
+            )
+            self.store.account_tokens(
+                c,
+                'codex',
+                [dict(startDate='2026-10-07', tokens=1000), dict(startDate='2026-09-30', tokens=400)],
+                self.now,
+            )
+        span = dict(period='custom', start='2026-10-05', end='2026-10-11', granularity='week', compare='previous')
+        views = {group: self.usage(group=group, **span) for group in ('provider', 'route', 'model', 'project')}
+        sums = lambda series: [sum(total(v) for v in p['values'].values()) for p in series]
+        for group, body in views.items():
             with self.subTest(group=group):
-                self.assertEqual((total(body['totals']),body['totals']['residual_tokens'],body['reconciliation']['residual_tokens']),(1000,850,850))
-                self.assertEqual((sums(body['series']),sums(body['compare']['series'])),([1000],[400]))
-        model,project=views['model'],views['project']
-        self.assertEqual(set(model['series'][0]['values']),{'gpt-test',RESIDUAL})
-        self.assertEqual({k for k,v in model['compare']['series'][0]['values'].items() if total(v)},{RESIDUAL})
-        self.assertEqual({r['model']:total(r) for r in model['rows']},{'gpt-test':150,RESIDUAL:850})
+                self.assertEqual(
+                    (
+                        total(body['totals']),
+                        body['totals']['residual_tokens'],
+                        body['reconciliation']['residual_tokens'],
+                    ),
+                    (1000, 850, 850),
+                )
+                self.assertEqual((sums(body['series']), sums(body['compare']['series'])), ([1000], [400]))
+        model, project = views['model'], views['project']
+        self.assertEqual(set(model['series'][0]['values']), {'gpt-test', RESIDUAL})
+        self.assertEqual({k for k, v in model['compare']['series'][0]['values'].items() if total(v)}, {RESIDUAL})
+        self.assertEqual({r['model']: total(r) for r in model['rows']}, {'gpt-test': 150, RESIDUAL: 850})
         # A local record without a project stays '미분류', apart from the residual.
-        self.assertEqual(set(project['series'][0]['values']),{'미분류',RESIDUAL})
-        self.assertEqual({p['project']:total(p) for p in project['projects']},{'미분류':150,RESIDUAL:850})
+        self.assertEqual(set(project['series'][0]['values']), {'미분류', RESIDUAL})
+        self.assertEqual({p['project']: total(p) for p in project['projects']}, {'미분류': 150, RESIDUAL: 850})
         # Neither is a model or a project to filter by.
-        self.assertNotIn(RESIDUAL,model['scope_options']['model']+model['scope_options']['project'])
-        self.assertNotIn('unknown',model['scope_options']['model'])
-        with self.store.connect() as c:month=self.store.project_month(c,self.now)
-        self.assertEqual((month['residual_tokens'],{k:v['tokens'] for k,v in month['projects'].items()}),(850,{'미분류':150}))
+        self.assertNotIn(RESIDUAL, model['scope_options']['model'] + model['scope_options']['project'])
+        self.assertNotIn('unknown', model['scope_options']['model'])
+        with self.store.connect() as c:
+            month = self.store.project_month(c, self.now)
+        self.assertEqual(
+            (month['residual_tokens'], {k: v['tokens'] for k, v in month['projects'].items()}), (850, {'미분류': 150})
+        )
         # Narrowing to '미분류' or 'unknown' leaves it out; its service and provider keep it.
-        scoped=lambda scope:self.usage(scope=scope,group='model',**span)
-        unassigned=scoped('project:미분류')
-        self.assertEqual((total(unassigned['totals']),unassigned['totals'].get('residual_tokens',0)),(150,0))
-        self.assertEqual([r['model'] for r in unassigned['rows']],['gpt-test'])
-        self.assertEqual(total(scoped('model:unknown')['totals']),0)
-        self.assertEqual((total(scoped('route:codex')['totals']),total(scoped('provider:OpenAI')['totals'])),(1000,1000))
-        self.assertEqual(sum(m['tokens'] for m in self.store.project_detail('미분류',now=self.now)['models']),150)
+        scoped = lambda scope: self.usage(scope=scope, group='model', **span)
+        unassigned = scoped('project:미분류')
+        self.assertEqual((total(unassigned['totals']), unassigned['totals'].get('residual_tokens', 0)), (150, 0))
+        self.assertEqual([r['model'] for r in unassigned['rows']], ['gpt-test'])
+        self.assertEqual(total(scoped('model:unknown')['totals']), 0)
+        self.assertEqual(
+            (total(scoped('route:codex')['totals']), total(scoped('provider:OpenAI')['totals'])), (1000, 1000)
+        )
+        self.assertEqual(sum(m['tokens'] for m in self.store.project_detail('미분류', now=self.now)['models']), 150)
 
     def test_cumulative_results_are_differenced_not_summed(self):
-        self.event();self.evidence()
-        self.evidence(160,end='2026-10-12T11:00:00Z')
-        u=self.usage(period='today',granularity='hour',group='route')
-        self.assertEqual(total(u['totals']),160)
-        self.assertEqual(sum(total(v) for p in u['series'] for v in p['values'].values()),160)
-        self.assertEqual(self.usage(period='today',scope='project:other')['totals']['output'],0)
+        self.event()
+        self.evidence()
+        self.evidence(160, end='2026-10-12T11:00:00Z')
+        u = self.usage(period='today', granularity='hour', group='route')
+        self.assertEqual(total(u['totals']), 160)
+        self.assertEqual(sum(total(v) for p in u['series'] for v in p['values'].values()), 160)
+        self.assertEqual(self.usage(period='today', scope='project:other')['totals']['output'], 0)
 
     def test_each_snapshot_takes_the_linked_records_of_its_own_span(self):
         # A snapshot's span is [previous end, end): a record at its end belongs to the next one.
         # A snapshot of one model leaves the scope's other models out; one of no model counts all.
-        at=lambda t:stamp('2026-10-12T'+t+':00Z')
+        at = lambda t: stamp('2026-10-12T' + t + ':00Z')
         with self.store.connect() as c:
-            for key,scope,ts,model,output in (('early','claude:s','08:59','claude-test',4),('start','claude:s','09:00','claude-test',5),
-                                              ('inside','claude:s','09:30','claude-test',15),('edge','claude:s','10:00','claude-test',30),
-                                              ('other','claude:s','10:30','claude-other',7),('after','claude:s','11:00','claude-test',9),
-                                              ('t1','claude:t','09:10','claude-test',10),('t2','claude:t','09:20','claude-other',15)):
-                self.store.event(c,key,at(ts),'Anthropic','claude-code',model,dict(output=output),session=scope[7:],project='p')
-                link(c,scope,key,'local')
-            for scope,model,end,tokens in (('claude:s','claude-test','10:00',100),('claude:s','claude-test','11:00',160),('claude:t',None,'10:00',50)):
-                snapshot(self.store,c,source='claude-cloud',scope_id=scope,route='claude-code',provider='Anthropic',model=model,
-                         session=scope[7:],project='p',start=at('09:00'),end=at(end),tokens=tokens,
-                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
-            entries,conflicts=supplements(c)
-        self.assertEqual(conflicts,[])
-        self.assertEqual(sorted((e['scope_id'],e['end'],e['tokens']) for e in entries),
-                         [('claude:s',at('10:00'),80),('claude:s',at('11:00'),30),('claude:t',at('10:00'),25)])
+            for key, scope, ts, model, output in (
+                ('early', 'claude:s', '08:59', 'claude-test', 4),
+                ('start', 'claude:s', '09:00', 'claude-test', 5),
+                ('inside', 'claude:s', '09:30', 'claude-test', 15),
+                ('edge', 'claude:s', '10:00', 'claude-test', 30),
+                ('other', 'claude:s', '10:30', 'claude-other', 7),
+                ('after', 'claude:s', '11:00', 'claude-test', 9),
+                ('t1', 'claude:t', '09:10', 'claude-test', 10),
+                ('t2', 'claude:t', '09:20', 'claude-other', 15),
+            ):
+                self.store.event(
+                    c,
+                    key,
+                    at(ts),
+                    'Anthropic',
+                    'claude-code',
+                    model,
+                    dict(output=output),
+                    session=scope[7:],
+                    project='p',
+                )
+                link(c, scope, key, 'local')
+            for scope, model, end, tokens in (
+                ('claude:s', 'claude-test', '10:00', 100),
+                ('claude:s', 'claude-test', '11:00', 160),
+                ('claude:t', None, '10:00', 50),
+            ):
+                snapshot(
+                    self.store,
+                    c,
+                    source='claude-cloud',
+                    scope_id=scope,
+                    route='claude-code',
+                    provider='Anthropic',
+                    model=model,
+                    session=scope[7:],
+                    project='p',
+                    start=at('09:00'),
+                    end=at(end),
+                    tokens=tokens,
+                    parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens),
+                )
+            entries, conflicts = supplements(c)
+        self.assertEqual(conflicts, [])
+        self.assertEqual(
+            sorted((e['scope_id'], e['end'], e['tokens']) for e in entries),
+            [('claude:s', at('10:00'), 80), ('claude:s', at('11:00'), 30), ('claude:t', at('10:00'), 25)],
+        )
 
     def test_origin_split_is_left_out_only_when_asked(self):
         # A record a cloud aggregate holds is 'cloud' even when telemetry reported it too.
         with self.store.connect() as c:
-            for key,sources,output in (('l',('local',),1),('c',('claude-cloud:a',),20),('t',('telemetry',),300),('ct',('claude-cloud:a','telemetry'),4000)):
-                self.store.event(c,key,stamp('2026-10-12T09:30:00Z'),'Anthropic','claude-code','claude-test',dict(output=output),session='s',project='p')
-                for source in sources:link(c,'claude:s',key,source)
+            for key, sources, output in (
+                ('l', ('local',), 1),
+                ('c', ('claude-cloud:a',), 20),
+                ('t', ('telemetry',), 300),
+                ('ct', ('claude-cloud:a', 'telemetry'), 4000),
+            ):
+                self.store.event(
+                    c,
+                    key,
+                    stamp('2026-10-12T09:30:00Z'),
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(output=output),
+                    session='s',
+                    project='p',
+                )
+                for source in sources:
+                    link(c, 'claude:s', key, source)
         self.evidence(5000)
-        full,bare=self.usage(period='today'),self.usage(period='today',origins=False)
-        self.assertEqual(full['reconciliation'].pop('origin_tokens'),dict(cloud=4020,local=1,telemetry=300))
-        self.assertEqual(full,bare)
+        full, bare = self.usage(period='today'), self.usage(period='today', origins=False)
+        self.assertEqual(full['reconciliation'].pop('origin_tokens'), dict(cloud=4020, local=1, telemetry=300))
+        self.assertEqual(full, bare)
 
     def test_account_intervals_remain_unallocated_at_kst_midnight(self):
-        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-11',tokens=1000)],self.now)
-        today=self.usage(period='today')
-        self.assertEqual(total(today['totals']),0)
-        self.assertEqual(today['reconciliation']['overlapping_intervals'][0]['start'],'2026-10-11T09:00:00+09:00')
-        u=self.usage(period='custom',start='2026-10-11',end='2026-10-12')
-        self.assertEqual(total(u['totals']),1000)
-        self.assertEqual(u['reconciliation']['unallocated_tokens'],1000)
-        self.assertEqual(u['totals']['unclassified_tokens'],1000)
-        self.assertEqual(u['totals']['requests'],0)
+        with self.store.connect() as c:
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-11', tokens=1000)], self.now)
+        today = self.usage(period='today')
+        self.assertEqual(total(today['totals']), 0)
+        self.assertEqual(today['reconciliation']['overlapping_intervals'][0]['start'], '2026-10-11T09:00:00+09:00')
+        u = self.usage(period='custom', start='2026-10-11', end='2026-10-12')
+        self.assertEqual(total(u['totals']), 1000)
+        self.assertEqual(u['reconciliation']['unallocated_tokens'], 1000)
+        self.assertEqual(u['totals']['unclassified_tokens'], 1000)
+        self.assertEqual(u['totals']['requests'], 0)
         self.assertIsNone(u['cost']['period'])
-        week=self.usage(period='all',granularity='month')
-        self.assertEqual(total(week['totals']),1000)
-        self.assertEqual(week['reconciliation']['unallocated_tokens'],0)
+        week = self.usage(period='all', granularity='month')
+        self.assertEqual(total(week['totals']), 1000)
+        self.assertEqual(week['reconciliation']['unallocated_tokens'], 0)
 
     def test_counter_decrease_and_records_exceeding_total_are_visible(self):
-        self.event(output=120);self.evidence(100)
-        u=self.usage(period='today')
-        self.assertEqual(total(u['totals']),120)
-        self.assertEqual(u['reconciliation']['conflicts'][0]['reason'],'records_exceed_aggregate')
-        self.evidence(50,end='2026-10-12T11:00:00Z')
-        self.assertIn('counter_decreased',[x['reason'] for x in self.usage(period='today')['reconciliation']['conflicts']])
+        self.event(output=120)
+        self.evidence(100)
+        u = self.usage(period='today')
+        self.assertEqual(total(u['totals']), 120)
+        self.assertEqual(u['reconciliation']['conflicts'][0]['reason'], 'records_exceed_aggregate')
+        self.evidence(50, end='2026-10-12T11:00:00Z')
+        self.assertIn(
+            'counter_decreased', [x['reason'] for x in self.usage(period='today')['reconciliation']['conflicts']]
+        )
 
     def test_held_supplements_are_worked_out_once_per_block_and_copied(self):
         from unittest.mock import patch
         from llm_usage import reconciliation
-        self.event();self.evidence()
-        other=Store(Path(self.tmp.name)/'other.db')
-        with patch.object(reconciliation,'_supplements',side_effect=reconciliation._supplements) as work:
+
+        self.event()
+        self.evidence()
+        other = Store(Path(self.tmp.name) / 'other.db')
+        with patch.object(reconciliation, '_supplements', side_effect=reconciliation._supplements) as work:
             with reconciliation.held():
                 with self.store.connect() as c:
-                    first,_=reconciliation.supplements(c)
-                    first[0]['tokens']=-1  # a caller's change stays its own
-                    again,_=reconciliation.supplements(c)
+                    first, _ = reconciliation.supplements(c)
+                    first[0]['tokens'] = -1  # a caller's change stays its own
+                    again, _ = reconciliation.supplements(c)
                 self.usage(period='today')
                 # Each database is worked out on its own.
-                with other.connect() as c:self.assertEqual(reconciliation.supplements(c)[0],[])
-            self.assertEqual(work.call_count,2)
-            self.assertEqual(again[0]['tokens'],80)
+                with other.connect() as c:
+                    self.assertEqual(reconciliation.supplements(c)[0], [])
+            self.assertEqual(work.call_count, 2)
+            self.assertEqual(again[0]['tokens'], 80)
             # A later block works it out again, so what was written meanwhile is seen.
-            self.evidence(150,end='2026-10-12T11:00:00Z')
-            with reconciliation.held(),self.store.connect() as c:after,_=reconciliation.supplements(c)
-            self.assertEqual(work.call_count,3)
-            self.assertEqual(sum(e['tokens'] for e in after),130)
+            self.evidence(150, end='2026-10-12T11:00:00Z')
+            with reconciliation.held(), self.store.connect() as c:
+                after, _ = reconciliation.supplements(c)
+            self.assertEqual(work.call_count, 3)
+            self.assertEqual(sum(e['tokens'] for e in after), 130)
             # Outside a block every call works it out.
-            with self.store.connect() as c:reconciliation.supplements(c);reconciliation.supplements(c)
-            self.assertEqual(work.call_count,5)
+            with self.store.connect() as c:
+                reconciliation.supplements(c)
+                reconciliation.supplements(c)
+            self.assertEqual(work.call_count, 5)
 
     def test_running_account_bucket_is_bounded_by_receipt_not_fabricated_time(self):
-        with self.store.connect() as c:self.store.account_tokens(c,'codex',[dict(startDate='2026-10-12',tokens=1000)],self.now)
-        u=self.usage(period='today')
-        self.assertEqual(total(u['totals']),1000)
-        self.assertEqual(u['reconciliation']['overlapping_intervals'],[])
-        hour=self.usage(period='1h')
-        self.assertEqual(total(hour['totals']),0)
-        self.assertEqual(len(hour['reconciliation']['overlapping_intervals']),1)
+        with self.store.connect() as c:
+            self.store.account_tokens(c, 'codex', [dict(startDate='2026-10-12', tokens=1000)], self.now)
+        u = self.usage(period='today')
+        self.assertEqual(total(u['totals']), 1000)
+        self.assertEqual(u['reconciliation']['overlapping_intervals'], [])
+        hour = self.usage(period='1h')
+        self.assertEqual(total(hour['totals']), 0)
+        self.assertEqual(len(hour['reconciliation']['overlapping_intervals']), 1)
 
     def test_session_project_and_report_use_reconciled_totals(self):
-        self.event();self.evidence()
-        d=self.store.session_detail('s')
-        self.assertEqual(total(d['totals']),100)
-        self.assertEqual(sum(total(m) for m in d['models']),100)
-        p=self.store.project_detail('p',now=self.now)
-        self.assertEqual(sum(m['tokens'] for m in p['models']),100)
-        self.assertEqual(sum(d['tokens'] for d in p['daily']),100)
-        u=self.usage(period='today')
-        self.assertEqual(total(u['sessions'][0]),100)
-        self.assertEqual(total(u['projects'][0]),100)
+        self.event()
+        self.evidence()
+        d = self.store.session_detail('s')
+        self.assertEqual(total(d['totals']), 100)
+        self.assertEqual(sum(total(m) for m in d['models']), 100)
+        p = self.store.project_detail('p', now=self.now)
+        self.assertEqual(sum(m['tokens'] for m in p['models']), 100)
+        self.assertEqual(sum(d['tokens'] for d in p['daily']), 100)
+        u = self.usage(period='today')
+        self.assertEqual(total(u['sessions'][0]), 100)
+        self.assertEqual(total(u['projects'][0]), 100)
 
     def test_session_ranking_merges_existing_and_cloud_only_sessions_before_the_cap(self):
-        begin=self.now-7200
-        pricing={'claude-test':dict(input=100,output=100)}
-        for count in (99,100,101):
+        begin = self.now - 7200
+        pricing = {'claude-test': dict(input=100, output=100)}
+        for count in (99, 100, 101):
             with self.subTest(count=count):
-                store=Store(Path(self.tmp.name)/f'sessions-{count}.db')
-                last=f's-{count-1:03d}'
+                store = Store(Path(self.tmp.name) / f'sessions-{count}.db')
+                last = f's-{count - 1:03d}'
                 with store.connect() as c:
                     for i in range(count):
-                        sid=f's-{i:03d}'
-                        store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=(count-i)*1000),
-                                    session=sid,project='p',agent_kind='sub',account='claude-code')
-                        link(c,'claude:'+sid,sid,'local')
-                    snapshot(store,c,source='claude-cloud',scope_id='claude:'+last,route='claude-code',provider='Anthropic',
-                             model='claude-test',session=last,project='p',start=begin,end=begin+3600,tokens=200_000,
-                             parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=200_000))
-                for sections in ('all','insights'):
-                    data=store.usage(now=self.now,period='today',sections=sections,pricing=pricing)
-                    self.assertEqual(data['sessions_total'],count)
-                    self.assertEqual(len(data['sessions']),min(count,100))
-                    row=data['sessions'][0]
-                    self.assertEqual((row['session'],total(row),row['requests'],row['cost'],row['kind'],row['accounts']),
-                                     (last,200_000,1,.1,'sub',['claude-code']))
-                    self.assertEqual(total(store.session_detail(last)['totals']),total(row))
+                        sid = f's-{i:03d}'
+                        store.event(
+                            c,
+                            sid,
+                            begin + 10,
+                            'Anthropic',
+                            'claude-code',
+                            'claude-test',
+                            dict(output=(count - i) * 1000),
+                            session=sid,
+                            project='p',
+                            agent_kind='sub',
+                            account='claude-code',
+                        )
+                        link(c, 'claude:' + sid, sid, 'local')
+                    snapshot(
+                        store,
+                        c,
+                        source='claude-cloud',
+                        scope_id='claude:' + last,
+                        route='claude-code',
+                        provider='Anthropic',
+                        model='claude-test',
+                        session=last,
+                        project='p',
+                        start=begin,
+                        end=begin + 3600,
+                        tokens=200_000,
+                        parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=200_000),
+                    )
+                for sections in ('all', 'insights'):
+                    data = store.usage(now=self.now, period='today', sections=sections, pricing=pricing)
+                    self.assertEqual(data['sessions_total'], count)
+                    self.assertEqual(len(data['sessions']), min(count, 100))
+                    row = data['sessions'][0]
+                    self.assertEqual(
+                        (row['session'], total(row), row['requests'], row['cost'], row['kind'], row['accounts']),
+                        (last, 200_000, 1, 0.1, 'sub', ['claude-code']),
+                    )
+                    self.assertEqual(total(store.session_detail(last)['totals']), total(row))
                 with store.connect() as c:
-                    for model,amount in [('claude-test',300_000),('other-model',1000)]:
-                        snapshot(store,c,source='claude-cloud',scope_id='claude:only-cloud',route='claude-code',provider='Anthropic',
-                                 model=model,session='only-cloud',project='p',start=begin,end=begin+3600,tokens=amount)
-                data=store.usage(now=self.now,period='today',pricing=pricing)
-                self.assertEqual(data['sessions_total'],count+1)
-                self.assertEqual(len(data['sessions']),100)
-                self.assertEqual((data['sessions'][0]['session'],total(data['sessions'][0]),data['sessions'][0]['requests']),
-                                 ('only-cloud',301_000,0))
-                self.assertEqual(data['sessions'][0]['accounts'],['claude-code'])
+                    for model, amount in [('claude-test', 300_000), ('other-model', 1000)]:
+                        snapshot(
+                            store,
+                            c,
+                            source='claude-cloud',
+                            scope_id='claude:only-cloud',
+                            route='claude-code',
+                            provider='Anthropic',
+                            model=model,
+                            session='only-cloud',
+                            project='p',
+                            start=begin,
+                            end=begin + 3600,
+                            tokens=amount,
+                        )
+                data = store.usage(now=self.now, period='today', pricing=pricing)
+                self.assertEqual(data['sessions_total'], count + 1)
+                self.assertEqual(len(data['sessions']), 100)
+                self.assertEqual(
+                    (data['sessions'][0]['session'], total(data['sessions'][0]), data['sessions'][0]['requests']),
+                    ('only-cloud', 301_000, 0),
+                )
+                self.assertEqual(data['sessions'][0]['accounts'], ['claude-code'])
                 # More local detail shrinks the supplement, never the session's total.
                 with store.connect() as c:
-                    store.event(c,'late',begin+20,'Anthropic','claude-code','claude-test',dict(output=50_000),session=last,project='p')
-                    link(c,'claude:'+last,'late','local')
-                data=store.usage(now=self.now,period='today',pricing=pricing)
-                row=next(s for s in data['sessions'] if s['session']==last)
-                self.assertEqual((total(row),row['requests'],row['cost'],data['sessions_total']),(200_000,2,5.1,count+1))
+                    store.event(
+                        c,
+                        'late',
+                        begin + 20,
+                        'Anthropic',
+                        'claude-code',
+                        'claude-test',
+                        dict(output=50_000),
+                        session=last,
+                        project='p',
+                    )
+                    link(c, 'claude:' + last, 'late', 'local')
+                data = store.usage(now=self.now, period='today', pricing=pricing)
+                row = next(s for s in data['sessions'] if s['session'] == last)
+                self.assertEqual(
+                    (total(row), row['requests'], row['cost'], data['sessions_total']), (200_000, 2, 5.1, count + 1)
+                )
                 self.assertTrue(store.rollup_matches())
 
     def test_restored_session_detail_respects_period_and_scope(self):
-        begin=self.now-7200;account='claude-code:abababababab'
+        begin = self.now - 7200
+        account = 'claude-code:abababababab'
         with self.store.connect() as c:
             for i in range(101):
-                sid=f's-{i:03d}'
-                self.store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=101-i),
-                                 session=sid,project='p',agent_kind='main',account=account)
-                link(c,'claude:'+sid,sid,'local')
-            self.store.event(c,'outside-day',begin-86400,'Anthropic','claude-code','claude-test',dict(output=900_000),session='s-100',project='p',account=account)
-            self.store.event(c,'other-route',begin+10,'OpenAI','codex','gpt-test',dict(output=900_000),session='s-100',project='other')
-            self.store.save_state(c,'claude_cloud_account:test-key',account)
-            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s-100',route='claude-code',provider='Anthropic',
-                     model='claude-test',session='s-100',project='p',start=begin,end=begin+3600,tokens=10_000,account_key='test-key')
-        for scope in ('account:'+account,'route:claude-code','model:claude-test','project:p'):
+                sid = f's-{i:03d}'
+                self.store.event(
+                    c,
+                    sid,
+                    begin + 10,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(output=101 - i),
+                    session=sid,
+                    project='p',
+                    agent_kind='main',
+                    account=account,
+                )
+                link(c, 'claude:' + sid, sid, 'local')
+            self.store.event(
+                c,
+                'outside-day',
+                begin - 86400,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=900_000),
+                session='s-100',
+                project='p',
+                account=account,
+            )
+            self.store.event(
+                c,
+                'other-route',
+                begin + 10,
+                'OpenAI',
+                'codex',
+                'gpt-test',
+                dict(output=900_000),
+                session='s-100',
+                project='other',
+            )
+            self.store.save_state(c, 'claude_cloud_account:test-key', account)
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:s-100',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                session='s-100',
+                project='p',
+                start=begin,
+                end=begin + 3600,
+                tokens=10_000,
+                account_key='test-key',
+            )
+        for scope in ('account:' + account, 'route:claude-code', 'model:claude-test', 'project:p'):
             with self.subTest(scope=scope):
-                data=self.usage(period='today',scope=scope)
-                row=data['sessions'][0]
-                self.assertEqual(data['sessions_total'],101)
-                self.assertEqual((row['session'],total(row),row['requests'],row['project'],row['first_ts'],row['accounts']),
-                                 ('s-100',10_000,1,'p',begin+10,[account]))
+                data = self.usage(period='today', scope=scope)
+                row = data['sessions'][0]
+                self.assertEqual(data['sessions_total'], 101)
+                self.assertEqual(
+                    (row['session'], total(row), row['requests'], row['project'], row['first_ts'], row['accounts']),
+                    ('s-100', 10_000, 1, 'p', begin + 10, [account]),
+                )
 
     def test_receiver_auth_size_and_content_type(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer
         from llm_usage.telemetry import handler
-        server=ThreadingHTTPServer(('127.0.0.1',0),handler(self.store,'fixture-token'))
-        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), handler(self.store, 'fixture-token'))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
         try:
-            for headers,status in [({},401),({'Authorization':'Bearer fixture-token','Content-Type':'application/x-protobuf'},415),
-                                   ({'Authorization':'Bearer fixture-token','Content-Type':'application/json'},200)]:
-                client=http.client.HTTPConnection(*server.server_address,timeout=3)
-                client.request('POST','/v1/logs',body='{}',headers=headers)
-                response=client.getresponse();self.assertEqual(response.status,status);response.read();client.close()
+            for headers, status in [
+                ({}, 401),
+                ({'Authorization': 'Bearer fixture-token', 'Content-Type': 'application/x-protobuf'}, 415),
+                ({'Authorization': 'Bearer fixture-token', 'Content-Type': 'application/json'}, 200),
+            ]:
+                client = http.client.HTTPConnection(*server.server_address, timeout=3)
+                client.request('POST', '/v1/logs', body='{}', headers=headers)
+                response = client.getresponse()
+                self.assertEqual(response.status, status)
+                response.read()
+                client.close()
             # A body nested too deep to parse is refused like any other malformed one.
-            client=http.client.HTTPConnection(*server.server_address,timeout=10)
-            client.request('POST','/v1/logs',body='{"resourceLogs":'+'['*200000+']'*200000+'}',
-                           headers={'Authorization':'Bearer fixture-token','Content-Type':'application/json'})
-            response=client.getresponse();self.assertEqual(response.status,400);response.read();client.close()
-        finally:server.shutdown();server.server_close();worker.join(timeout=3)
+            client = http.client.HTTPConnection(*server.server_address, timeout=10)
+            client.request(
+                'POST',
+                '/v1/logs',
+                body='{"resourceLogs":' + '[' * 200000 + ']' * 200000 + '}',
+                headers={'Authorization': 'Bearer fixture-token', 'Content-Type': 'application/json'},
+            )
+            response = client.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=3)
 
     def test_real_cloud_shape_parent_tool_and_model_usage(self):
-        item=dict(id='remote',created_at='2026-10-12T09:00:00Z')
-        message={'payload':dict(type='assistant',session_id='s',timestamp='2026-10-12T09:30:00Z',parent_tool_use_id='tool1',
-            message=dict(id='m1',model='claude-test',usage=dict(input_tokens=2,output_tokens=1,cache_read_input_tokens=30,cache_creation_input_tokens=4),content='NEVER STORE'))}
-        result={'created_at':'2026-10-12T10:00:00Z','payload':dict(type='result',session_id='s',modelUsage={'claude-test':dict(inputTokens=2,outputTokens=20,cacheReadInputTokens=30,cacheCreationInputTokens=4)})}
-        fetch=lambda *args:dict(data=[message,result])
-        with self.store.connect() as c:_ingest(self.store,c,fetch,{},item,model_provider,'events')
-        u=self.usage(period='today')
-        self.assertEqual(total(u['totals']),56)
-        self.assertEqual(u['reconciliation']['supplemental_tokens'],19)
+        item = dict(id='remote', created_at='2026-10-12T09:00:00Z')
+        message = {
+            'payload': dict(
+                type='assistant',
+                session_id='s',
+                timestamp='2026-10-12T09:30:00Z',
+                parent_tool_use_id='tool1',
+                message=dict(
+                    id='m1',
+                    model='claude-test',
+                    usage=dict(
+                        input_tokens=2, output_tokens=1, cache_read_input_tokens=30, cache_creation_input_tokens=4
+                    ),
+                    content='NEVER STORE',
+                ),
+            )
+        }
+        result = {
+            'created_at': '2026-10-12T10:00:00Z',
+            'payload': dict(
+                type='result',
+                session_id='s',
+                modelUsage={
+                    'claude-test': dict(
+                        inputTokens=2, outputTokens=20, cacheReadInputTokens=30, cacheCreationInputTokens=4
+                    )
+                },
+            ),
+        }
+        fetch = lambda *args: dict(data=[message, result])
         with self.store.connect() as c:
-            self.assertEqual(c.execute('SELECT agent_kind FROM events').fetchone()[0],'sub')
-            self.assertNotIn('NEVER STORE','\n'.join(c.iterdump()))
+            _ingest(self.store, c, fetch, {}, item, model_provider, 'events')
+        u = self.usage(period='today')
+        self.assertEqual(total(u['totals']), 56)
+        self.assertEqual(u['reconciliation']['supplemental_tokens'], 19)
+        with self.store.connect() as c:
+            self.assertEqual(c.execute('SELECT agent_kind FROM events').fetchone()[0], 'sub')
+            self.assertNotIn('NEVER STORE', '\n'.join(c.iterdump()))
 
     def test_repeated_pagination_is_not_success(self):
-        fetch=lambda *a:dict(data=[],next_cursor='same')
-        with self.assertRaises(IncompletePages),self.store.connect() as c:
-            _ingest(self.store,c,fetch,{},dict(id='s'),model_provider)
+        fetch = lambda *a: dict(data=[], next_cursor='same')
+        with self.assertRaises(IncompletePages), self.store.connect() as c:
+            _ingest(self.store, c, fetch, {}, dict(id='s'), model_provider)
 
     def test_large_event_history_returns_a_durable_resume_cursor(self):
         from llm_usage.cloud import _batch
-        calls=[]
-        def fetch(url,headers):
-            from urllib.parse import urlparse,parse_qs
-            cursor=int(parse_qs(urlparse(url).query).get('cursor',['0'])[0]);calls.append(cursor)
-            return dict(data=[],next_cursor=str(cursor+1) if cursor<22 else None)
-        _,cursor=_batch(fetch,{},dict(id='s'))
-        self.assertEqual(cursor,'20')
-        _,cursor=_batch(fetch,{},dict(id='s'),cursor)
+
+        calls = []
+
+        def fetch(url, headers):
+            from urllib.parse import urlparse, parse_qs
+
+            cursor = int(parse_qs(urlparse(url).query).get('cursor', ['0'])[0])
+            calls.append(cursor)
+            return dict(data=[], next_cursor=str(cursor + 1) if cursor < 22 else None)
+
+        _, cursor = _batch(fetch, {}, dict(id='s'))
+        self.assertEqual(cursor, '20')
+        _, cursor = _batch(fetch, {}, dict(id='s'), cursor)
         self.assertIsNone(cursor)
-        self.assertEqual(calls,list(range(23)))
+        self.assertEqual(calls, list(range(23)))
 
     def test_reasoning_remains_part_of_output_and_is_not_added_twice(self):
         self.event(output=100)
         with self.store.connect() as c:
-            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',
-                     model='claude-test',start=stamp('2026-10-12T09:00:00Z'),end=stamp('2026-10-12T10:00:00Z'),tokens=100,
-                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=100,reasoning=60))
-        u=self.usage(period='today')
-        self.assertEqual(total(u['totals']),100)
-        self.assertEqual(u['totals']['reasoning'],60)
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:s',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                start=stamp('2026-10-12T09:00:00Z'),
+                end=stamp('2026-10-12T10:00:00Z'),
+                tokens=100,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=100, reasoning=60),
+            )
+        u = self.usage(period='today')
+        self.assertEqual(total(u['totals']), 100)
+        self.assertEqual(u['totals']['reasoning'], 60)
 
     def test_telemetry_waits_for_request_alias_and_discards_content(self):
-        values={'event.name':'claude_code.api_request','request_id':'req1','session.id':'s','model':'claude-test',
-                'input_tokens':2,'output_tokens':30,'cache_read_tokens':3,'cache_creation_tokens':4,'prompt':'PRIVATE'}
-        record=dict(timeUnixNano=str(int((self.now-10)*1e9)),attributes=[dict(key=k,value={'stringValue':v} if isinstance(v,str) else {'intValue':str(v)}) for k,v in values.items()])
-        data=dict(resourceLogs=[dict(scopeLogs=[dict(logRecords=[record])])])
-        result=ingest(self.store,data,self.now)
-        self.assertEqual(result['pending'],1)
-        self.assertEqual(total(self.usage(period='today')['totals']),0)
+        values = {
+            'event.name': 'claude_code.api_request',
+            'request_id': 'req1',
+            'session.id': 's',
+            'model': 'claude-test',
+            'input_tokens': 2,
+            'output_tokens': 30,
+            'cache_read_tokens': 3,
+            'cache_creation_tokens': 4,
+            'prompt': 'PRIVATE',
+        }
+        record = dict(
+            timeUnixNano=str(int((self.now - 10) * 1e9)),
+            attributes=[
+                dict(key=k, value={'stringValue': v} if isinstance(v, str) else {'intValue': str(v)})
+                for k, v in values.items()
+            ],
+        )
+        data = dict(resourceLogs=[dict(scopeLogs=[dict(logRecords=[record])])])
+        result = ingest(self.store, data, self.now)
+        self.assertEqual(result['pending'], 1)
+        self.assertEqual(total(self.usage(period='today')['totals']), 0)
         with self.store.connect() as c:
-            parse_line(self.store,c,'claude-code',dict(type='assistant',timestamp=self.now-10,requestId='req1',sessionId='s',
-                message=dict(id='m1',model='claude-test',usage=dict(input_tokens=2,output_tokens=1,cache_read_input_tokens=3,cache_creation_input_tokens=4))),{})
-            self.assertEqual(resolve(self.store,c),1)
-            receipt=self.store.state(c,'telemetry:received')
-            self.assertEqual((receipt['pending'],receipt['checked'],receipt['status']),(0,self.now,'ok'))
-            source=c.execute("SELECT status,checked FROM sources WHERE name='telemetry'").fetchone()
-            self.assertEqual(tuple(source),('ok',self.now))
-            self.assertNotIn('PRIVATE','\n'.join(c.iterdump()))
-        ingest(self.store,data,self.now)
-        self.assertEqual(total(self.usage(period='today')['totals']),39)
-        self.assertEqual(self.usage(period='today')['totals']['requests'],1)
-
+            parse_line(
+                self.store,
+                c,
+                'claude-code',
+                dict(
+                    type='assistant',
+                    timestamp=self.now - 10,
+                    requestId='req1',
+                    sessionId='s',
+                    message=dict(
+                        id='m1',
+                        model='claude-test',
+                        usage=dict(
+                            input_tokens=2, output_tokens=1, cache_read_input_tokens=3, cache_creation_input_tokens=4
+                        ),
+                    ),
+                ),
+                {},
+            )
+            self.assertEqual(resolve(self.store, c), 1)
+            receipt = self.store.state(c, 'telemetry:received')
+            self.assertEqual((receipt['pending'], receipt['checked'], receipt['status']), (0, self.now, 'ok'))
+            source = c.execute("SELECT status,checked FROM sources WHERE name='telemetry'").fetchone()
+            self.assertEqual(tuple(source), ('ok', self.now))
+            self.assertNotIn('PRIVATE', '\n'.join(c.iterdump()))
+        ingest(self.store, data, self.now)
+        self.assertEqual(total(self.usage(period='today')['totals']), 39)
+        self.assertEqual(self.usage(period='today')['totals']['requests'], 1)
 
     def test_reports_follow_late_records_links_and_pricing_without_reannouncing(self):
         from llm_usage import reports
         from unittest.mock import patch
-        start=stamp('2026-10-06T09:00:00Z');price={'claude-test':dict(input=1,cached=1,cache_write=1,output=1)}
+
+        start = stamp('2026-10-06T09:00:00Z')
+        price = {'claude-test': dict(input=1, cached=1, cache_write=1, output=1)}
         with self.store.connect() as c:
-            self.store.event(c,'first',start+1,'Anthropic','claude-code','claude-test',dict(output=20_000_000),session='s')
-            link(c,'claude:s','first','local')
-            snapshot(self.store,c,source='claude-cloud',scope_id='claude:s',route='claude-code',provider='Anthropic',model='claude-test',
-                     start=start,end=start+3600,tokens=100_000_000,parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=100_000_000))
-        reports.ensure_report(self.store,self.now,price)
-        self.assertEqual(reports.recent(self.store)[0]['totals']['supplemental_tokens'],80_000_000)
+            self.store.event(
+                c, 'first', start + 1, 'Anthropic', 'claude-code', 'claude-test', dict(output=20_000_000), session='s'
+            )
+            link(c, 'claude:s', 'first', 'local')
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:s',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                start=start,
+                end=start + 3600,
+                tokens=100_000_000,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=100_000_000),
+            )
+        reports.ensure_report(self.store, self.now, price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['supplemental_tokens'], 80_000_000)
         with self.store.connect() as c:
-            self.store.event(c,'late',start+2,'Anthropic','claude-code','claude-test',dict(output=30_000_000),session='s')
-            link(c,'claude:s','late','local')
-        self.assertIsNone(reports.ensure_report(self.store,self.now+1,price))
-        totals=reports.recent(self.store)[0]['totals']
-        self.assertEqual((totals['tokens'],totals['requests'],totals['supplemental_tokens'],totals['cost']),(100_000_000,2,50_000_000,50))
-        with self.store.connect() as c:self.store.event(c,'unlinked',start+3,'Anthropic','claude-code','claude-test',dict(output=15_000_000),session='s')
-        reports.ensure_report(self.store,self.now+2,price)
-        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'],115_000_000)
-        with self.store.connect() as c:link(c,'claude:s','unlinked','local')
-        reports.ensure_report(self.store,self.now+3,price)
-        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'],100_000_000)
-        price['claude-test']['output']=2
-        reports.ensure_report(self.store,self.now+4,price)
-        self.assertEqual(reports.recent(self.store)[0]['totals']['cost'],130)
-        with self.store.connect() as c:self.store.event(c,'current-week',self.now-5,'Anthropic','claude-code','claude-test',dict(output=10))
-        with patch('llm_usage.reports.build',wraps=reports.build) as build:
-            self.assertIsNone(reports.ensure_report(self.store,self.now+5,price));build.assert_not_called()
+            self.store.event(
+                c, 'late', start + 2, 'Anthropic', 'claude-code', 'claude-test', dict(output=30_000_000), session='s'
+            )
+            link(c, 'claude:s', 'late', 'local')
+        self.assertIsNone(reports.ensure_report(self.store, self.now + 1, price))
+        totals = reports.recent(self.store)[0]['totals']
+        self.assertEqual(
+            (totals['tokens'], totals['requests'], totals['supplemental_tokens'], totals['cost']),
+            (100_000_000, 2, 50_000_000, 50),
+        )
+        with self.store.connect() as c:
+            self.store.event(
+                c,
+                'unlinked',
+                start + 3,
+                'Anthropic',
+                'claude-code',
+                'claude-test',
+                dict(output=15_000_000),
+                session='s',
+            )
+        reports.ensure_report(self.store, self.now + 2, price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'], 115_000_000)
+        with self.store.connect() as c:
+            link(c, 'claude:s', 'unlinked', 'local')
+        reports.ensure_report(self.store, self.now + 3, price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['tokens'], 100_000_000)
+        price['claude-test']['output'] = 2
+        reports.ensure_report(self.store, self.now + 4, price)
+        self.assertEqual(reports.recent(self.store)[0]['totals']['cost'], 130)
+        with self.store.connect() as c:
+            self.store.event(
+                c, 'current-week', self.now - 5, 'Anthropic', 'claude-code', 'claude-test', dict(output=10)
+            )
+        with patch('llm_usage.reports.build', wraps=reports.build) as build:
+            self.assertIsNone(reports.ensure_report(self.store, self.now + 5, price))
+            build.assert_not_called()
 
     def test_reports_include_evidence_when_there_are_no_local_requests(self):
         from llm_usage import reports
-        self.evidence(100,start='2026-10-06T09:00:00Z',end='2026-10-06T10:00:00Z')
-        reports.ensure_report(self.store,self.now)
-        report=reports.recent(self.store)[0]
-        self.assertEqual((report['totals']['tokens'],report['totals']['requests']),(100,0))
+
+        self.evidence(100, start='2026-10-06T09:00:00Z', end='2026-10-06T10:00:00Z')
+        reports.ensure_report(self.store, self.now)
+        report = reports.recent(self.store)[0]
+        self.assertEqual((report['totals']['tokens'], report['totals']['requests']), (100, 0))
 
     def test_project_ranks_sessions_after_supplements_including_evidence_only(self):
-        begin=stamp('2026-10-12T09:00:00Z')
+        begin = stamp('2026-10-12T09:00:00Z')
         with self.store.connect() as c:
             for i in range(11):
-                sid=f's-{i}'
-                self.store.event(c,sid,begin+10,'Anthropic','claude-code','claude-test',dict(output=11-i),session=sid,project='p')
-                link(c,'claude:'+sid,sid,'local')
-            for sid,tokens in [('s-10',100),('only-evidence',200)]:
-                snapshot(self.store,c,source='claude-cloud',scope_id='claude:'+sid,route='claude-code',provider='Anthropic',model='claude-test',
-                         session=sid,project='p',start=begin,end=begin+3600,tokens=tokens,
-                         parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=tokens))
-        sessions=self.store.project_detail('p',now=self.now)['sessions']
-        self.assertEqual(len(sessions),10)
-        self.assertEqual([(r['session'],r['tokens'],r['requests']) for r in sessions[:2]],[('only-evidence',200,0),('s-10',100,1)])
-        self.assertEqual([r['tokens'] for r in sessions],sorted([r['tokens'] for r in sessions],reverse=True))
+                sid = f's-{i}'
+                self.store.event(
+                    c,
+                    sid,
+                    begin + 10,
+                    'Anthropic',
+                    'claude-code',
+                    'claude-test',
+                    dict(output=11 - i),
+                    session=sid,
+                    project='p',
+                )
+                link(c, 'claude:' + sid, sid, 'local')
+            for sid, tokens in [('s-10', 100), ('only-evidence', 200)]:
+                snapshot(
+                    self.store,
+                    c,
+                    source='claude-cloud',
+                    scope_id='claude:' + sid,
+                    route='claude-code',
+                    provider='Anthropic',
+                    model='claude-test',
+                    session=sid,
+                    project='p',
+                    start=begin,
+                    end=begin + 3600,
+                    tokens=tokens,
+                    parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=tokens),
+                )
+        sessions = self.store.project_detail('p', now=self.now)['sessions']
+        self.assertEqual(len(sessions), 10)
+        self.assertEqual(
+            [(r['session'], r['tokens'], r['requests']) for r in sessions[:2]],
+            [('only-evidence', 200, 0), ('s-10', 100, 1)],
+        )
+        self.assertEqual([r['tokens'] for r in sessions], sorted([r['tokens'] for r in sessions], reverse=True))
 
     def test_calendar_uses_the_same_history_boundary_for_evidence_and_requests(self):
-        from datetime import datetime,timedelta
+        from datetime import datetime, timedelta
         from llm_usage.store import KST
-        cutoff=datetime.fromtimestamp(self.now,KST).replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=181)
-        self.evidence(100,start=(cutoff-timedelta(hours=23)).isoformat(),end=(cutoff-timedelta(hours=22)).isoformat())
-        old=self.usage(period='all')
-        self.assertEqual(total(old['totals']),100);self.assertEqual(old['calendar'],[])
+
+        cutoff = datetime.fromtimestamp(self.now, KST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+            days=181
+        )
+        self.evidence(
+            100, start=(cutoff - timedelta(hours=23)).isoformat(), end=(cutoff - timedelta(hours=22)).isoformat()
+        )
+        old = self.usage(period='all')
+        self.assertEqual(total(old['totals']), 100)
+        self.assertEqual(old['calendar'], [])
         with self.store.connect() as c:
-            snapshot(self.store,c,source='claude-cloud',scope_id='claude:boundary',route='claude-code',provider='Anthropic',model='claude-test',
-                     start=(cutoff+timedelta(hours=1)).timestamp(),end=(cutoff+timedelta(hours=2)).timestamp(),tokens=40,
-                     parts=dict(uncached_input=0,cached_input=0,cache_creation=0,output=40))
-        days=self.usage(period='all')['calendar']
-        self.assertEqual([(d['day'],d['tokens']) for d in days],[(cutoff.date().isoformat(),40)])
+            snapshot(
+                self.store,
+                c,
+                source='claude-cloud',
+                scope_id='claude:boundary',
+                route='claude-code',
+                provider='Anthropic',
+                model='claude-test',
+                start=(cutoff + timedelta(hours=1)).timestamp(),
+                end=(cutoff + timedelta(hours=2)).timestamp(),
+                tokens=40,
+                parts=dict(uncached_input=0, cached_input=0, cache_creation=0, output=40),
+            )
+        days = self.usage(period='all')['calendar']
+        self.assertEqual([(d['day'], d['tokens']) for d in days], [(cutoff.date().isoformat(), 40)])
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == '__main__':
+    unittest.main()

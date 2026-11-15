@@ -1,4 +1,5 @@
 """Exercise actual Gunicorn socket metadata; no host config or provider access."""
+
 import http.client
 import json
 import os
@@ -14,6 +15,7 @@ import unittest
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Gunicorn Unix transport requires Linux')
 class GunicornTransportTests(unittest.TestCase):
     worker_arguments = []
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix='llm-transport-')
@@ -21,8 +23,16 @@ class GunicornTransportTests(unittest.TestCase):
         root = Path(cls.temp.name)
         cls.path = root / 'web.sock'
         config = root / 'config.json'
-        config.write_text(json.dumps(dict(database=str(root / 'usage.db'), origin='https://dashboard.example',
-                                         secret_key='synthetic-test-only', allowed_logins=['owner@example.invalid'])))
+        config.write_text(
+            json.dumps(
+                dict(
+                    database=str(root / 'usage.db'),
+                    origin='https://dashboard.example',
+                    secret_key='synthetic-test-only',
+                    allowed_logins=['owner@example.invalid'],
+                )
+            )
+        )
         # Pass a pre-bound descriptor, avoiding the free-port-close-bind race.
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0))
@@ -31,10 +41,26 @@ class GunicornTransportTests(unittest.TestCase):
         unix_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         unix_listener.bind(str(cls.path))
         unix_listener.listen()
-        cls.process = subprocess.Popen([sys.executable, '-m', 'gunicorn', '--workers', '1', '--bind',
-            'fd://' + str(listener.fileno()), '--bind', 'fd://' + str(unix_listener.fileno()), '--no-control-socket',
-            *cls.worker_arguments, 'llm_usage.webapp:create_app()'], pass_fds=(listener.fileno(), unix_listener.fileno()),
-            env={**os.environ, 'LLM_USAGE_CONFIG':str(config)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.process = subprocess.Popen(
+            [
+                sys.executable,
+                '-m',
+                'gunicorn',
+                '--workers',
+                '1',
+                '--bind',
+                'fd://' + str(listener.fileno()),
+                '--bind',
+                'fd://' + str(unix_listener.fileno()),
+                '--no-control-socket',
+                *cls.worker_arguments,
+                'llm_usage.webapp:create_app()',
+            ],
+            pass_fds=(listener.fileno(), unix_listener.fileno()),
+            env={**os.environ, 'LLM_USAGE_CONFIG': str(config)},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         listener.close()
         unix_listener.close()
         cls.addClassCleanup(cls.stop)
@@ -43,7 +69,7 @@ class GunicornTransportTests(unittest.TestCase):
                 raise RuntimeError('Synthetic Gunicorn exited during startup')
             if cls.path.exists():
                 try:
-                    conn = http.client.HTTPConnection('127.0.0.1', cls.port, timeout=.2)
+                    conn = http.client.HTTPConnection('127.0.0.1', cls.port, timeout=0.2)
                     conn.request('GET', '/healthz')
                     if conn.getresponse().status == 200:
                         conn.close()
@@ -52,7 +78,7 @@ class GunicornTransportTests(unittest.TestCase):
                     pass
                 finally:
                     conn.close()
-            time.sleep(.05)
+            time.sleep(0.05)
         else:
             raise RuntimeError('Synthetic Gunicorn startup timed out')
 
@@ -71,8 +97,13 @@ class GunicornTransportTests(unittest.TestCase):
         try:
             connection.connect(('127.0.0.1', self.port) if tcp else str(self.path))
             payload = (body or '').encode()
-            fields = {'Host':'localhost', 'Content-Length':str(len(payload)), 'Connection':'close', **(headers or {})}
-            head = f'{method} {path} HTTP/1.1\r\n' + ''.join(f'{k}: {v}\r\n' for k,v in fields.items()) + '\r\n'
+            fields = {
+                'Host': 'localhost',
+                'Content-Length': str(len(payload)),
+                'Connection': 'close',
+                **(headers or {}),
+            }
+            head = f'{method} {path} HTTP/1.1\r\n' + ''.join(f'{k}: {v}\r\n' for k, v in fields.items()) + '\r\n'
             # One write prevents an immediate 403 from closing between header/body writes.
             connection.sendall(head.encode() + payload)
             response = http.client.HTTPResponse(connection)
@@ -82,23 +113,33 @@ class GunicornTransportTests(unittest.TestCase):
             connection.close()
 
     def test_real_transport_and_csrf_boundary(self):
-        identity = {'Host':'dashboard.example', 'Tailscale-User-Login':'owner@example.invalid'}
+        identity = {'Host': 'dashboard.example', 'Tailscale-User-Login': 'owner@example.invalid'}
         self.assertEqual(self.request('/healthz', tcp=True)[0], 200)
         self.assertEqual(self.request('/api/bootstrap', tcp=True, headers=identity)[0], 403)
         self.assertEqual(self.request('/api/bootstrap')[0], 403)
-        self.assertEqual(self.request('/api/bootstrap', headers={**identity, 'Tailscale-User-Login':'other'})[0], 403)
-        self.assertEqual(self.request('/api/bootstrap', headers={**identity, 'Host':'attacker.example'})[0], 403)
+        self.assertEqual(self.request('/api/bootstrap', headers={**identity, 'Tailscale-User-Login': 'other'})[0], 403)
+        self.assertEqual(self.request('/api/bootstrap', headers={**identity, 'Host': 'attacker.example'})[0], 403)
         status, headers, body = self.request('/api/bootstrap', headers=identity)
         self.assertEqual(status, 200)
         cookie = headers['Set-Cookie'].split(';', 1)[0]
         token = json.loads(body)['csrf']
-        post = {**identity, 'Content-Type':'application/json', 'Cookie':cookie, 'Origin':'https://dashboard.example'}
+        post = {**identity, 'Content-Type': 'application/json', 'Cookie': cookie, 'Origin': 'https://dashboard.example'}
         self.assertEqual(self.request('/api/refresh', method='POST', headers=post, body='{}')[0], 403)
-        self.assertEqual(self.request('/api/refresh', method='POST', headers={**post, 'X-CSRF-Token':token,
-            'Origin':'https://attacker.example'}, body='{}')[0], 403)
-        self.assertEqual(self.request('/api/refresh', method='POST', headers={**post, 'X-CSRF-Token':token}, body='{}')[0], 202)
+        self.assertEqual(
+            self.request(
+                '/api/refresh',
+                method='POST',
+                headers={**post, 'X-CSRF-Token': token, 'Origin': 'https://attacker.example'},
+                body='{}',
+            )[0],
+            403,
+        )
+        self.assertEqual(
+            self.request('/api/refresh', method='POST', headers={**post, 'X-CSRF-Token': token}, body='{}')[0], 202
+        )
 
 
 class GunicornThreadedTransportTests(GunicornTransportTests):
     """Match production: --threads 4 selects the gthread worker."""
+
     worker_arguments = ["--threads", "4"]

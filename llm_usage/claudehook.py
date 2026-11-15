@@ -8,6 +8,7 @@ home path. No prompt, transcript text or credential leaves stdin or the home.
 It prints nothing (SessionStart/UserPromptSubmit output would enter the model's
 context) and always exits 0, so a failure here can never block or change a turn.
 """
+
 import argparse
 from contextlib import closing
 import hashlib
@@ -25,7 +26,9 @@ SESSION = re.compile(r'^[A-Za-z0-9._-]{1,100}$')
 
 def account_key(identity):
     """Equal to llm_usage.resources.key('claude-code', identity)."""
-    return hashlib.sha256(json.dumps(['claude-code', list(identity)], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(['claude-code', list(identity)], sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
 
 
 def config_home(environ=None):
@@ -57,13 +60,18 @@ def record(directory, event, session, now=None, environ=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / 'claude-accounts.db'
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600); os.close(fd)
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
+    os.close(fd)
     now = time.time() if now is None else now
     with closing(sqlite3.connect(path, timeout=1)) as c, c:
-        c.execute('CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, '
-                  'session TEXT NOT NULL, event TEXT NOT NULL, account TEXT, home TEXT NOT NULL)')
-        c.execute('INSERT INTO markers (ts,session,event,account,home) VALUES (?,?,?,?,?)',
-                  (now, session, event, native_account(account_file), str(home)[:300]))
+        c.execute(
+            'CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, '
+            'session TEXT NOT NULL, event TEXT NOT NULL, account TEXT, home TEXT NOT NULL)'
+        )
+        c.execute(
+            'INSERT INTO markers (ts,session,event,account,home) VALUES (?,?,?,?,?)',
+            (now, session, event, native_account(account_file), str(home)[:300]),
+        )
         # The collector keeps its own copy; the inbox only bridges a few days.
         if int(now) % 50 == 0:
             c.execute('DELETE FROM markers WHERE ts<?', (now - 14 * 86400,))

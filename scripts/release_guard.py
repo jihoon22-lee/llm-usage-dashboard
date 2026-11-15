@@ -1,4 +1,5 @@
 """Fail-closed release invariants shared by CI, publishing, and regression tests."""
+
 import hashlib
 import json
 from pathlib import Path
