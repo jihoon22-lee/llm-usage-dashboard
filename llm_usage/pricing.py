@@ -13,7 +13,8 @@ import re
 # USD per 1M tokens. cache_write=None falls back to the input rate.
 # Provider-internal or unidentified models with no public token price: costs stay
 # unestimated by design, so they are not reported as missing a rate.
-NO_PUBLIC_PRICE = frozenset({'compactor', 'codex-auto-review', 'gpt-reserve', 'unknown'})
+# big-pickle is OpenCode's free stealth model; it has no paid listing to convert at.
+NO_PUBLIC_PRICE = frozenset({'big-pickle', 'compactor', 'codex-auto-review', 'gpt-reserve', 'unknown'})
 # One rate per model: where a provider's API charges more for long prompts or peak hours,
 # the base tier is listed. The use recorded here runs on subscriptions, which carry no
 # long-context surcharge (Codex states so and lists one credit rate per model; Anthropic's
@@ -26,7 +27,7 @@ _GEMINI_FLASH = dict(input=0.75, cached=0.075, output=3.75)
 _MUSE_SPARK = dict(input=1.25, cached=0.15, output=4.25)
 _MUSE_CONTRIBUTOR = dict(input=0.1, cached=0.002, output=0.2)
 BUILTIN = {
-    # Anthropic, verified 2026-11-10. https://platform.claude.com/docs/en/about-claude/pricing
+    # Anthropic, verified 2026-11-18. https://platform.claude.com/docs/en/about-claude/pricing
     # Cache reads are 0.025x input on Fable 5.1/5.2 and 0.05x on Opus/Sonnet 5.5.
     'claude-fable-5-2': dict(input=8, cached=0.2, output=40, cache_write=10, cache_write_1h=16),
     'claude-fable-5-1': _FABLE,
@@ -48,14 +49,16 @@ BUILTIN = {
     # Prompts up to 100K tokens; longer prompts cost 5x ($0.50/$2.50).
     'claude-haiku-5-5': dict(input=0.1, cached=0.01, output=0.5, cache_write=0.125, cache_write_1h=0.2),
     'claude-haiku-4-5': dict(input=1, cached=0.1, output=5, cache_write=1.25, cache_write_1h=2),
-    # OpenAI, standard tier up to 272K input, verified 2026-11-10 (cache_write is the
+    # OpenAI, standard tier up to 272K input, verified 2026-11-18 (cache_write is the
     # 30-minute rate). https://developers.openai.com/api/docs/pricing
     'gpt-5': dict(input=1.25, cached=0.125, output=10, cache_write=1.25),
     'gpt-5-mini': dict(input=0.25, cached=0.025, output=2, cache_write=0.25),
     'gpt-6-astra': dict(input=10, cached=1, output=50, cache_write=12.5),
+    'gpt-6.2-astra': dict(input=8, cached=0.4, output=40, cache_write=10),
     'gpt-6-sol': dict(input=2, cached=0.2, output=10, cache_write=2.5),
     # 6.1 halves the cache-read rate of its 6.0 counterpart.
     'gpt-6.1-sol': dict(input=2, cached=0.1, output=10, cache_write=2.5),
+    'gpt-6.2-sol': dict(input=2, cached=0.1, output=10, cache_write=2.5),
     'gpt-6.1-terra': dict(input=1, cached=0.05, output=5, cache_write=1.25),
     'gpt-6-luna': dict(input=0.1, cached=0.01, output=0.5, cache_write=0.125),
     # Dated history (KST 'since' dates; each applies until the next entry).
@@ -75,7 +78,8 @@ BUILTIN = {
         dict(since='2026-06-26', input=1, cached=0.1, output=6, cache_write=1.25),
         dict(since='2026-07-30', input=0.2, cached=0.02, output=1.2, cache_write=0.25),
     ],
-    # Google, paid standard tier, verified 2026-11-10. https://aistudio.google.com/docs/pricing
+    # Google, paid standard tier, verified 2026-11-18 (3.7 Flash is no longer listed; its
+    # 2026-11-10 rate is kept). https://aistudio.google.com/docs/pricing
     # Pro models list the tier up to 200K prompt tokens.
     'gemini-2.5-pro': dict(input=1.25, cached=0.125, output=10),
     'gemini-2.5-flash': dict(input=0.3, cached=0.03, output=2.5),
@@ -96,8 +100,11 @@ BUILTIN = {
     # deepseek-v4-flash is the retired V4 API alias; observed events predate
     # the V4.1-Flash handover so the original V4 rates apply.
     'deepseek-v4-flash': dict(input=0.14, cached=0.0028, output=0.28),
-    # Off-peak rate; peak hours cost 2x. https://api-docs.deepseek.com/quick_start/pricing
+    # Off-peak rate; peak hours cost 2x. Verified 2026-11-18.
+    # https://api-docs.deepseek.com/quick_start/pricing
     'deepseek-v4.1-flash': dict(input=0.15, cached=0.003, output=0.6),
+    # Z.ai, verified 2026-11-18; OpenCode lists the same rate. https://docs.z.ai/guides/overview/pricing
+    'glm-5.3-flash': dict(input=0.15, cached=0.03, output=0.5),
 }
 
 

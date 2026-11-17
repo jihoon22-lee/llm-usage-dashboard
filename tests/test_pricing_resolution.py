@@ -114,6 +114,8 @@ class BuiltinTableTests(unittest.TestCase):
         for model, (inp, cached, output) in {
             'gpt-6-astra': (10, 1, 50),
             'gpt-6.1-sol': (2, 0.1, 10),
+            'gpt-6.2-sol': (2, 0.1, 10),
+            'gpt-6.2-astra': (8, 0.4, 40),
             'gpt-6-sol': (2, 0.2, 10),
             'gemini-4-argon-trial': (2, 0.1, 10),
             'gemini-3.1-pro-low': (2, 0.2, 12),
@@ -122,6 +124,7 @@ class BuiltinTableTests(unittest.TestCase):
             'muse-spark-1.3-contributor-free': (0.1, 0.002, 0.2),
             'deepseek-v4.1-flash-free': (0.15, 0.003, 0.6),
             'deepseek-v4-flash': (0.14, 0.0028, 0.28),
+            'glm-5.3-flash-free': (0.15, 0.03, 0.5),
         }.items():
             with self.subTest(model=model):
                 rate = rate_for(model, BUILTIN, '2026-11-10')
@@ -135,11 +138,13 @@ class BuiltinTableTests(unittest.TestCase):
             'claude-haiku-5-6',
             'claude-haiku-4',
             'claude-opus-6',
-            'gpt-6.2-sol',
+            'gpt-6.3-sol',
             'gpt-6-terra',
+            'glm-5.3-flashx',
             'gemini-4-argon-pro',
             'muse-spark-1.4',
             'swe-2 (max)',
+            'swe-2-flash (medium)',
         ):
             with self.subTest(model=model):
                 self.assertIsNone(rate_for(model, BUILTIN))

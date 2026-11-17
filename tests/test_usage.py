@@ -1191,7 +1191,7 @@ class WebTests(unittest.TestCase):
                 stamp('2026-10-03T00:00:00Z'),
                 'OpenAI',
                 'codex',
-                'gpt-6.2-sol',
+                'gpt-6.3-sol',
                 dict(uncached_input=1_000_000),
             )
         response = self.get('/api/usage?period=custom&start=2026-10-03&end=2026-10-03&group=model')
@@ -1202,7 +1202,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(rows['gpt-6.1-sol']['est_cost'], 14.6)
         self.assertEqual(rows['gpt-6.1-sol-2026-09-29']['est_cost'], 14.6)
         self.assertEqual(rows['gpt-6-sol']['est_cost'], 0.2)
-        self.assertIsNone(rows['gpt-6.2-sol']['est_cost'])
+        self.assertIsNone(rows['gpt-6.3-sol']['est_cost'])
         self.assertAlmostEqual(data['cost']['period'], 29.4)
         self.assertEqual(data['cost']['coverage'], 90)
         config = self.get('/api/config').get_json()

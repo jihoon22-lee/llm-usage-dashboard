@@ -493,14 +493,22 @@ class WebSignalTests(unittest.TestCase):
     def test_unpriced_models_exclude_hidden_and_internal(self):
         now = time.time()
         with self.store.connect() as c:
-            for model in ('brand-new-model', 'hidden-model', 'compactor', 'gpt-reserve', 'unknown', 'gpt-6-sol'):
+            for model in (
+                'brand-new-model',
+                'hidden-model',
+                'compactor',
+                'gpt-reserve',
+                'unknown',
+                'big-pickle',
+                'gpt-6-sol',
+            ):
                 self.store.event(
                     c, model, now - 3600, 'OpenAI', 'codex', model, dict(uncached_input=1000), session='s1', project='p'
                 )
         data = self.get('/api/usage?period=7d').get_json()
         self.assertEqual(data['unpriced_models'], ['brand-new-model'])
         detail = self.get('/api/session?id=s1').get_json()
-        self.assertEqual((detail['requests'], detail['project'], len(detail['models'])), (6, 'p', 6))
+        self.assertEqual((detail['requests'], detail['project'], len(detail['models'])), (7, 'p', 7))
         self.assertEqual(len(detail['hours']), 1)
         self.assertEqual(self.get('/api/session?id=bad%20id').status_code, 400)
         self.assertEqual(self.get('/api/session?id=none').get_json()['models'], [])
