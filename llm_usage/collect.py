@@ -83,28 +83,9 @@ def retire_legacy_sources(store):
         store.save_state(c, 'legacy-sources-v1', True)
 
 
-def reread_claude_cache_splits(store):
-    """Once: read again, from the start, the Claude files of the responses whose cache split
-    was left unknown because only the first model call's split sat at the top (several calls
-    in one response). Only those sessions' files: a parser version would re-read every file."""
-    with store.connect() as c:
-        if store.state(c, 'claude-cache-calls-v1'):
-            return
-        sessions = {
-            r[0]
-            for r in c.execute(
-                "SELECT DISTINCT e.session FROM import_errors i JOIN events e ON i.record=e.id || ':cache' "
-                "WHERE i.source='claude-details' AND e.route LIKE 'claude-code%' AND e.session IS NOT NULL"
-            )
-        }
-        # A Claude session's files are `<session>.jsonl` and those under `<session>/`.
-        for key, data in c.execute("SELECT key,data FROM state WHERE key LIKE 'file:%'").fetchall():
-            if any(s in key for s in sessions):
-                checkpoint = json.loads(data)
-                if isinstance(checkpoint, dict):
-                    checkpoint['parser_version'] = 0
-                    store.save_state(c, key, checkpoint)
-        store.save_state(c, 'claude-cache-calls-v1', True)
+def file_parser_version(route):
+    # Replay Claude transcripts and Aside copies with the corrected cache and attribution rules.
+    return 5 if route in ('claude-code', 'aside') else PARSER_VERSION
 
 
 def parse_line(store, c, route, d, state):
@@ -239,7 +220,7 @@ def collect_file(store, path, route):
     key = 'file:' + str(path)
     with store.connect() as c:
         checkpoint = store.state(c, key, {})
-        repair_fork = checkpoint.get('parser_version', 0) < PARSER_VERSION
+        replay = checkpoint.get('parser_version', 0) < file_parser_version(route)
         unchanged = (
             checkpoint.get('size') == stat.st_size
             and checkpoint.get('mtime') == stat.st_mtime_ns
@@ -247,7 +228,7 @@ def collect_file(store, path, route):
         )
         packed = compressed(path)
         misaligned = False if packed else _misaligned_errors(c, path, key)
-        if not repair_fork and unchanged and not misaligned:
+        if not replay and unchanged and not misaligned:
             return store.error_count(c, key)
         offset = checkpoint.get('offset', 0)
         state = checkpoint.get('parser', {})
@@ -260,7 +241,7 @@ def collect_file(store, path, route):
         ) or misaligned
         if (
             packed
-            or repair_fork
+            or replay
             or rewritten
             or checkpoint.get('inode') != stat.st_ino
             or stat.st_size < offset
@@ -306,7 +287,7 @@ def collect_file(store, path, route):
                 c,
                 key,
                 dict(
-                    parser_version=PARSER_VERSION,
+                    parser_version=file_parser_version(route),
                     offset=end,
                     tail=tail,
                     size=stat.st_size,
@@ -318,7 +299,7 @@ def collect_file(store, path, route):
             return store.error_count(c, key)
 
 
-def changed_files(store, root, paths):
+def changed_files(store, root, paths, route=None):
     """The record files that need collect_file(): changed since their checkpoint or
     carrying recorded errors. One query replaces a connection per unchanged file,
     which mattered with thousands of finished session files."""
@@ -344,7 +325,7 @@ def changed_files(store, root, paths):
         except ValueError:
             checkpoint = {}
         unchanged = (
-            checkpoint.get('parser_version', 0) >= PARSER_VERSION
+            checkpoint.get('parser_version', 0) >= file_parser_version(route)
             and checkpoint.get('size') == stat.st_size
             and checkpoint.get('mtime') == stat.st_mtime_ns
             and checkpoint.get('inode') == stat.st_ino
@@ -482,7 +463,7 @@ def collect_local(store, settings, *, include_derived=True):
             else:
                 paths = record_files(root)
                 count = len(paths)
-                for path in changed_files(store, root, paths):
+                for path in changed_files(store, root, paths, route):
                     try:
                         collect_file(store, path, route)
                         # The file was read: an earlier whole-file failure (a locked or
@@ -1049,7 +1030,9 @@ def run(settings, once=False):
             fcntl.flock(handle, fcntl.LOCK_EX)
         repair_provider_labels(store)
         retire_legacy_sources(store)
-        reread_claude_cache_splits(store)
+        from .claude_usage import prepare_replay
+
+        prepare_replay(store)
         store.rebuild_rollup()
         last_local = last_limits = last_accounts = 0
         with store.connect() as c:

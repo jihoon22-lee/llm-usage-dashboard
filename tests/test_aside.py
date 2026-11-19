@@ -181,6 +181,118 @@ class AsideTests(unittest.TestCase):
         self.assertEqual(source['status'], 'error')
         self.assertIn('누락 1건 · 불일치 3건', source['detail'])
 
+    def test_claude_copy_keeps_transcript_attribution_in_either_order_and_after_upgrade(self):
+        from llm_usage import claude_attribution
+        from llm_usage.claude_usage import prepare_replay
+        from llm_usage.collect import PARSER_VERSION, collect_file
+        from unittest.mock import patch
+        from test_usage_details import calls_message
+
+        root = self.root / 'transcripts'
+        root.mkdir()
+        path = root / 'archive.jsonl'
+        original = calls_message()
+        path.write_text(json.dumps(original) + '\n')
+        self.settings['sources'] = [dict(name='Claude', kind='jsonl', route='claude-code', path=str(root))]
+        self.write('s1', [response('parent', 'claude-code', 'claude-alias', input=100, cacheRead=0, output=40)])
+        aside_path = self.sessions / 's1' / 'messages.jsonl'
+        for order in ('aside-first', 'transcript-first', 'upgrade'):
+            with self.subTest(order=order):
+                self.store = Store(self.root / (order + '.db'))
+                self.settings['database'] = self.store.path
+                account_key = 'b' * 64
+                account_route = 'claude-code:' + account_key[:12]
+                with self.store.connect() as c:
+                    c.execute(
+                        'INSERT INTO claude_accounts VALUES (?,?,?,?,?)', (account_route, account_key, 1, 1, '{}')
+                    )
+                if order == 'aside-first':
+                    collect_file(self.store, aside_path, 'aside')
+                if order == 'upgrade':
+                    collect_file(self.store, path, 'claude-code')
+                    collect_file(self.store, aside_path, 'aside')
+                    with self.store.connect() as c:
+                        c.execute(
+                            "UPDATE events SET session=?,project='Aside',account=? WHERE requests=1",
+                            (aside.session_id(aside_path), account_route),
+                        )
+                        c.execute(
+                            "INSERT INTO claude_evidence VALUES (?,?,?,'aside')", ('detail-session', T0, account_key)
+                        )
+                        key = 'file:' + str(path)
+                        self.store.save_state(c, key, dict(self.store.state(c, key), parser_version=PARSER_VERSION))
+                    prepare_replay(self.store)
+                self.collect()
+                self.assertEqual(
+                    aside.attribute(self.store, {**self.settings, 'aside_claude_account': account_route}), 0
+                )
+                with patch.object(claude_attribution, 'home_candidates', return_value=[]):
+                    claude_attribution.resolve(self.store, self.settings)
+                rows = sorted(self.events(), key=lambda row: row['requests'], reverse=True)
+                self.assertEqual(
+                    [(r['requests'], r['advisor_calls'], r['session'], r['project']) for r in rows],
+                    [(1, 0, 'detail-session', 'project'), (0, 1, 'detail-session', 'project')],
+                )
+                self.assertEqual(rows[0]['model'], 'claude-parent')
+                self.assertIsNone(rows[0]['effort'])
+                self.assertEqual([r['account'] for r in rows], ['claude-code', 'claude-code'])
+                with self.store.connect() as c:
+                    self.assertIsNone(c.execute("SELECT 1 FROM claude_evidence WHERE kind='aside'").fetchone())
+                    self.assertEqual(
+                        {
+                            r[0]
+                            for r in c.execute('SELECT source FROM usage_origins WHERE event_id=?', (rows[0]['id'],))
+                        },
+                        {'local', 'aside'},
+                    )
+                self.assertTrue(self.store.rollup_matches())
+                self.assertFalse(failed(reconcile(self.store.path, self.settings)))
+
+    def test_verification_uses_reasoning_observed_at_the_largest_output(self):
+        older = response('r', reasoning=5)
+        newer = response('r', output=30)
+        for rid, records in (('forward', (older, newer)), ('backward', (newer, older))):
+            self.write(rid, [{**record, 'responseId': rid} for record in records])
+        self.collect()
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual(result['aside']['matched_requests'], 2)
+        self.assertFalse(failed(result))
+
+    def test_verification_distinguishes_conflicted_and_replaced_cache_splits(self):
+        first = response('r', cacheWrite=300, cacheWrite1h=100)
+        second = response('r', cacheWrite=300, cacheWrite1h=200)
+        self.write('s', [first, second])
+        self.collect()
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual(result['aside']['detail_conflicts'], 1)
+        self.assertTrue(partial(result))
+        self.assertFalse(failed(result))
+        with self.store.connect() as c:
+            c.execute("""UPDATE events SET cache_creation_5m=200, cache_creation_1h=100,
+                cache_creation_unknown=0, cache_ttl_observed=1, cache_ttl_conflict=0""")
+        self.assertTrue(failed(reconcile(self.store.path, self.settings)))
+        self.write('s', [response('r', cacheWrite=400, cacheWrite1h=100)], mode='a')
+        self.collect()
+        result = reconcile(self.store.path, self.settings)
+        self.assertEqual(result['aside']['matched_requests'], 1)
+        self.assertFalse(partial(result))
+
+    def test_verification_reports_unsupported_files_and_invalid_timestamps_as_partial(self):
+        import gzip
+
+        upper = aside.TIMESTAMP_LIMIT
+        stamps = (upper - 1, upper, 0, float('nan'), float('inf'))
+        self.write('s', [{**response(f'r{i}'), 'timestamp': ts} for i, ts in enumerate(stamps)])
+        (self.sessions / 's' / 'old.jsonl.gz').write_bytes(gzip.compress(b'{}\n'))
+        self.collect()
+        result = reconcile(self.store.path, self.settings)
+        counts = result['aside']
+        self.assertEqual(
+            (counts['matched_requests'], counts['unreadable_records'], counts['unsupported_files']), (1, 4, 1)
+        )
+        self.assertTrue(partial(result))
+        self.assertFalse(failed(result))
+
     def test_claude_requests_take_the_account_the_setting_names(self):
         from unittest.mock import patch
 

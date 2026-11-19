@@ -192,6 +192,20 @@ def registry_points(homes):
     return points
 
 
+def reassign_aside_session(c, event_id, old_session, session, ts):
+    """Reconsider native ownership and carry request-bound telemetry to the native session."""
+    kind = 'telemetry:' + event_id
+    c.execute(
+        'INSERT OR IGNORE INTO claude_evidence SELECT ?,ts,account_key,kind FROM claude_evidence WHERE session=? AND kind=?',
+        (session, old_session, kind),
+    )
+    c.execute('DELETE FROM claude_evidence WHERE session=? AND kind=?', (old_session, kind))
+    c.execute(
+        'INSERT INTO claude_dirty VALUES (?,?) ON CONFLICT(session) DO UPDATE SET since=MIN(since,excluded.since)',
+        (session, ts - TOLERANCE),
+    )
+
+
 def remember_homes(store, c, homes):
     known = observed_homes(store, c)
     merged = list(dict.fromkeys([*known, *homes]))[-20:]

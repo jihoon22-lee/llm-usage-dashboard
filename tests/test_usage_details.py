@@ -6,19 +6,21 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from llm_usage.claude_usage import components
+from llm_usage.claude_usage import components, prepare_replay
 from llm_usage.cloud import _ingest
 from llm_usage.collect import (
     PARSER_VERSION,
     collect_file,
+    collect_local,
+    file_parser_version,
     model_provider,
     prepare_normalization,
-    reread_claude_cache_splits,
 )
 from llm_usage.insights import token_total
 from llm_usage.pricing import estimate
 from llm_usage.reconciliation import supplements
 from llm_usage.store import Store, identity, stamp
+from llm_usage.verify import failed, partial, reconcile
 
 NOW = stamp('2026-10-23T03:00:00Z')
 RATES = {
@@ -249,47 +251,106 @@ class DetailTests(unittest.TestCase):
             self.assertEqual((row['cache_creation_unknown'], row['cache_ttl_observed']), (30, 0))
             self.assertEqual(c.execute("SELECT kind FROM import_errors").fetchall()[0][0], 'cacheComponentMismatch')
 
-    def test_split_left_unknown_by_an_older_reading_is_recovered_by_the_one_time_reread(self):
-        path = self.root / 'session-a.jsonl'
-        untouched = self.root / 'session-b.jsonl'
-        other = message()
-        other['sessionId'] = 'session-b'
-        other['message']['id'] = 'b'
-        untouched.write_text(json.dumps(other) + '\n')
+    def test_cache_replay_recovers_arbitrarily_named_files_with_old_checkpoints(self):
+        from llm_usage.record_files import zstd
+
+        path = self.root / 'archive.jsonl.zst'
         value = calls_message()
-        value['sessionId'] = 'session-a'
-        path.write_text(json.dumps(value) + '\n')
-        # The reading before this release could not use the calls' splits.
+        path.write_bytes(zstd.compress((json.dumps(value) + '\n').encode()))
         with patch('llm_usage.claude_usage.call_split', side_effect=ValueError('old reading')):
             collect_file(self.store, path, 'claude-code')
-        collect_file(self.store, untouched, 'claude-code')
+        with self.store.connect() as c:
+            key = 'file:' + str(path)
+            self.store.save_state(c, key, dict(self.store.state(c, key), parser_version=PARSER_VERSION))
+            self.store.save_state(c, 'claude-cache-calls-v1', True)
         self.assertEqual(self.parent()['cache_creation_unknown'], 30)
-        reread_claude_cache_splits(self.store)
+        cfg = {'sources': [dict(name='Claude', path=str(self.root), kind='jsonl', route='claude-code')]}
+        prepare_replay(self.store)
+        collect_local(self.store, cfg, include_derived=False)
+        self.assertEqual(self.parent()['cache_creation_5m'], 20)
+        self.assertEqual(self.parent()['cache_creation_1h'], 10)
         with self.store.connect() as c:
-            marks = {
-                k: self.store.state(c, k)['parser_version'] for k in ('file:' + str(path), 'file:' + str(untouched))
-            }
-        self.assertEqual(marks, {'file:' + str(path): 0, 'file:' + str(untouched): PARSER_VERSION})
-        collect_file(self.store, path, 'claude-code')
+            self.assertEqual(self.store.state(c, key)['parser_version'], file_parser_version('claude-code'))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM import_errors').fetchone()[0], 0)
+        with patch('llm_usage.collect.open_record', side_effect=AssertionError('unchanged file opened')):
+            collect_local(self.store, cfg, include_derived=False)
+        self.assertTrue(self.store.rollup_matches())
+        self.assertFalse(failed(reconcile(self.store.path, cfg)))
+
+    def test_replay_withdraws_an_inconsistent_split_and_keeps_unavailable_history(self):
+        value = calls_message()
+        calls = value['message']['usage']['iterations']
+        calls[0]['cache_creation']['ephemeral_1h_input_tokens'] = 15
+        calls[2]['cache_creation']['ephemeral_5m_input_tokens'] = 15
+        absent = identity('claude-code', 'absent')
+        with patch('llm_usage.claude_usage.call_split', return_value=(15, 15, True)):
+            self.collect(value, 'archive.jsonl')
         with self.store.connect() as c:
-            row = c.execute('SELECT * FROM events WHERE id=?', (identity('claude-code', 'parent'),)).fetchone()
-            self.assertEqual(
-                (row['cache_creation_5m'], row['cache_creation_1h'], row['cache_creation_unknown']), (20, 10, 0)
+            self.store.event(
+                c,
+                absent,
+                NOW,
+                'Anthropic',
+                'claude-code',
+                'claude-parent',
+                dict(cache_creation=30, cache_creation_5m=15, cache_creation_1h=15, cache_ttl_observed=1),
             )
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM import_errors").fetchone()[0], 0)
-            hourly = c.execute(
-                'SELECT SUM(cache_creation_5m),SUM(cache_creation_1h),SUM(cache_creation_unknown) FROM usage_hourly'
-            ).fetchone()
-            # session-b's own split (10 five-minute, 20 one-hour) is unchanged.
-            self.assertEqual(tuple(hourly), (20 + 10, 10 + 20, 0))
-        # Once only.
-        with self.store.connect() as c:
-            self.store.save_state(
-                c, 'file:' + str(path), dict(self.store.state(c, 'file:' + str(path)), parser_version=PARSER_VERSION)
-            )
-        reread_claude_cache_splits(self.store)
-        with self.store.connect() as c:
-            self.assertEqual(self.store.state(c, 'file:' + str(path))['parser_version'], PARSER_VERSION)
+            key = 'file:' + str(self.root / 'archive.jsonl')
+            self.store.save_state(c, key, dict(self.store.state(c, key), parser_version=PARSER_VERSION))
+        prepare_replay(self.store)
+        cfg = {'sources': [dict(name='Claude', path=str(self.root), kind='jsonl', route='claude-code')]}
+        for _ in range(2):
+            self.store = Store(self.store.path)
+            prepare_replay(self.store)
+            collect_local(self.store, cfg, include_derived=False)
+            with self.store.connect() as c:
+                self.assertEqual(
+                    [
+                        tuple(
+                            c.execute(
+                                'SELECT cache_creation_5m,cache_creation_1h,cache_creation_unknown,cache_ttl_observed FROM events WHERE id=?',
+                                (key,),
+                            ).fetchone()
+                        )
+                        for key in (identity('claude-code', 'parent'), absent)
+                    ],
+                    [(0, 0, 30, 0), (15, 15, 0, 1)],
+                )
+            self.assertTrue(self.store.rollup_matches())
+            result = reconcile(self.store.path, cfg)
+            self.assertEqual(result['claude']['detail_inconsistent_records'], 1)
+            self.assertTrue(partial(result))
+            self.assertFalse(failed(result))
+
+    def test_cloud_cache_replay_keeps_an_independently_verified_copy_in_either_order(self):
+        bad = calls_message()
+        del bad['message']['usage']['iterations'][0]['cache_creation']['ephemeral_5m_input_tokens']
+        # The previous parser treated the missing field as an observed zero.
+        total = (20, 10, True)
+        good = message()
+        item = {'id': 'fixture-cloud'}
+        for index, sequence in enumerate(((good, bad), (bad, good))):
+            with self.subTest(index=index):
+                store = Store(self.root / f'cloud-{index}.db')
+                with store.connect() as c, patch('llm_usage.claude_usage.call_split', return_value=total):
+                    _ingest(store, c, None, {}, item, model_provider, entries=[dict(payload=bad)])
+                prepare_replay(store)
+                for entry in sequence:
+                    with store.connect() as c:
+                        _ingest(store, c, None, {}, item, model_provider, entries=[dict(payload=entry)])
+                    store = Store(store.path)  # both endpoints can commit separately
+                with store.connect() as c:
+                    row = c.execute('SELECT * FROM events WHERE parent_id IS NULL').fetchone()
+                    self.assertEqual(
+                        (
+                            row['cache_creation_5m'],
+                            row['cache_creation_1h'],
+                            row['cache_creation_unknown'],
+                            row['cache_ttl_conflict'],
+                        ),
+                        (10, 20, 0, 0),
+                    )
+                self.assertTrue(store.rollup_matches())
 
     def test_old_reasoning_field_and_old_custom_cache_rate_keep_working(self):
         values = components(

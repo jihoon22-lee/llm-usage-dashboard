@@ -207,7 +207,7 @@ class OriginalSourceTests(unittest.TestCase):
 
         with self.store.connect() as c:
             self.store.save_state(c, 'normalized_version', 4)
-            self.store.save_state(c, 'verify', dict(ts=200000, ok=True))
+            self.store.save_state(c, 'verify', dict(ts=200000, format=2, ok=True))
             self.store.save_state(c, 'backup', dict(ts=200000, ok=True))
         result = reconcile(self.store.path, self.cfg)
         with (

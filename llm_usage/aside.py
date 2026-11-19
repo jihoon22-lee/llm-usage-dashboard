@@ -13,7 +13,7 @@ The format is Aside's own and undocumented (checked against Aside 1.26.1115).
 from pathlib import Path
 import re
 
-from .claude_usage import counter
+from .claude_usage import counter, repair_cache_split
 from .store import clean_label, identity
 
 # Aside's provider -> the route of the subscription it spends.
@@ -22,6 +22,7 @@ ORIGIN = 'aside'
 # An Aside session works in the browser, not in a folder: its requests are listed under one
 # project of this name, so the share used through Aside can be seen and filtered.
 PROJECT = 'Aside'
+TIMESTAMP_LIMIT = 4_102_444_800_000
 SAFE = re.compile(r'[A-Za-z0-9._:/() -]{1,200}')
 
 
@@ -73,7 +74,7 @@ def ingest_line(store, c, d, state):
         return 0  # a model reached another way (an API key, Aside's own): not a tracked subscription
     usage = d['usage']
     stamp = d.get('timestamp')
-    if type(stamp) not in (int, float) or not 0 < stamp < 4_102_444_800_000:
+    if type(stamp) not in (int, float) or not 0 < stamp < TIMESTAMP_LIMIT:
         raise ValueError('invalid response time')
     model = d.get('model')
     if not isinstance(model, str) or not SAFE.fullmatch(model):
@@ -110,19 +111,29 @@ def ingest_line(store, c, d, state):
         key = identity(route, rid)
     else:
         key = identity(ORIGIN, route, rid or f'{session}:{stamp}')
+    transcript = (
+        route == 'claude-code'
+        and c.execute(
+            """SELECT e.model,e.provider FROM events e WHERE e.id=? AND EXISTS (
+               SELECT 1 FROM usage_origins WHERE event_id=e.id AND (source='local' OR source LIKE 'claude-cloud:%'))""",
+            (key,),
+        ).fetchone()
+    )
     store.event(
         c,
         key,
         stamp / 1000,
-        model_provider(model),
+        transcript['provider'] if transcript else model_provider(model),
         route,
-        model,
+        transcript['model'] if transcript else model,
         values,
-        session=session,
-        project=PROJECT,
-        agent_kind='main',
-        effort=clean_label(d.get('thinkingLevel')),
+        session=None if transcript else session,
+        project=None if transcript else PROJECT,
+        agent_kind=None if transcript else 'main',
+        effort=None if transcript else clean_label(d.get('thinkingLevel')),
     )
+    if route == 'claude-code':
+        repair_cache_split(c, key, values)
     if c.execute('SELECT 1 FROM events WHERE id=?', (key,)).fetchone():
         c.execute('INSERT OR REPLACE INTO usage_origins VALUES (?,?,?)', (key, ORIGIN, 'final'))
     return 1
@@ -160,7 +171,7 @@ def attribute(store, settings):
         points = [
             (session, ts, key, ORIGIN)
             for session, ts in c.execute(
-                "SELECT session,ts FROM events WHERE route='claude-code' AND account IS NOT ? "
+                "SELECT session,ts FROM events WHERE route='claude-code' AND session LIKE 'aside-%' AND account IS NOT ? "
                 "AND id IN (SELECT event_id FROM usage_origins WHERE source=?)",
                 (route, ORIGIN),
             ).fetchall()
