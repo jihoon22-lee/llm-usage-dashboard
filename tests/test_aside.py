@@ -234,6 +234,7 @@ class AsideTests(unittest.TestCase):
                     [(1, 0, 'detail-session', 'project'), (0, 1, 'detail-session', 'project')],
                 )
                 self.assertEqual(rows[0]['model'], 'claude-parent')
+                self.assertEqual([r['ts'] for r in rows], [stamp(original['timestamp'])] * 2)
                 self.assertIsNone(rows[0]['effort'])
                 self.assertEqual([r['account'] for r in rows], ['claude-code', 'claude-code'])
                 with self.store.connect() as c:

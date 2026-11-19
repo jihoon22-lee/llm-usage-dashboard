@@ -486,6 +486,8 @@ class Store:
             else f',{field}=COALESCE(excluded.{field},events.{field})'
             for field in ('session', 'project', 'agent_kind', 'effort')
         )
+        if replace_attribution:
+            attribution += ',ts=excluded.ts'
         columns = (
             'id',
             'ts',

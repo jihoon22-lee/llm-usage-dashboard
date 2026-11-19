@@ -201,7 +201,7 @@ def ingest_message(
     if aside_session and sid:
         from .claude_attribution import reassign_aside_session
 
-        reassign_aside_session(c, key, aside_session['session'], sid, aside_session['ts'])
+        reassign_aside_session(c, key, aside_session['session'], sid, min(ts, aside_session['ts']))
     # Claude Code writes the request's effort and speed beside the response.
     store.event(
         c,
@@ -215,7 +215,7 @@ def ingest_message(
         project=project,
         agent_kind=kind,
         account=account,
-        allow_empty=bool(advisors),
+        allow_empty=bool(advisors or aside_session),
         effort=data.get('effort'),
         speed=usage.get('speed'),
         replace_attribution=bool(aside_session),
