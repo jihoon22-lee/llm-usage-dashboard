@@ -159,10 +159,18 @@ def _claude_component(usage):
                 # Several model calls in one response: the top split is the first call's,
                 # the calls' own splits add up to the total.
                 calls = [p for p in usage.get('iterations') or [] if isinstance(p, dict) and p.get('type') == 'message']
-                pair = tuple(
-                    sum(_number(p['cache_creation'].get(k)) for p in calls)
-                    for k in ('ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens')
-                )
+                split = []
+                for call in calls:
+                    detail = call['cache_creation']
+                    five, hour = (detail[k] for k in ('ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens'))
+                    if five is None or hour is None:
+                        raise ValueError('missing cache split')
+                    five, hour = _number(five), _number(hour)
+                    if call.get('cache_creation_input_tokens') is not None:
+                        if five + hour != _number(call['cache_creation_input_tokens']):
+                            raise ValueError('call cache split differs')
+                    split.append((five, hour))
+                pair = tuple(map(sum, zip(*split)))
                 if not calls or sum(pair) != numbers[3]:
                     raise ValueError('cache split differs')
         except (ValueError, TypeError, KeyError, AttributeError):
@@ -387,6 +395,8 @@ ASIDE_SAFE = re.compile(r'[A-Za-z0-9._:/() -]{1,200}')
 
 def _aside_line(data, session, expected):
     """One Aside assistant line -> its expected request, keyed as the collector keys it."""
+    from .aside import TIMESTAMP_LIMIT
+
     if not isinstance(data, dict) or data.get('role') != 'assistant' or not isinstance(data.get('usage'), dict):
         return
     route = ASIDE_ROUTES.get(data.get('provider'))
@@ -394,7 +404,7 @@ def _aside_line(data, session, expected):
         return
     usage = data['usage']
     ts = data.get('timestamp')
-    if type(ts) not in (int, float) or ts <= 0:
+    if type(ts) not in (int, float) or not 0 < ts < TIMESTAMP_LIMIT:
         raise ValueError('invalid time')
     model, rid = data.get('model'), data.get('responseId')
     if not isinstance(model, str) or not ASIDE_SAFE.fullmatch(model):
@@ -404,22 +414,32 @@ def _aside_line(data, session, expected):
     numbers = tuple(_number(usage.get(k)) for k in ('input', 'cacheRead', 'output', 'cacheWrite', 'reasoning'))
     if numbers[4] > numbers[2]:
         raise ValueError('reasoning exceeds output')
-    hour = usage.get('cacheWrite1h')
-    pair = (numbers[3] - _number(hour), _number(hour)) if hour is not None and hour <= numbers[3] else None
+    raw_hour = usage.get('cacheWrite1h')
+    hour = _number(raw_hour)
+    pair = (numbers[3] - hour, hour) if raw_hour is not None and hour <= numbers[3] else None
+    if not any(numbers):
+        return
     if rid and route == 'claude-code':
         key = identity(route, rid)
     else:
         key = identity('aside', route, rid or f'{session}:{ts}')
     want = expected.setdefault(
-        key, dict(route=route, numbers=numbers, pair=pair, models=set(), sessions=set(), observed=0)
+        key, dict(route=route, numbers=numbers, pairs=set(), models=set(), sessions=set(), observed=0)
     )
-    if numbers[3] > want['numbers'][3]:
-        want['pair'] = pair
-    want['numbers'] = tuple(max(a, b) for a, b in zip(want['numbers'], numbers))
+    previous = want['numbers']
+    if numbers[3] > previous[3]:
+        want['pairs'].clear()
+    if numbers[3] >= previous[3] and pair is not None:
+        want['pairs'].add(pair)
+    observed = int(usage.get('reasoning') is not None)
+    if numbers[2] > previous[2]:
+        want['observed'] = observed
+    elif numbers[2] == previous[2]:
+        want['observed'] = max(want['observed'], observed)
+    want['numbers'] = tuple(max(a, b) for a, b in zip(previous, numbers))
     want['models'].add(model)
     # A branch of a session repeats its responses in another session's folder.
     want['sessions'].add(session)
-    want['observed'] = max(want['observed'], int(usage.get('reasoning') is not None))
 
 
 def _aside(c, cfg, checkpoints):
@@ -432,6 +452,7 @@ def _aside(c, cfg, checkpoints):
         if not root.exists():
             counts['unavailable_sources'] += 1
             continue
+        counts['unsupported_files'] += unsupported_files(root)
         # Every record file the collector reads there; a session is the folder a file sits in.
         for path in record_files(root):
             counts['source_files'] += 1
@@ -452,14 +473,12 @@ def _aside(c, cfg, checkpoints):
                             raise ValueError('incomplete committed prefix')
                         try:
                             _aside_line(json.loads(raw), session, expected)
-                        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                        except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
                             counts['unreadable_records'] += 1
                     if f.read(1):
                         counts['pending_files'] += 1
             except (OSError, EOFError, ValueError, RecordReadError):
                 counts['source_errors'] += 1
-    # A response without a single token stores no request.
-    expected = {k: v for k, v in expected.items() if any(v['numbers'])}
     counts['requests'] = len(expected)
     for key, want in expected.items():
         row = c.execute('SELECT * FROM events WHERE id=?', (key,)).fetchone()
@@ -468,16 +487,29 @@ def _aside(c, cfg, checkpoints):
             continue
         actual = tuple(row[k] for k in VALUES)
         wrong = any(a < b for a, b in zip(actual, want['numbers'])) or row['route'] != want['route']
-        wrong = wrong or row['model'] not in want['models']
-        # A Claude message also written by Claude Code keeps that transcript's session.
-        wrong = wrong or (want['route'] == 'codex' and row['session'] not in want['sessions'])
+        wrong = wrong or row['requests'] != 1 or row['parent_id'] is not None
+        transcript = (
+            want['route'] == 'claude-code'
+            and c.execute(
+                "SELECT 1 FROM usage_origins WHERE event_id=? AND (source='local' OR source LIKE 'claude-cloud:%')",
+                (key,),
+            ).fetchone()
+        )
+        if not transcript:
+            wrong = wrong or row['model'] not in want['models'] or row['session'] not in want['sessions']
         if actual[2] == want['numbers'][2]:
             wrong = wrong or row['reasoning_observed'] < want['observed']
         wrong = wrong or (
             sum(row[k] for k in ('cache_creation_5m', 'cache_creation_1h', 'cache_creation_unknown')) != actual[3]
         )
-        if actual[3] == want['numbers'][3] and want['pair'] and not row['cache_ttl_conflict']:
-            wrong = wrong or (row['cache_creation_5m'], row['cache_creation_1h']) != want['pair']
+        pairs = want['pairs'] if actual[3] == want['numbers'][3] else set()
+        conflict = bool(row['cache_ttl_conflict'])
+        counts['detail_conflicts'] += int(conflict or len(pairs) > 1)
+        saved_pair = (row['cache_creation_5m'], row['cache_creation_1h'])
+        if conflict:
+            wrong = wrong or saved_pair != (0, 0) or row['cache_ttl_observed'] != 0
+        elif pairs:
+            wrong = wrong or len(pairs) > 1 or saved_pair not in pairs or not row['cache_ttl_observed']
         counts['retained_larger'] += int(not wrong and actual != want['numbers'])
         counts['mismatched_events' if wrong else 'matched_requests'] += 1
     return counts

@@ -452,6 +452,7 @@ class Store:
         allow_empty=False,
         effort=None,
         speed=None,
+        replace_attribution=False,
     ):
         # Streaming snapshots are monotonic maxima per globally stable request ID.
         numbers = [max(0, int(values.get(k) or 0)) for k in TOKENS]
@@ -479,6 +480,14 @@ class Store:
         detail_updates += ',reasoning_observed=CASE WHEN excluded.output>events.output THEN excluded.reasoning_observed WHEN excluded.output=events.output THEN MAX(events.reasoning_observed,excluded.reasoning_observed) ELSE events.reasoning_observed END'
         detail_updates += ',advisor_calls=MAX(events.advisor_calls,excluded.advisor_calls),requests=excluded.requests'
         # A copy read without an account (local replay, telemetry) keeps a resolved one.
+        attribution = ''.join(
+            f',{field}=excluded.{field}'
+            if replace_attribution
+            else f',{field}=COALESCE(excluded.{field},events.{field})'
+            for field in ('session', 'project', 'agent_kind', 'effort')
+        )
+        if replace_attribution:
+            attribution += ',ts=excluded.ts'
         columns = (
             'id',
             'ts',
@@ -505,11 +514,9 @@ class Store:
             + ','
             + detail_updates
             + ',provider=excluded.provider,model=excluded.model,route=excluded.route'
-            + ',session=COALESCE(excluded.session,events.session)'
-            + ',project=COALESCE(excluded.project,events.project)'
-            + ',agent_kind=COALESCE(excluded.agent_kind,events.agent_kind)'
+            + attribution
             + ',account=COALESCE(excluded.account,events.account),parent_id=COALESCE(excluded.parent_id,events.parent_id)'
-            + ',effort=COALESCE(excluded.effort,events.effort),speed=COALESCE(excluded.speed,events.speed)',
+            + ',speed=COALESCE(excluded.speed,events.speed)',
             (
                 key,
                 ts,

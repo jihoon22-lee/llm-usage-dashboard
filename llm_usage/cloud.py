@@ -18,8 +18,8 @@ from .store import identity, project_label, stamp
 API = 'https://api.anthropic.com'
 SESSIONS_BETA = 'ccr-byoc-2025-07-29'
 MAX_PAGES = 100
-# 5 keeps the request's reasoning effort, which the entries carry beside the response.
-PARSER_VERSION = 5
+# 6 rechecks each model call's cache split and restores native ownership of Aside copies.
+PARSER_VERSION = 6
 
 
 class IncompletePages(ValueError):

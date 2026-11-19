@@ -1,5 +1,7 @@
 """One numeric usage interpretation for local and cloud Claude transcripts."""
 
+import json
+
 from .store import identity, project_label, stamp
 
 
@@ -41,7 +43,10 @@ def components(usage):
         try:
             five, hour = counter(five), counter(hour)
             if five + hour != values['cache_creation']:
-                five, hour = call_split(usage, values['cache_creation'])
+                five, hour, complete = call_split(usage, values['cache_creation'])
+                if not complete:
+                    values['_invalid_cache_split'] = (five, hour)
+                    raise ValueError('invalid call cache details')
             values.update(cache_creation_5m=five, cache_creation_1h=hour, cache_ttl_observed=1)
         except ValueError:
             values.update(cache_creation_unknown=values['cache_creation'], _cache_error=True)
@@ -56,15 +61,87 @@ def call_split(usage, total):
     adds every call. The calls' own splits, added up, must give that total."""
     calls = [p for p in usage.get('iterations') or [] if isinstance(p, dict) and p.get('type') == 'message']
     five = hour = 0
+    complete = True
     for part in calls:
         ttl = part.get('cache_creation')
         if not isinstance(ttl, dict):
             raise ValueError('invalid cache details')
-        five += counter(ttl.get('ephemeral_5m_input_tokens'))
-        hour += counter(ttl.get('ephemeral_1h_input_tokens'))
+        raw_five, raw_hour = ttl.get('ephemeral_5m_input_tokens'), ttl.get('ephemeral_1h_input_tokens')
+        call_five, call_hour = counter(raw_five), counter(raw_hour)
+        raw_total = part.get('cache_creation_input_tokens')
+        complete &= (
+            raw_five is not None
+            and raw_hour is not None
+            and (raw_total is None or type(raw_total) is int and raw_total == call_five + call_hour)
+        )
+        five += call_five
+        hour += call_hour
     if not calls or five + hour != total:
         raise ValueError('cache detail total differs')
-    return five, hour
+    # Even an incomplete split identifies the exact pair that the old parser accepted.
+    return five, hour, complete
+
+
+def prepare_replay(store):
+    """Keep the pre-upgrade split apart from independently checked snapshots during replay."""
+    with store.connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if store.state(c, 'claude-usage-replay-v2'):
+            return
+        c.execute(
+            '''INSERT INTO claude_cache_replay (id, five, hour)
+               SELECT id, cache_creation_5m, cache_creation_1h FROM events
+               WHERE route='claude-code' AND cache_creation>0 AND cache_ttl_observed=1'''
+        )
+        # Old Aside account evidence could be written to a native Claude session.
+        c.execute(
+            """INSERT INTO claude_dirty SELECT session, MIN(ts) FROM claude_evidence
+               WHERE kind='aside' AND session NOT LIKE 'aside-%' GROUP BY session
+               ON CONFLICT(session) DO UPDATE SET since=MIN(since,excluded.since)"""
+        )
+        c.execute("DELETE FROM claude_evidence WHERE kind='aside' AND session NOT LIKE 'aside-%'")
+        store.save_state(c, 'claude-usage-replay-v2', True)
+
+
+def repair_cache_split(c, key, values):
+    """Withdraw an old split only when a reread disproves that exact observation."""
+    if not (values.get('cache_ttl_observed') or values.get('_invalid_cache_split')):
+        return
+    row = c.execute(
+        '''SELECT r.five, r.hour, r.verified, e.cache_creation
+           FROM claude_cache_replay r JOIN events e ON e.id=r.id WHERE r.id=?''',
+        (key,),
+    ).fetchone()
+    if row is None:
+        return
+    old = (row['five'], row['hour'])
+    total = row['cache_creation']
+    if total != sum(old):
+        c.execute('DELETE FROM claude_cache_replay WHERE id=?', (key,))
+        return
+    if values['cache_creation'] != total:
+        return
+
+    verified = {tuple(pair) for pair in json.loads(row['verified'])}
+    if values.get('cache_ttl_observed'):
+        verified.add((values.get('cache_creation_5m', 0), values.get('cache_creation_1h', 0)))
+    disproved = values.get('_invalid_cache_split') == old
+    if disproved or old in verified or len(verified) > 1:
+        c.execute('DELETE FROM claude_cache_replay WHERE id=?', (key,))
+    else:
+        c.execute('UPDATE claude_cache_replay SET verified=? WHERE id=?', (json.dumps(sorted(verified)), key))
+
+    pairs = verified if disproved else verified | {old}
+    observed = len(pairs) == 1
+    five, hour = next(iter(pairs)) if observed else (0, 0)
+    details = (five, hour, total - five - hour, int(observed), int(len(pairs) > 1))
+    c.execute(
+        '''UPDATE events SET cache_creation_5m=?, cache_creation_1h=?, cache_creation_unknown=?,
+                  cache_ttl_observed=?, cache_ttl_conflict=?
+           WHERE id=? AND (cache_creation_5m,cache_creation_1h,cache_creation_unknown,cache_ttl_observed,cache_ttl_conflict)
+               IS NOT (?,?,?,?,?)''',
+        (*details, key, *details),
+    )
 
 
 def detail_status(store, c, key, values):
@@ -117,6 +194,14 @@ def ingest_message(
     ]
     values = components(usage)
     detail_status(store, c, key, values)
+    aside_session = c.execute(
+        "SELECT session,ts FROM events WHERE id=? AND session LIKE 'aside-%'",
+        (key,),
+    ).fetchone()
+    if aside_session and sid:
+        from .claude_attribution import reassign_aside_session
+
+        reassign_aside_session(c, key, aside_session['session'], sid, min(ts, aside_session['ts']))
     # Claude Code writes the request's effort and speed beside the response.
     store.event(
         c,
@@ -130,10 +215,12 @@ def ingest_message(
         project=project,
         agent_kind=kind,
         account=account,
-        allow_empty=bool(advisors),
+        allow_empty=bool(advisors or aside_session),
         effort=data.get('effort'),
         speed=usage.get('speed'),
+        replace_attribution=bool(aside_session),
     )
+    repair_cache_split(c, key, values)
     aliases(c, route, key, message['id'], data.get('requestId'), data.get('request_id'), data.get('uuid'))
     if route == 'claude-code' and sid:
         link(c, 'claude:' + sid, key, source, finality)
@@ -160,6 +247,7 @@ def ingest_message(
             requests=0,
             allow_empty=True,
         )
+        repair_cache_split(c, child, values)
         if route == 'claude-code' and sid:
             link(c, 'claude:' + sid, child, source, finality)
     return 1

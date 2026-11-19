@@ -39,6 +39,8 @@ def initialize(c):
         CREATE TABLE IF NOT EXISTS usage_origins (
           event_id TEXT NOT NULL, source TEXT NOT NULL, quality TEXT NOT NULL,
           PRIMARY KEY(event_id,source));
+        CREATE TABLE IF NOT EXISTS claude_cache_replay (
+          id TEXT PRIMARY KEY, five INTEGER NOT NULL, hour INTEGER NOT NULL, verified TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS usage_aliases (
           route TEXT, alias TEXT, event_id TEXT, PRIMARY KEY(route,alias));
         CREATE TABLE IF NOT EXISTS telemetry_pending (

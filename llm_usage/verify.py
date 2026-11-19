@@ -17,7 +17,7 @@ from .devin import checkpoint_of as _checkpoint_of, model_name as _model_name
 from .sqlite_ro import open_readonly
 from .store import identity as _identity
 
-VERIFY_FORMAT = 2
+VERIFY_FORMAT = 3
 
 
 def reconcile(path, cfg):
