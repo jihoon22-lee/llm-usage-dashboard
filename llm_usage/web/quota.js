@@ -154,7 +154,7 @@ function renderLimits(data){
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
  // a window blocked by its exhausted parent is left out because its reset frees nothing.
  // A window of the conditions before an account or plan change resets nothing now.
- const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by&&r.status!=='ended'&&!r.retired);
+ const validUpcoming=data.limits.filter(r=>r.resets&&r.resets>nowTs&&!modelQuota(r)&&!r.blocked_by&&r.status!=='ended'&&!r.retired&&!r.omitted_latest);
  const exhausted=r=>r.remaining!=null&&r.remaining<=0;
  const exhaustedUpcoming=validUpcoming.filter(exhausted);
  const regularUpcoming=validUpcoming.filter(r=>!exhausted(r)).sort((a,b)=>a.resets-b.resets);

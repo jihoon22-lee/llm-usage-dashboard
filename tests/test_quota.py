@@ -633,6 +633,97 @@ class QuotaTests(unittest.TestCase):
         # The app's leftover split is gone; the status-line copy is not this poll's to drop.
         self.assertEqual(set(rows), {'gemini-5h', 'gemini-weekly-2'})
 
+    def test_antigravity_quota_summary_drops_retired_pool_on_clean_read_and_keeps_history(self):
+        from llm_usage.limits import agy_quota_limits
+
+        clean_summary = {
+            'response': {
+                'groups': [
+                    {
+                        'buckets': [
+                            {'bucketId': 'gemini-5h', 'remainingFraction': 1.0, 'resetTime': self.iso(NOW + 5 * 3600)},
+                            {
+                                'bucketId': 'gemini-weekly',
+                                'remainingFraction': 0.9,
+                                'resetTime': self.iso(NOW + 6 * 86400),
+                            },
+                            {'bucketId': '3p-5h', 'remainingFraction': 0.8, 'resetTime': self.iso(NOW + 4 * 3600)},
+                            {'bucketId': '3p-weekly', 'remainingFraction': 0.7, 'resetTime': self.iso(NOW + 5 * 86400)},
+                        ]
+                    }
+                ]
+            }
+        }
+        with patch('llm_usage.store.time.time', return_value=NOW), self.store.connect() as c:
+            self.store.limit(
+                c, 'antigravity', 'gemini-argon-wtu-weekly', 60.0, NOW + 3 * 86400, NOW - 7200, 'antigravity-app'
+            )
+            self.assertEqual(agy_quota_limits(self.store, c, clean_summary, NOW), (4, 0))
+            rows = self.agy_rows(c)
+            snapshot = self.store.state(c, 'quota_snapshot:antigravity')
+            history = c.execute(
+                "SELECT count(*) FROM limit_history WHERE route='antigravity' AND bucket='gemini-argon-wtu-weekly'"
+            ).fetchone()[0]
+        self.assertEqual(set(rows), {'gemini-5h', 'gemini-weekly', '3p-5h', '3p-weekly'})
+        self.assertEqual(snapshot['buckets'], ['3p-5h', '3p-weekly', 'gemini-5h', 'gemini-weekly'])
+        self.assertEqual(history, 1)
+
+    def test_antigravity_quota_summary_with_skipped_keeps_pool_and_marks_omitted_latest(self):
+        from llm_usage.limits import agy_quota_limits
+
+        partial_summary = {
+            'groups': [
+                {
+                    'buckets': [
+                        {'bucketId': 'gemini-5h', 'remainingFraction': 0.9, 'resetTime': self.iso(NOW + 3600)},
+                        {'bucketId': 'gemini-weekly', 'remainingFraction': 0.8},  # missing resetTime -> skipped
+                    ]
+                }
+            ]
+        }
+        with patch('llm_usage.store.time.time', return_value=NOW), self.store.connect() as c:
+            self.store.limit(
+                c, 'antigravity', 'gemini-argon-wtu-weekly', 60.0, NOW + 3 * 86400, NOW - 7200, 'antigravity-app'
+            )
+            self.assertEqual(agy_quota_limits(self.store, c, partial_summary, NOW), (1, 1))
+            rows = self.agy_rows(c)
+        self.assertIn('gemini-argon-wtu-weekly', rows)
+        api_rows = {r['bucket']: r for r in self.store.limits(NOW + 60)['limits'] if r['route'] == 'antigravity'}
+        self.assertTrue(api_rows['gemini-argon-wtu-weekly']['omitted_latest'])
+
+    def test_antigravity_app_post_bypasses_system_proxy(self):
+        from llm_usage import limits
+
+        limits._agy_endpoints.clear()
+        self.addCleanup(limits._agy_endpoints.clear)
+        seen_handlers = []
+
+        class Response(BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.close()
+
+        def opener(*handlers):
+            seen_handlers.extend(handlers)
+
+            class Opener:
+                def open(self, request, timeout):
+                    return Response(b'{"userStatus":{}}')
+
+            return Opener()
+
+        with (
+            patch.object(limits, '_listening_ports', return_value=[('127.0.0.1', 4321)]),
+            patch.object(limits, '_tls_ready', return_value=True),
+            patch.object(limits.urllib.request, 'build_opener', side_effect=opener),
+        ):
+            limits.read_agy_app([(88, 'tok')])
+        proxies = [h for h in seen_handlers if isinstance(h, limits.urllib.request.ProxyHandler)]
+        self.assertEqual(len(proxies), 1)
+        self.assertEqual(proxies[0].proxies, {})
+
     def test_antigravity_quota_summary_failure_falls_back_to_per_model_read(self):
         from llm_usage.limits import poll_antigravity_app
 
