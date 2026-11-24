@@ -760,7 +760,7 @@ def check_hook_versions(store, settings):
                 c,
                 'hook-scripts',
                 'partial',
-                f'설치된 보조 스크립트({names}) 버전이 현재 수집기와 다릅니다 · packaging/install_hooks.py 재실행을 권장합니다.',
+                f'설치된 보조 스크립트({names}) 버전이 현재 수집기와 다릅니다 · llm-usage install-hooks 재실행을 권장합니다.',
             )
         else:
             c.execute("DELETE FROM sources WHERE name='hook-scripts'")
