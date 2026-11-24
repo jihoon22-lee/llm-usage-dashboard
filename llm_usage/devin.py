@@ -33,17 +33,16 @@ def model_name(generation_model):
 
 
 def open_db(path):
-    """Return (connection, tempdir_to_cleanup). mode=ro handles live WAL files on
-    native filesystems; drives under /mnt cannot run WAL recovery, so those fall
-    back to a private copy (db first, then wal — never the shm wal-index)."""
+    """Return (connection, tempdir_to_cleanup). open_readonly handles live and
+    closed WAL files without writing sidecar files; drives under /mnt cannot
+    run WAL recovery, so those fall back to a private copy (db first, then wal
+    — never the shm wal-index)."""
+    from .sqlite_ro import open_readonly
+
     try:
-        con = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
-        try:
-            con.execute('SELECT 1 FROM sqlite_master').fetchone()  # forces WAL recovery
-            con.row_factory = sqlite3.Row
-            return con, None
-        except sqlite3.Error:
-            con.close()
+        con = open_readonly(path, timeout=5)
+        con.row_factory = sqlite3.Row
+        return con, None
     except (OSError, sqlite3.Error):
         pass
     tmp = Path(tempfile.mkdtemp(prefix='llm-usage-devin-'))

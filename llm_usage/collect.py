@@ -16,6 +16,7 @@ from .limits import codex_limits, poll_limits, status_limits
 from .sqlite_ro import open_readonly
 from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
+from .util import log_exception, prefix_bounds
 
 # What one malformed record can raise. A value SQLite cannot bind or store (a list where a
 # session id belongs, a NaN time) fails only its own statement, so the record is counted
@@ -304,15 +305,11 @@ def changed_files(store, root, paths, route=None):
     carrying recorded errors. One query replaces a connection per unchanged file,
     which mattered with thousands of finished session files."""
     prefix = 'file:' + str(root) + '/'
+    lo, hi = prefix_bounds(prefix)
     with store.connect() as c:
-        saved = {
-            r[0]: r[1] for r in c.execute('SELECT key,data FROM state WHERE substr(key,1,?)=?', (len(prefix), prefix))
-        }
+        saved = {r[0]: r[1] for r in c.execute('SELECT key,data FROM state WHERE key>=? AND key<?', (lo, hi))}
         failing = {
-            r[0]
-            for r in c.execute(
-                'SELECT DISTINCT source FROM import_errors WHERE substr(source,1,?)=?', (len(prefix), prefix)
-            )
+            r[0] for r in c.execute('SELECT DISTINCT source FROM import_errors WHERE source>=? AND source<?', (lo, hi))
         }
     for path in paths:
         key = 'file:' + str(path)
@@ -480,29 +477,37 @@ def collect_local(store, settings, *, include_derived=True):
                     heartbeat()
                 # Errors of the files present now, as the per-file counts used to sum.
                 current = {'file:' + str(path) for path in paths}
+                lo, hi = prefix_bounds('file:' + str(root) + '/')
                 with store.connect() as c:
                     errors = sum(
                         n
-                        for source, n in c.execute(
-                            'SELECT source,COUNT(*) FROM import_errors WHERE substr(source,1,?)=? GROUP BY source',
-                            (len('file:' + str(root) + '/'), 'file:' + str(root) + '/'),
+                        for src_key, n in c.execute(
+                            'SELECT source,COUNT(*) FROM import_errors WHERE source>=? AND source<? GROUP BY source',
+                            (lo, hi),
                         )
-                        if source in current
+                        if src_key in current
                     )
+            lo, hi = prefix_bounds('file:' + str(root) + '/')
             with store.connect() as c:
                 # File-level failures are single corrupt lines that never recover;
                 # after 7 days archive them as a permanent count so the source can
                 # return to 'ok' while the loss stays reported.
                 aged = c.execute(
-                    "DELETE FROM import_errors WHERE source LIKE ? AND checked<?",
-                    ('file:' + str(root) + '/%', time.time() - 7 * 86400),
+                    'DELETE FROM import_errors WHERE source>=? AND source<? AND checked<?',
+                    (lo, hi, time.time() - 7 * 86400),
                 ).rowcount
                 perm = store.state(c, 'permanent_errors:' + name, 0) + aged
                 if aged:
                     store.save_state(c, 'permanent_errors:' + name, perm)
-                    errors = c.execute(
-                        'SELECT COUNT(*) FROM import_errors WHERE source LIKE ?', ('file:' + str(root) + '/%',)
-                    ).fetchone()[0]
+                    if source['kind'] != 'opencode':
+                        errors = sum(
+                            n
+                            for src_key, n in c.execute(
+                                'SELECT source,COUNT(*) FROM import_errors WHERE source>=? AND source<? GROUP BY source',
+                                (lo, hi),
+                            )
+                            if src_key in current
+                        )
                 unsupported = unsupported_files(root) if source['kind'] == 'jsonl' else 0
                 detail = f'{count}개 기록 파일 확인 · 해석 실패 {errors}건' + (
                     f' · 누적 영구 실패 {perm}건' if perm else ''
@@ -512,6 +517,7 @@ def collect_local(store, settings, *, include_derived=True):
                 store.source(c, name, 'partial' if errors or unsupported else 'ok', detail)
             heartbeat()
         except Exception as exc:
+            log_exception(f'collect_local {name}', exc)
             with store.connect() as c:
                 store.source(c, name, 'error', f'로컬 수집 실패 ({type(exc).__name__})')
     if include_derived:
@@ -688,6 +694,76 @@ def collect_status(store, settings):
                         store.source_changed(c, route, 'ended', USER_ENDED_DETAIL)
                     else:
                         store.source(c, route, 'error', '상태줄 이벤트를 읽지 못했습니다.')
+
+
+def prune_stale_file_state(store, settings):
+    """Drop state checkpoints for deleted files under currently mounted roots."""
+    roots = []
+    for source in local_sources(store, settings):
+        if source['kind'] in ('antigravity', 'devin', 'opencode'):
+            continue
+        root = Path(source['path'])
+        try:
+            if root.is_dir():
+                roots.append((root, source.get('route')))
+        except OSError:
+            continue
+    if not roots:
+        return 0
+    removed = 0
+    with store.connect() as c:
+        pending_claude = bool(
+            c.execute("SELECT 1 FROM events WHERE route='claude-code' AND account IS NULL LIMIT 1").fetchone()
+        )
+        for root, route in roots:
+            if route == 'claude-code' and pending_claude:
+                continue
+            lo, hi = prefix_bounds('file:' + str(root) + '/')
+            stale = []
+            for (key,) in c.execute('SELECT key FROM state WHERE key>=? AND key<?', (lo, hi)).fetchall():
+                try:
+                    if not Path(key[5:]).exists():
+                        stale.append((key,))
+                except OSError:
+                    continue
+            if stale:
+                c.executemany('DELETE FROM state WHERE key=?', stale)
+                removed += len(stale)
+    return removed
+
+
+def check_hook_versions(store, settings):
+    """Report a non-blocking hint if copied hook/statusline scripts drift behind the running code."""
+    from .claudehook import HOOK_VERSION as CLAUDE_HOOK_VERSION
+    from .statusline import HOOK_VERSION as STATUSLINE_VERSION
+
+    dirs = [Path(settings.get('status_dir', Path(store.path).parent / 'status'))]
+    dirs.extend(Path(p) for p in settings.get('extra_status_dirs') or [])
+    mismatched = []
+    expected = (('statusline.py', STATUSLINE_VERSION), ('claudehook.py', CLAUDE_HOOK_VERSION))
+    for folder in dirs:
+        for filename, version in expected:
+            script = folder / filename
+            try:
+                if not script.is_file():
+                    continue
+                head = script.read_text(errors='ignore')[:4096]
+            except OSError:
+                continue
+            match = re.search(r'^HOOK_VERSION\s*=\s*(\d+)\b', head, re.MULTILINE)
+            if not match or int(match.group(1)) != version:
+                mismatched.append(filename)
+    with store.connect() as c:
+        if mismatched:
+            names = ', '.join(sorted(set(mismatched)))
+            store.source_changed(
+                c,
+                'hook-scripts',
+                'partial',
+                f'설치된 보조 스크립트({names}) 버전이 현재 수집기와 다릅니다 · llm-usage install-hooks 재실행을 권장합니다.',
+            )
+        else:
+            c.execute("DELETE FROM sources WHERE name='hook-scripts'")
 
 
 def prepare_normalization(store, settings):
@@ -1052,6 +1128,7 @@ def run(settings, once=False):
         try:
             collector_started(store, with_local(settings).get('notify'))
         except Exception as exc:
+            log_exception('collector_started', exc)
             notify_failure(store, exc)  # never stops collection
         sd_notify('READY=1')
         while True:
@@ -1101,6 +1178,7 @@ def run(settings, once=False):
                 if current_settings.get('statusline_summary'):
                     write_summaries(store, current_settings)
                 report_local_settings(store, settings)
+                check_hook_versions(store, current_settings)
                 if not once:
                     from .pricing import load_pricing
                     from .reconciliation import held
@@ -1129,6 +1207,7 @@ def run(settings, once=False):
                             local.get('project_budgets'),
                         )
                     except Exception as exc:
+                        log_exception('notify_evaluate', exc)
                         notify_failure(store, exc)
                     # The weekly and monthly checks read the same supplements.
                     with held():
@@ -1154,6 +1233,7 @@ def run(settings, once=False):
                                     current,
                                 )
                         except Exception as exc:
+                            log_exception('weekly report', exc)
                             notify_failure(store, exc, '주간 리포트 생성')
                         try:
                             from .monthly import ensure_months
@@ -1167,6 +1247,7 @@ def run(settings, once=False):
                                 local.get('subscription_price_history'),
                             )
                         except Exception as exc:
+                            log_exception('monthly report', exc)
                             notify_failure(store, exc, '월 정산 생성')
             sd_notify('WATCHDOG=1')
             if not once and due(last_backup, backup_ok, now):
@@ -1177,6 +1258,7 @@ def run(settings, once=False):
                     store.save_state(c, 'backup', result)
                     # Refresh the planner's statistics once a day; cheap when nothing changed.
                     c.execute('PRAGMA optimize')
+                prune_stale_file_state(store, current_settings)
                 last_backup = time.time()
                 backup_ok = bool(result.get('ok'))
             sd_notify('WATCHDOG=1')
@@ -1201,6 +1283,7 @@ def run(settings, once=False):
                         **sections,
                     )
                 except Exception as e:
+                    log_exception('daily reconcile', e)
                     from .backup import error_text
 
                     outcome = dict(ts=time.time(), format=VERIFY_FORMAT, ok=False, error=error_text(e))

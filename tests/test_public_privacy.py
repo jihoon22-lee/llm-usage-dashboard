@@ -102,12 +102,29 @@ class NotificationPrivacyTests(unittest.TestCase):
                 post.assert_not_called()
 
     def test_valid_ipv6_and_omitted_keeps_empty_clears(self):
-        self.assertEqual(self.post({'ntfy_url': 'https://[::1]:443/topic'}).status_code, 200)
+        self.assertEqual(self.post({'ntfy_url': 'https://[2606:4700:4700::1111]:443/topic'}).status_code, 200)
         self.assertEqual(self.post({'events': {'low': False}}).status_code, 200)
         saved = json.loads((self.root / 'local.json').read_text())['notify']
         self.assertEqual(saved['webhook_url'], 'https://hooks.example/OLD_SECRET')
         self.assertEqual(self.post({'webhook_url': ''}).status_code, 200)
         self.assertNotIn('webhook_url', json.loads((self.root / 'local.json').read_text())['notify'])
+
+    def test_private_and_loopback_notification_urls_are_rejected(self):
+        for url in (
+            'https://[::1]:443/topic',
+            'https://127.0.0.1/topic',
+            'https://169.254.169.254/latest/meta-data/',
+            'https://10.0.0.1/hook',
+            'https://192.168.1.10/hook',
+            'https://100.64.0.1/hook',
+            'https://localhost/topic',
+            'https://service.local/topic',
+            'https://[::ffff:127.0.0.1]/topic',
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.post({'ntfy_url': url}).status_code, 400)
+                with self.assertRaises(ValueError):
+                    notify.notification_url(url)
 
     def test_send_rejects_invalid_legacy_url_without_network(self):
         with patch.object(notify, '_post') as post:

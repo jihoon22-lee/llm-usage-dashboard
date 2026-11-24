@@ -74,7 +74,7 @@ class PricingResolutionTests(unittest.TestCase):
 
 
 class BuiltinTableTests(unittest.TestCase):
-    """The builtin table against the public price lists checked on 2026-11-10."""
+    """The builtin table against the public price lists checked on 2026-11-24."""
 
     def test_every_builtin_entry_is_a_usable_rate(self):
         from llm_usage.pricing import _valid
@@ -117,6 +117,7 @@ class BuiltinTableTests(unittest.TestCase):
             'gpt-6.2-sol': (2, 0.1, 10),
             'gpt-6.2-astra': (8, 0.4, 40),
             'gpt-6-sol': (2, 0.2, 10),
+            'gemini-4-neon': (3, 0.15, 15),
             'gemini-4-argon-trial': (2, 0.1, 10),
             'gemini-3.1-pro-low': (2, 0.2, 12),
             'gemini-3.8-flash-n': (0.75, 0.075, 3.75),
@@ -156,3 +157,19 @@ class BuiltinTableTests(unittest.TestCase):
         rate = rate_for('claude-opus-5', BUILTIN)
         self.assertAlmostEqual(estimate(values, rate), 6.25 + 2 * 10)
         self.assertEqual(cache_estimated_tokens(values, rate), 0)
+
+    def test_load_pricing_and_entry_key_are_thread_safe(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with tempfile.TemporaryDirectory() as folder:
+            pfile = Path(folder) / 'pricing.json'
+            pfile.write_text('{"custom-model": {"input": 1, "output": 2}}')
+            cfg = {'pricing_file': str(pfile), 'pricing': {}}
+
+            def worker(idx):
+                table = load_pricing(cfg)
+                self.assertEqual(entry_key(f'gemini-4-neon-2026-11-{(idx % 9) + 10}', table), 'gemini-4-neon')
+                self.assertEqual(entry_key('custom-model (high)', table), 'custom-model')
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(worker, range(64)))

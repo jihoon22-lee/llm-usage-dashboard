@@ -7,7 +7,6 @@ responses. Only transitions are sent (a quota becoming low, not every poll).
 """
 
 import http.client
-import ipaddress
 import json
 import re
 import time
@@ -17,6 +16,9 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from .store import KST
+from .util import check_public_host, validate_https_url
+
+_TELEGRAM_SEND_TOKEN_RE = re.compile(r'[A-Za-z0-9:_-]{1,150}')
 
 CHANNEL_KEYS = ('ntfy_url', 'webhook_url', 'telegram_token', 'telegram_chat')
 EVENTS = {
@@ -43,39 +45,14 @@ def wanted(notify, kind):
     return ((notify or {}).get('events') or {}).get(kind, kind not in OFF_BY_DEFAULT)
 
 
-def notification_url(value):
+def notification_url(value, *, allow_private=False):
     """Parse a secret HTTPS endpoint without ever echoing it in a validation error."""
-    try:
-        if (
-            not isinstance(value, str)
-            or not value
-            or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
-            or '\\' in value
-        ):
-            raise ValueError
-        parts = urlsplit(value)
-        if parts.scheme != 'https' or not parts.netloc or any(ch in parts.netloc for ch in '@%'):
-            raise ValueError
-        host = parts.hostname
-        if not host or parts.netloc.endswith(':') or (parts.port is not None and not 1 <= parts.port <= 65535):
-            raise ValueError
-        if ':' in host:
-            # Older urlsplit accepts trailing text after a closing IPv6 bracket.
-            # Validate the entire authority before exposing it as a masked hint.
-            if not re.fullmatch(r'\[[0-9A-Fa-f:.]+\](?::[0-9]+)?', parts.netloc):
-                raise ValueError
-            ipaddress.IPv6Address(host)
-        else:
-            if not re.fullmatch(r'[^:\[\]]+(?::[0-9]+)?', parts.netloc):
-                raise ValueError
-            ascii_host = host.encode('idna').decode('ascii').removesuffix('.')
-            if len(ascii_host) > 253 or not all(
-                re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?', label) for label in ascii_host.split('.')
-            ):
-                raise ValueError
-        return parts
-    except (ValueError, UnicodeError):
-        raise ValueError('알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.') from None
+    return validate_https_url(
+        value,
+        reject_private=not allow_private,
+        error_message='알림 주소는 사용자 정보 없는 유효한 HTTPS 주소여야 합니다.',
+        splitter=urlsplit,
+    )
 
 
 def configured(notify):
@@ -117,6 +94,9 @@ def _open(request, timeout):
     as a GET without the message, and the answer would read as a delivery."""
     from .limits import NoRedirect
 
+    parts = urlsplit(request.full_url)
+    if parts.scheme == 'https':
+        check_public_host(parts.hostname or '', parts.port or 443)
     return urllib.request.build_opener(NoRedirect).open(request, timeout=timeout)
 
 
@@ -148,9 +128,22 @@ def send(notify, title, body, timeout=10):
                 text = f'**{title}**\n{body}'
                 _post(notify['webhook_url'], dict(content=text, text=text), timeout)
             else:
+                token = notify['telegram_token']
+                chat = notify['telegram_chat']
+                if not isinstance(token, str) or not _TELEGRAM_SEND_TOKEN_RE.fullmatch(token):
+                    raise http.client.InvalidURL('telegram_token')
+                if not (
+                    (isinstance(chat, int) and not isinstance(chat, bool))
+                    or (
+                        isinstance(chat, str)
+                        and 0 < len(chat) <= 100
+                        and not any(ord(ch) < 32 or ord(ch) == 127 for ch in chat)
+                    )
+                ):
+                    raise ValueError('telegram_chat')
                 _post(
-                    f"https://api.telegram.org/bot{notify['telegram_token']}/sendMessage",
-                    dict(chat_id=notify['telegram_chat'], text=f'{title}\n{body}'),
+                    f'https://api.telegram.org/bot{token}/sendMessage',
+                    dict(chat_id=chat, text=f'{title}\n{body}'),
                     timeout,
                 )
         except urllib.error.HTTPError as exc:
