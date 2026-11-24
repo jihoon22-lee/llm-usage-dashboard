@@ -164,6 +164,7 @@ def status_limits(store, c, route, data, checked):
                 count += 1
     elif route == 'antigravity':
         # Bucket IDs are the provider's shared quota identity, never copied per model.
+        written = set()
         for key, row in (data.get('quota') or {}).items():
             if not isinstance(row, dict):
                 continue
@@ -172,8 +173,27 @@ def status_limits(store, c, route, data, checked):
                 reset = row.get('reset_time')
                 if reset is None and number(row.get('reset_in_seconds')):
                     reset = checked + row['reset_in_seconds']
-                store.limit(c, route, key, max(0, min(100, remaining * 100)), reset, checked, route)
+                if store.limit(c, route, key, max(0, min(100, remaining * 100)), reset, checked, route):
+                    written.add(key)
                 count += 1
+        if AGY_BASE_BUCKETS <= written:
+            prev = store.state(c, 'quota_snapshot:antigravity')
+            prev_checked = prev.get('checked', 0) if isinstance(prev, dict) else 0
+            if not number(prev_checked) or prev_checked <= checked:
+                store.save_state(
+                    c,
+                    'quota_snapshot:antigravity',
+                    dict(checked=checked, source=route, buckets=sorted(written)),
+                )
+            for bucket, row_checked in c.execute(
+                "SELECT bucket,checked FROM limits WHERE route='antigravity'"
+            ).fetchall():
+                if (
+                    bucket not in written
+                    and AGY_POOL_BUCKET.fullmatch(bucket)
+                    and (not number(row_checked) or row_checked < checked)
+                ):
+                    c.execute("DELETE FROM limits WHERE route='antigravity' AND bucket=?", (bucket,))
     return count
 
 
@@ -924,6 +944,7 @@ def read_agy_quota(servers, timeout=10, probe=2):
 
 
 # Dedicated named-pool buckets (e.g. 'gemini-argon-wtu-weekly') distinct from the base 4 buckets.
+AGY_BASE_BUCKETS = frozenset({'gemini-5h', 'gemini-weekly', '3p-5h', '3p-weekly'})
 AGY_POOL_BUCKET = re.compile(r'(gemini|3p)-[a-z0-9-]+-(5h|weekly)(?:-\d+)?')
 AGY_QUOTA_BUCKET = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 
@@ -1011,7 +1032,7 @@ def poll_antigravity_app(store, settings, servers=None, reader=None, quota_reade
                         c,
                         'antigravity-app',
                         'unavailable',
-                        '데스크톱 앱 language server 미실행 · 앱 실행 중에만 조회됩니다.',
+                        '데스크톱 앱 language server 미발견 · 구형 앱 실행 중 또는 Antigravity 2.34+는 상태줄 경로를 사용합니다.',
                         checked,
                     )
             return

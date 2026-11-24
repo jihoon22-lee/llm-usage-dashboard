@@ -1,5 +1,12 @@
 # 변경 기록
 
+## 미출시
+
+- Antigravity 상태줄(`status_limits`)이 기본 4개 한도 버킷(`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`)을 모두 수신했을 때도 `quota_snapshot:antigravity`를 갱신하고, 그보다 오래된 종료 전용 풀 버킷(`gemini-argon-wtu-weekly` 등)을 현재 한도 목록에서 정리합니다(`limit_history` 보존, 더 최신 `antigravity-app` 행과 분할 버킷은 유지).
+- 상태줄 이벤트에 한도 필드가 비어 있을 때(`quota: {}`, `rate_limits: {}`) 기존 정상(`ok`) 소스의 상태와 마지막 정상 확인 시각을 `unavailable`로 덮어쓰지 않고 보존합니다(최초 미수신 소스는 기존처럼 `unavailable` 기록).
+- 보조 스크립트 버전 검사(`check_hook_versions`)가 `status_dir`·`extra_status_dirs`뿐 아니라 `status_inboxes`(Windows 상태줄 수신함 포함)의 복사본도 함께 점검합니다.
+- Antigravity 2.34.0+ standalone/hub language server의 `--csrf_token` 미노출 제약과 상태줄 한도 경로 안내를 수집 상태 문구와 문서(`README.md`, `docs/architecture.md`)에 반영했습니다.
+
 ## 0.15.0 — 2026-11-24
 
 - Claude 응답의 5분·1시간 캐시 생성량은 호출별 분해와 응답 전체 합계가 일치할 때 사용합니다. 이전 파서가 승인한 분해를 원본이 반박하면, 다른 사본에서 확인한 분해를 쓰거나 해당 생성량을 미확인으로 돌립니다. 업그레이드 후 Claude·Aside 원본을 다시 읽습니다.

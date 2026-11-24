@@ -34,7 +34,7 @@ A self-hosted dashboard for LLM quotas and usage. Linux/WSL, private Tailscale a
 |---|---|---|---|
 | Codex | 로컬 JSONL, 계정 합계·스레드 상세 기능 조회(App Server) | 기존 CLI App Server, 크레딧·초기화권 | 계정 집계 범위는 KST 09:00–다음 날 09:00. 날짜 미배분량을 별도 표시하며 차이를 dot 사용량으로 단정하지 않음. 모델·프로젝트 보기에서 차이는 이름을 정할 수 있는 별도 항목. 스레드 상세는 미제공일 수 있음 |
 | Claude Code | 로컬 JSONL, 클라우드 transcript·전체 이벤트·modelUsage | 기존 OAuth·상태줄, 선불 잔액·지출 조건·초기화권 | 하위 에이전트 누락과 최종 누계를 대조. 내부 OAuth·세션 API의 외부 연동 허용은 확인되지 않았으며 공식 지원으로 보장하지 않음. 누계 감소·복원 범위가 모호한 이력은 충돌 표시 |
-| Antigravity | CLI/앱 SQLite | 상태줄·실행 중인 WSL 앱 | 내부 스키마/RPC 변경에 영향받음 |
+| Antigravity | CLI/앱 SQLite | 상태줄·구형 WSL 앱 RPC | 2.34.0+ standalone/hub 서버는 `--csrf_token`을 CLI 인수로 넘기지 않아 앱 RPC 미지원(상태줄 한도·대화 DB 수집은 유지). 내부 스키마/RPC 변경에 영향받음 |
 | OpenCode Go | 로컬 SQLite | 계정 usage 경로 | 구독 계정의 실제 한도 수신 미검증 |
 | Devin CLI | 로컬 SQLite | 기존 CLI 계정 경로 | 내부 API, Cloud 세션 미지원 |
 | Aside | 세션 JSONL(`.aside`) | 없음(Codex·Claude 한도에 포함) | ChatGPT(Codex)·Claude 구독으로 보낸 요청만, 비공개 형식 |

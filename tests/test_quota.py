@@ -691,6 +691,65 @@ class QuotaTests(unittest.TestCase):
         api_rows = {r['bucket']: r for r in self.store.limits(NOW + 60)['limits'] if r['route'] == 'antigravity'}
         self.assertTrue(api_rows['gemini-argon-wtu-weekly']['omitted_latest'])
 
+    def test_antigravity_status_limits_drops_older_retired_pool_when_all_base_buckets_present(self):
+        from llm_usage.limits import status_limits
+
+        full_status = {
+            'quota': {
+                'gemini-5h': {'remaining_fraction': 0.9, 'reset_in_seconds': 3600},
+                'gemini-weekly': {'remaining_fraction': 0.8, 'reset_in_seconds': 5 * 86400},
+                '3p-5h': {'remaining_fraction': 0.7, 'reset_in_seconds': 4 * 3600},
+                '3p-weekly': {'remaining_fraction': 0.6, 'reset_in_seconds': 6 * 86400},
+            }
+        }
+        with patch('llm_usage.store.time.time', return_value=NOW), self.store.connect() as c:
+            self.store.limit(
+                c, 'antigravity', 'gemini-argon-wtu-weekly', 60.0, NOW + 3 * 86400, NOW - 7200, 'antigravity-app'
+            )
+            self.store.limit(c, 'antigravity', '3p-weekly-2', 50.0, NOW + 4 * 86400, NOW - 3600, 'antigravity-app')
+            self.assertEqual(status_limits(self.store, c, 'antigravity', full_status, NOW), 4)
+            rows = self.agy_rows(c)
+            snapshot = self.store.state(c, 'quota_snapshot:antigravity')
+            history = c.execute(
+                "SELECT count(*) FROM limit_history WHERE route='antigravity' AND bucket='gemini-argon-wtu-weekly'"
+            ).fetchone()[0]
+        self.assertNotIn('gemini-argon-wtu-weekly', rows)
+        # Split buckets are only owned by antigravity-app and must not be deleted by status_limits.
+        self.assertIn('3p-weekly-2', rows)
+        self.assertEqual(snapshot['source'], 'antigravity')
+        self.assertEqual(snapshot['buckets'], ['3p-5h', '3p-weekly', 'gemini-5h', 'gemini-weekly'])
+        self.assertEqual(history, 1)
+
+    def test_antigravity_status_limits_keeps_pool_on_partial_or_newer_row(self):
+        from llm_usage.limits import status_limits
+
+        partial_status = {
+            'quota': {
+                'gemini-5h': {'remaining_fraction': 0.9, 'reset_in_seconds': 3600},
+                '3p-5h': {'remaining_fraction': 0.7, 'reset_in_seconds': 4 * 3600},
+            }
+        }
+        full_status = {
+            'quota': {
+                'gemini-5h': {'remaining_fraction': 0.9, 'reset_in_seconds': 3600},
+                'gemini-weekly': {'remaining_fraction': 0.8, 'reset_in_seconds': 5 * 86400},
+                '3p-5h': {'remaining_fraction': 0.7, 'reset_in_seconds': 4 * 3600},
+                '3p-weekly': {'remaining_fraction': 0.6, 'reset_in_seconds': 6 * 86400},
+            }
+        }
+        with patch('llm_usage.store.time.time', return_value=NOW), self.store.connect() as c:
+            self.store.limit(
+                c, 'antigravity', 'gemini-argon-wtu-weekly', 60.0, NOW + 3 * 86400, NOW - 100, 'antigravity-app'
+            )
+            self.assertEqual(status_limits(self.store, c, 'antigravity', partial_status, NOW), 2)
+            self.assertIn('gemini-argon-wtu-weekly', self.agy_rows(c))
+            # A newer app observation must not be deleted by an older status event.
+            self.store.limit(
+                c, 'antigravity', 'gemini-argon-wtu-weekly', 55.0, NOW + 3 * 86400, NOW + 10, 'antigravity-app'
+            )
+            self.assertEqual(status_limits(self.store, c, 'antigravity', full_status, NOW), 4)
+            self.assertIn('gemini-argon-wtu-weekly', self.agy_rows(c))
+
     def test_antigravity_app_post_bypasses_system_proxy(self):
         from llm_usage import limits
 
