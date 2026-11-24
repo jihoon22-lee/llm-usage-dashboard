@@ -206,6 +206,7 @@ class Store:
         self._usage_lock = threading.Lock()
         Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.connect() as c:
+            c.execute('PRAGMA journal_mode=WAL')
             c.executescript('''
             CREATE TABLE IF NOT EXISTS events (
               id TEXT PRIMARY KEY, ts REAL NOT NULL, provider TEXT NOT NULL,
@@ -424,7 +425,7 @@ class Store:
     def connect(self):
         c = sqlite3.connect(self.path, timeout=15)
         c.row_factory = sqlite3.Row
-        c.execute('PRAGMA journal_mode=WAL')
+        c.execute('PRAGMA synchronous=NORMAL')
         # REPLACE deletes the conflicting events row; only with recursive triggers does
         # that deletion run the rollup's delete trigger (otherwise it would count twice).
         c.execute('PRAGMA recursive_triggers=ON')
@@ -850,141 +851,154 @@ class Store:
                 selected_sources={(r['route'], r['bucket']): r['source'] for r in rows},
                 since_by_route={route: a['since'] for route, a in accounts.items()},
             )
-        # A sole non-default home still needs its account label beside the original route.
-        labels = {a['route']: a['label'] for a in claude} if any(a['route'] != 'claude-code' for a in claude) else {}
-        for route in routes:
-            if not any(r['route'] == route for r in rows):
-                rows.append(dict(route=route, bucket='미제공', remaining=None, resets=None, checked=None, source=route))
-        for row in rows:
-            checked, resets = row['checked'], row['resets']
-            owner = accounts.get(row['route'])
-            context = contexts.get((row['route'], row['bucket']), {})
-            metadata = json.loads(context.get('data', '{}'))
-            # A placeholder for a route with no reading was observed under no account.
-            previous_account = bool(
-                owner and checked is not None and (context.get('epoch') != owner['epoch'] or checked < owner['since'])
+            # A sole non-default home still needs its account label beside the original route.
+            labels = (
+                {a['route']: a['label'] for a in claude} if any(a['route'] != 'claude-code' for a in claude) else {}
             )
-            row.update(
-                account_epoch=owner['epoch'] if owner else None,
-                identity_verified=bool(owner and owner['account_key']),
-                previous_account=previous_account,
-                scope=metadata,
-            )
-            src = sources.get(row['source'], {})
-            snapshot = snapshots.get(row['route'], {})
-            omitted = bool(
-                snapshot.get('source') == row['source']
-                and snapshot.get('checked', 0) >= (checked or 0)
-                and row['bucket'] not in snapshot.get('buckets', [])
-            )
-            row['omitted_latest'] = omitted
-            row['not_applicable'] = omitted and row['bucket'] in snapshot.get('absent', [])
-            # The account or plan changed and the new one's response no longer has this
-            # window (a plan's 30-day window during a switch, an old model window): it is
-            # an observation of the earlier conditions, not a current quota.
-            row['retired'] = bool(omitted and previous_account and snapshot.get('checked', 0) >= owner['since'])
-            row['family'] = family(row['route'])
-            row['account_label'] = labels.get(row['route'])
-            account = sources.get(account_source(row['route']), {}) if is_claude(row['route']) else {}
-            if account.get('checked', 0) >= (row['checked'] or 0) and account.get('status') in ('error', 'unavailable'):
-                src = account
-            user_ended = row['route'] in ended
-            if (
-                not user_ended
-                and src.get('status') == 'ended'
-                and str(src.get('detail', '')).startswith(USER_ENDED_DETAIL)
-            ):
-                # Tracking was switched back on; the next poll replaces this marker.
-                src = {
-                    **src,
-                    'status': 'unavailable',
-                    'detail': '구독 추적 재개 · 다음 수집에서 한도를 다시 확인합니다.',
-                }
-            stale = bool(
-                previous_account
-                or (
-                    checked
-                    and (
-                        checked > now + SKEW
-                        or now - checked > self.thresholds['stale_seconds']
-                        or (resets and resets <= now)
-                        or src.get('status') == 'unavailable'
+            for route in routes:
+                if not any(r['route'] == route for r in rows):
+                    rows.append(
+                        dict(route=route, bucket='미제공', remaining=None, resets=None, checked=None, source=route)
+                    )
+            for row in rows:
+                checked, resets = row['checked'], row['resets']
+                owner = accounts.get(row['route'])
+                context = contexts.get((row['route'], row['bucket']), {})
+                metadata = json.loads(context.get('data', '{}'))
+                # A placeholder for a route with no reading was observed under no account.
+                previous_account = bool(
+                    owner
+                    and checked is not None
+                    and (context.get('epoch') != owner['epoch'] or checked < owner['since'])
+                )
+                row.update(
+                    account_epoch=owner['epoch'] if owner else None,
+                    identity_verified=bool(owner and owner['account_key']),
+                    previous_account=previous_account,
+                    scope=metadata,
+                )
+                src = sources.get(row['source'], {})
+                snapshot = snapshots.get(row['route'], {})
+                omitted = bool(
+                    snapshot.get('source') == row['source']
+                    and snapshot.get('checked', 0) >= (checked or 0)
+                    and row['bucket'] not in snapshot.get('buckets', [])
+                )
+                row['omitted_latest'] = omitted
+                row['not_applicable'] = omitted and row['bucket'] in snapshot.get('absent', [])
+                # The account or plan changed and the new one's response no longer has this
+                # window (a plan's 30-day window during a switch, an old model window): it is
+                # an observation of the earlier conditions, not a current quota.
+                row['retired'] = bool(omitted and previous_account and snapshot.get('checked', 0) >= owner['since'])
+                row['family'] = family(row['route'])
+                row['account_label'] = labels.get(row['route'])
+                account = sources.get(account_source(row['route']), {}) if is_claude(row['route']) else {}
+                if account.get('checked', 0) >= (row['checked'] or 0) and account.get('status') in (
+                    'error',
+                    'unavailable',
+                ):
+                    src = account
+                user_ended = row['route'] in ended
+                if (
+                    not user_ended
+                    and src.get('status') == 'ended'
+                    and str(src.get('detail', '')).startswith(USER_ENDED_DETAIL)
+                ):
+                    # Tracking was switched back on; the next poll replaces this marker.
+                    src = {
+                        **src,
+                        'status': 'unavailable',
+                        'detail': '구독 추적 재개 · 다음 수집에서 한도를 다시 확인합니다.',
+                    }
+                stale = bool(
+                    previous_account
+                    or (
+                        checked
+                        and (
+                            checked > now + SKEW
+                            or now - checked > self.thresholds['stale_seconds']
+                            or (resets and resets <= now)
+                            or src.get('status') == 'unavailable'
+                        )
                     )
                 )
-            )
-            row.update(
-                status='ended'
-                if user_ended
-                else 'error'
-                if src.get('status') == 'error'
-                else 'ended'
-                if src.get('status') == 'ended'
-                else 'unavailable'
-                if omitted or row['remaining'] is None or src.get('status') == 'unavailable'
-                else 'stale'
-                if stale
-                else 'fresh',
-                stale=stale or user_ended,
-                user_ended=user_ended,
-                reset_kst=datetime.fromtimestamp(resets, KST).isoformat() if resets else None,
-                seconds_to_reset=max(0, int(resets - now)) if resets else None,
-                detail=USER_ENDED_DETAIL if user_ended else src.get('detail', ''),
-                last_attempt=src.get('checked'),
-            )
-            row['history'] = history.get((row['route'], row['bucket']), [])
-            if previous_account:
-                row['history'] = []
-            pace = quota_pace(row['history'], now, row['status'], pace_lookback(row['bucket'])[0])
-            row['pace_per_hour'] = pace[0] if pace else None
-            row['pace_minutes'] = pace[1] if pace else None
-            row['trends'] = quota_trends(row['history'], now, row['status'])
-            row['decreases'] = quota_decreases(row['history'], now)
-            row['history_source'] = row['history'][-1]['source'] if row['history'] else None
-            row['forecast'] = quota_forecast(row, now)
-            row['plan'] = quota_plan(row, now)
-            row['window'] = None
-            row['window_seconds'] = window_seconds(row['bucket'])
-            # Per-point route/bucket/source repeat the row; keep what the chart reads.
-            row['history'] = [{k: p[k] for k in HISTORY_FIELDS} for p in row['history']]
-        # A shorter window cannot be used while the longer window of the same quota is
-        # exhausted. Only a current observation blocks: a stale or expired upper value
-        # is not carried onto another bucket, and the lower bucket's value is kept.
-        by_key = {(r['route'], r['bucket']): r for r in rows}
-        for row in rows:
-            parent_bucket = QUOTA_PARENTS.get((family(row['route']), row['bucket']))
-            if row['route'] == 'codex' and row['bucket'].endswith(' · 300분'):
-                parent_bucket = row['bucket'].removesuffix('300분') + '10080분'
-            parent = by_key.get((row['route'], parent_bucket))
-            blocked = (
-                parent and parent['status'] == 'fresh' and parent['remaining'] is not None and parent['remaining'] <= 0
-            )
-            row['blocked_by'] = {k: parent[k] for k in ('bucket', 'resets', 'seconds_to_reset')} if blocked else None
-            # The desktop app reports only the window that currently binds a model family,
-            # so the other window keeps its last observation; say why it is not current.
-            agy = re.fullmatch(r'(gemini|3p)-(5h|weekly)', row['bucket']) if row['route'] == 'antigravity' else None
-            other = agy and by_key.get(('antigravity', f"{agy[1]}-{'weekly' if agy[2] == '5h' else '5h'}"))
-            row['note'] = (
-                '설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.'
-                if row.get('user_ended')
-                else f"앱이 지금 {'주간' if agy[2] == '5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
-                if other
-                and row['status'] != 'fresh'
-                and other['status'] == 'fresh'
-                and other['source'] == 'antigravity-app'
-                else '계정·요금제 변경 전 관측입니다. 변경 후 계정 응답에 이 한도가 없어 현재 한도에서 제외했습니다.'
-                if row.get('retired')
-                else '계정·구독 조건 변경 전 관측입니다.'
-                if row.get('previous_account')
-                else '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.'
-                if row.get('omitted_latest')
-                else '로컬 관측의 계정을 확인하지 못했습니다. 계정 조회 후 작업 전망을 제공합니다.'
-                if row['scope'].get('identity_unverified')
-                else '원본 초기화 시각을 해석하지 못했습니다. 시간 전망을 보류합니다.'
-                if row['scope'].get('reset_unparsed')
-                else None
-            )
-        sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS) + ',COALESCE(SUM(requests),0) AS requests'
-        with self.connect() as c:
+                row.update(
+                    status='ended'
+                    if user_ended
+                    else 'error'
+                    if src.get('status') == 'error'
+                    else 'ended'
+                    if src.get('status') == 'ended'
+                    else 'unavailable'
+                    if omitted or row['remaining'] is None or src.get('status') == 'unavailable'
+                    else 'stale'
+                    if stale
+                    else 'fresh',
+                    stale=stale or user_ended,
+                    user_ended=user_ended,
+                    reset_kst=datetime.fromtimestamp(resets, KST).isoformat() if resets else None,
+                    seconds_to_reset=max(0, int(resets - now)) if resets else None,
+                    detail=USER_ENDED_DETAIL if user_ended else src.get('detail', ''),
+                    last_attempt=src.get('checked'),
+                )
+                row['history'] = history.get((row['route'], row['bucket']), [])
+                if previous_account:
+                    row['history'] = []
+                pace = quota_pace(row['history'], now, row['status'], pace_lookback(row['bucket'])[0])
+                row['pace_per_hour'] = pace[0] if pace else None
+                row['pace_minutes'] = pace[1] if pace else None
+                row['trends'] = quota_trends(row['history'], now, row['status'])
+                row['decreases'] = quota_decreases(row['history'], now)
+                row['history_source'] = row['history'][-1]['source'] if row['history'] else None
+                row['forecast'] = quota_forecast(row, now)
+                row['plan'] = quota_plan(row, now)
+                row['window'] = None
+                row['window_seconds'] = window_seconds(row['bucket'])
+                # Per-point route/bucket/source repeat the row; keep what the chart reads.
+                row['history'] = [{k: p[k] for k in HISTORY_FIELDS} for p in row['history']]
+            # A shorter window cannot be used while the longer window of the same quota is
+            # exhausted. Only a current observation blocks: a stale or expired upper value
+            # is not carried onto another bucket, and the lower bucket's value is kept.
+            by_key = {(r['route'], r['bucket']): r for r in rows}
+            for row in rows:
+                parent_bucket = QUOTA_PARENTS.get((family(row['route']), row['bucket']))
+                if row['route'] == 'codex' and row['bucket'].endswith(' · 300분'):
+                    parent_bucket = row['bucket'].removesuffix('300분') + '10080분'
+                parent = by_key.get((row['route'], parent_bucket))
+                blocked = (
+                    parent
+                    and parent['status'] == 'fresh'
+                    and parent['remaining'] is not None
+                    and parent['remaining'] <= 0
+                )
+                row['blocked_by'] = (
+                    {k: parent[k] for k in ('bucket', 'resets', 'seconds_to_reset')} if blocked else None
+                )
+                # The desktop app reports only the window that currently binds a model family,
+                # so the other window keeps its last observation; say why it is not current.
+                agy = re.fullmatch(r'(gemini|3p)-(5h|weekly)', row['bucket']) if row['route'] == 'antigravity' else None
+                other = agy and by_key.get(('antigravity', f"{agy[1]}-{'weekly' if agy[2] == '5h' else '5h'}"))
+                row['note'] = (
+                    '설정에서 구독 종료로 표시했습니다. 한도·초기화 조회를 멈췄고 사용 기록은 계속 집계합니다.'
+                    if row.get('user_ended')
+                    else f"앱이 지금 {'주간' if agy[2] == '5h' else '5시간'} 창을 보고하고 있어 이 창의 현재값은 확인할 수 없습니다. 마지막 관측값입니다."
+                    if other
+                    and row['status'] != 'fresh'
+                    and other['status'] == 'fresh'
+                    and other['source'] == 'antigravity-app'
+                    else '계정·요금제 변경 전 관측입니다. 변경 후 계정 응답에 이 한도가 없어 현재 한도에서 제외했습니다.'
+                    if row.get('retired')
+                    else '계정·구독 조건 변경 전 관측입니다.'
+                    if row.get('previous_account')
+                    else '최근 계정 응답에서 이 한도를 확인하지 못했습니다. 이전 관측값입니다.'
+                    if row.get('omitted_latest')
+                    else '로컬 관측의 계정을 확인하지 못했습니다. 계정 조회 후 작업 전망을 제공합니다.'
+                    if row['scope'].get('identity_unverified')
+                    else '원본 초기화 시각을 해석하지 못했습니다. 시간 전망을 보류합니다.'
+                    if row['scope'].get('reset_unparsed')
+                    else None
+                )
+            sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS) + ',COALESCE(SUM(requests),0) AS requests'
             for row in rows:
                 span = window_seconds(row['bucket'])
                 if not row['resets'] or not span:
@@ -1047,9 +1061,6 @@ class Store:
         source = row.get('history_source') or row.get('source')
         if not span or not row.get('checked'):
             return []
-        memo = self.__dict__.setdefault('_capacity_memo', {})
-        if len(memo) > 5000:
-            memo.clear()
         epochs = []
         for resets, remaining in c.execute(
             'SELECT resets,MIN(remaining) FROM limit_history WHERE route=? AND bucket=? AND source=? '
@@ -1066,22 +1077,30 @@ class Store:
             if used < min_used:
                 continue
             key = (row['route'], row['bucket'], int(resets // 60), round(used, 3))
-            if key not in memo:
+            with self._usage_lock:
+                memo = self.__dict__.setdefault('_capacity_memo', {})
+                entry = memo.get(key)
+            if entry is None:
                 where, args = route_events(row['route'])
                 r = c.execute(
                     'SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COALESCE(SUM(requests),0) FROM events '
                     'WHERE ' + where + ' AND ts>=? AND ts<?',
                     (*args, resets - span, resets),
                 ).fetchone()
-                memo[key] = dict(
+                entry = dict(
                     resets=resets,
                     used_points=used,
                     tokens=r[0],
                     requests=r[1],
                     tokens_per_point=r[0] / used if r[0] else None,
                 )
-            if memo[key]['tokens_per_point']:
-                result.append(memo[key])
+                with self._usage_lock:
+                    memo = self.__dict__.setdefault('_capacity_memo', {})
+                    if len(memo) > 5000:
+                        memo.clear()
+                    memo[key] = entry
+            if entry['tokens_per_point']:
+                result.append(entry)
         return result
 
     # Subscription accounts: one per route, Claude Code split by account (pending = original).
@@ -1475,377 +1494,29 @@ class Store:
         return {k: v for k, v in data.items() if k in insight_keys | shared}
 
     def project_month(self, c, now, pricing=None):
-        """Month-to-date (KST calendar month) tokens and estimated cost per project.
+        """Month-to-date (KST calendar month) tokens and estimated cost per project."""
+        from . import store_ops
 
-        cost is None when no token of the project has a rate; priced_share tells how
-        much of the tokens the cost covers."""
-        from .insights import token_total
-        from .pricing import estimate, rate_for
-
-        now = now if isinstance(now, datetime) else datetime.fromtimestamp(now, KST)
-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
-        out = {}
-        for r in c.execute(
-            "SELECT COALESCE(project,'미분류') AS project,model,date(ts,'unixepoch','+9 hours') AS day,"
-            + sums
-            + ' FROM '
-            + self.table
-            + ' WHERE ts>=? GROUP BY 1,2,3',
-            (start.timestamp(),),
-        ):
-            row = dict(r)
-            tokens = token_total(row)
-            e = out.setdefault(row['project'], dict(tokens=0, cost=0.0, priced_tokens=0))
-            e['tokens'] += tokens
-            rate = rate_for(row['model'], pricing, row['day']) if pricing else None
-            if rate:
-                e['cost'] += estimate(row, rate)
-                e['priced_tokens'] += tokens
-        from .reconciliation import supplements
-
-        additions, _ = supplements(c)
-        residual = 0
-        for r in additions:
-            if r['start'] >= start.timestamp() and r['end'] <= now.timestamp():
-                # The Codex account residual belongs to no project; it is kept apart.
-                if r['source'] == 'codex-account':
-                    residual += r['tokens']
-                    continue
-                e = out.setdefault(r['project'] or '미분류', dict(tokens=0, cost=0.0, priced_tokens=0))
-                e['tokens'] += r['tokens']
-        for e in out.values():
-            e['cost'] = round(e['cost'], 4) if e['priced_tokens'] else None
-            e['priced_share'] = e.pop('priced_tokens') / e['tokens'] * 100 if e['tokens'] else None
-        return dict(month=start.strftime('%Y-%m'), projects=out, residual_tokens=residual)
+        return store_ops.project_month(self, c, now, pricing=pricing)
 
     def project_detail(self, project, now=None, pricing=None, days=30, budget=None):
-        """One project over the last `days` KST days: models, daily use, busiest sessions,
-        and this month so far with a straight-line month-end projection (and the budget
-        share when a budget is given). '미분류' is the bucket of records with no project."""
-        from .insights import token_total
-        from .pricing import estimate, rate_for
+        """One project over the last `days` KST days."""
+        from . import store_ops
 
-        now = now if isinstance(now, datetime) else datetime.fromtimestamp(now or time.time(), KST)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start = midnight - timedelta(days=days - 1)
-        month_start = midnight.replace(day=1)
-        sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
-        where = " WHERE COALESCE(project,'미분류')=? AND ts>=?"
-        models = {}
-        daily = {}
-        month = dict(tokens=0, cost=0.0, priced=0)
-        with self.connect() as c:
-            for r in c.execute(
-                "SELECT route,model,date(ts,'unixepoch','+9 hours') AS day,"
-                + sums
-                + ','
-                + self.rcount
-                + ' FROM '
-                + self.table
-                + where
-                + ' GROUP BY route,model,day',
-                (project, min(start, month_start).timestamp()),
-            ):
-                row = dict(r)
-                tokens = token_total(row)
-                rate = rate_for(row['model'], pricing, row['day']) if pricing else None
-                part = estimate(row, rate) if rate else None
-                if row['day'] >= month_start.strftime('%Y-%m-%d'):
-                    month['tokens'] += tokens
-                    if part is not None:
-                        month['cost'] += part
-                        month['priced'] += tokens
-                if row['day'] < start.strftime('%Y-%m-%d'):
-                    continue
-                m = models.setdefault(
-                    (row['route'], row['model']),
-                    dict(route=row['route'], model=row['model'], tokens=0, requests=0, cost=None),
-                )
-                m['tokens'] += tokens
-                m['requests'] += row['requests']
-                if part is not None:
-                    m['cost'] = (m['cost'] or 0) + part
-                d = daily.setdefault(row['day'], dict(day=row['day'], tokens=0, requests=0))
-                d['tokens'] += tokens
-                d['requests'] += row['requests']
-            sessions = [
-                dict(session=r[0], route=r[1], tokens=r[2], requests=r[3], first_ts=r[4], last_ts=r[5])
-                for r in c.execute(
-                    'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),SUM(requests),MIN(ts),MAX(ts) FROM events'
-                    + where
-                    + ' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',
-                    (project, start.timestamp()),
-                )
-            ]
-        from .reconciliation import supplements
-
-        with self.connect() as c:
-            extra, conflicts = supplements(c)
-        by_session = {r['session']: r for r in sessions}
-        unallocated = []
-        for e in extra:
-            # The Codex account residual is listed apart from '미분류' (see reconciliation.RESIDUAL).
-            if e['source'] == 'codex-account' or (e['project'] or '미분류') != project or e['end'] > now.timestamp():
-                continue
-            if e['start'] >= month_start.timestamp():
-                month['tokens'] += e['tokens']
-            if e['start'] < start.timestamp():
-                continue
-            m = models.setdefault(
-                (e['route'], e['model'] or 'unknown'),
-                dict(route=e['route'], model=e['model'] or 'unknown', tokens=0, requests=0, cost=None),
-            )
-            m['tokens'] += e['tokens']
-            begin = datetime.fromtimestamp(e['start'], KST).date().isoformat()
-            finish = datetime.fromtimestamp(e['end'] - 0.000001, KST).date().isoformat()
-            if begin == finish:
-                d = daily.setdefault(begin, dict(day=begin, tokens=0, requests=0))
-                d['tokens'] += e['tokens']
-            else:
-                unallocated.append(dict(start=e['start'], end=e['end'], tokens=e['tokens']))
-            if e['session']:
-                session = by_session.get(e['session'])
-                if session is None:
-                    session = by_session[e['session']] = dict(
-                        session=e['session'],
-                        route=e['route'],
-                        tokens=0,
-                        requests=0,
-                        first_ts=e['start'],
-                        last_ts=e['end'],
-                    )
-                    sessions.append(session)
-                session['tokens'] += e['tokens']
-                session['first_ts'] = min(session['first_ts'], e['start'])
-                session['last_ts'] = max(session['last_ts'], e['end'])
-        sessions = sorted(sessions, key=lambda r: (-r['tokens'], r['session']))[:10]
-        elapsed = now.day
-        days_in_month = ((month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - month_start).days
-        cost = month['cost'] if month['priced'] else None
-        early = elapsed < PROJECTION_FROM_DAY
-        projection = dict(
-            month=month_start.strftime('%Y-%m'),
-            days_elapsed=elapsed,
-            days_in_month=days_in_month,
-            tokens=month['tokens'],
-            cost=round(cost, 4) if cost is not None else None,
-            projected_tokens=None if early else month['tokens'] / elapsed * days_in_month,
-            projected_cost=round(cost / elapsed * days_in_month, 4) if cost is not None and not early else None,
-            projected_from_day=PROJECTION_FROM_DAY,
-            priced_share=month['priced'] / month['tokens'] * 100 if month['tokens'] else None,
-        )
-        if budget:
-            from .notify import budget_level
-
-            _, projection['budget_ratio'] = budget_level(dict(tokens=month['tokens'], cost=cost), budget)
-            projection['projected_budget_ratio'] = (
-                None
-                if early
-                else budget_level(
-                    dict(tokens=projection['projected_tokens'], cost=projection['projected_cost']), budget
-                )[1]
-            )
-            projection['budget'] = budget
-        for m in models.values():
-            m['cost'] = round(m['cost'], 4) if m['cost'] is not None else None
-        return dict(
-            project=project,
-            days=days,
-            start=start.strftime('%Y-%m-%d'),
-            unallocated_intervals=unallocated,
-            models=sorted(models.values(), key=lambda m: -m['tokens']),
-            daily=[daily[k] for k in sorted(daily)],
-            sessions=sessions,
-            month=projection,
-        )
+        return store_ops.project_detail(self, project, now or time.time(), pricing=pricing, days=days, budget=budget)
 
     @classmethod
     def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None):
-        """Request-only session rows in the selected range, optionally for a bounded ID batch.
+        """Request-only session rows in the selected range, optionally for a bounded ID batch."""
+        from . import store_ops
 
-        Reconciliation uses the same aggregation to recover local detail for a
-        supplemented session that did not make the request-only top 100.
-        """
-        from .pricing import estimate, rate_for
-
-        where = 'ts>=? AND ts<? AND session IS NOT NULL'
-        args = [start, end]
-        if scope:
-            kind, _, value = scope.partition(':')
-            where += ' AND ' + cls.SCOPE_KINDS[kind] + '=?'
-            args.append(value)
-        if ids is not None:
-            if not ids:
-                return {}
-            where += ' AND session IN (' + ','.join('?' for _ in ids) + ')'
-            args.extend(ids)
-        sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
-        sessions = {}
-        for r in c.execute(
-            "SELECT session,model,date(ts,'unixepoch','+9 hours') AS day,"
-            + cls.ACCOUNT_SQL
-            + ''' AS account,
-                MAX(route) AS route,MAX(project) AS project,MAX(agent_kind) AS kind,MIN(ts) AS first_ts,MAX(ts) AS last_ts,
-                COALESCE(SUM(requests),0) AS requests,'''
-            + sums
-            + ' FROM events WHERE '
-            + where
-            + ' GROUP BY session,model,day,4',
-            args,
-        ):
-            e = sessions.setdefault(
-                r['session'],
-                dict(
-                    session=r['session'],
-                    route=r['route'],
-                    project=r['project'],
-                    kind=r['kind'],
-                    first_ts=r['first_ts'],
-                    last_ts=r['last_ts'],
-                    requests=0,
-                    cost=None,
-                    accounts=[],
-                    **dict.fromkeys(METRICS, 0),
-                ),
-            )
-            if r['route'] == 'claude-code' and r['account'] not in e['accounts']:
-                e['accounts'].append(r['account'])
-            e['first_ts'] = min(e['first_ts'], r['first_ts'])
-            e['last_ts'] = max(e['last_ts'], r['last_ts'])
-            e['requests'] += r['requests']
-            for k in METRICS:
-                e[k] += r[k]
-            rate = rate_for(r['model'], pricing, r['day']) if pricing else None
-            if rate:
-                e['cost'] = (e['cost'] or 0) + estimate(dict(r), rate)
-        for e in sessions.values():
-            e['accounts'].sort()
-            if e['cost'] is not None:
-                e['cost'] = round(e['cost'], 2)
-        return sessions
+        return store_ops.session_rows(cls, c, start, end, pricing=pricing, scope=scope, ids=ids)
 
     def session_detail(self, session, pricing=None):
         """One session's models, hourly activity and cache share; no message content exists here."""
-        from .insights import token_total
-        from .pricing import estimate, rate_for
+        from . import store_ops
 
-        sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
-        with self.connect() as c:
-            models = []
-            cost = 0.0
-            rated = False
-            for r in c.execute(
-                '''SELECT route,model,date(ts,'unixepoch','+9 hours') AS day,MIN(ts) AS first_ts,MAX(ts) AS last_ts,
-                COALESCE(SUM(requests),0) AS requests,'''
-                + sums
-                + ' FROM events WHERE session=? GROUP BY route,model,day',
-                (session,),
-            ):
-                row = dict(r)
-                rate = rate_for(row['model'], pricing, row['day']) if pricing else None
-                part = estimate(row, rate) if rate else None
-                key = next((m for m in models if m['route'] == row['route'] and m['model'] == row['model']), None)
-                if key is None:
-                    key = dict(
-                        route=row['route'],
-                        model=row['model'],
-                        first_ts=row['first_ts'],
-                        last_ts=row['last_ts'],
-                        requests=0,
-                        cost=None,
-                        **dict.fromkeys(METRICS, 0),
-                    )
-                    models.append(key)
-                key['first_ts'] = min(key['first_ts'], row['first_ts'])
-                key['last_ts'] = max(key['last_ts'], row['last_ts'])
-                key['requests'] += row['requests']
-                for k in METRICS:
-                    key[k] += row[k]
-                if part is not None:
-                    key['cost'] = (key['cost'] or 0) + part
-                    cost += part
-                    rated = True
-            if not models:
-                evidence = c.execute(
-                    'SELECT * FROM usage_evidence WHERE session=? ORDER BY end DESC LIMIT 1', (session,)
-                ).fetchone()
-                if not evidence:
-                    return dict(session=session, models=[], hours=[])
-                models = [
-                    dict(
-                        route=evidence['route'],
-                        model=evidence['model'] or 'unknown',
-                        first_ts=evidence['start'],
-                        last_ts=evidence['end'],
-                        requests=0,
-                        cost=None,
-                        **dict.fromkeys(METRICS, 0),
-                    )
-                ]
-            meta = c.execute('SELECT MAX(project),MAX(agent_kind) FROM events WHERE session=?', (session,)).fetchone()
-            hours = [
-                dict(hour=r[0] * 3600, requests=r[1], tokens=r[2])
-                for r in c.execute(
-                    'SELECT CAST(ts/3600 AS INTEGER),SUM(requests),SUM(uncached_input+cached_input+output+cache_creation) '
-                    'FROM events WHERE session=? GROUP BY 1 ORDER BY 1',
-                    (session,),
-                )
-            ]
-        totals = {k: sum(m[k] for m in models) for k in METRICS}
-        inputs = totals['uncached_input'] + totals['cached_input'] + totals['cache_creation']
-        for m in models:
-            m['cost'] = round(m['cost'], 4) if m['cost'] is not None else None
-        data = dict(
-            session=session,
-            project=meta[0],
-            kind=meta[1],
-            first_ts=min(m['first_ts'] for m in models),
-            last_ts=max(m['last_ts'] for m in models),
-            requests=sum(m['requests'] for m in models),
-            totals=totals,
-            cache_share=totals['cached_input'] / inputs * 100 if inputs else None,
-            cost=round(cost, 4) if rated else None,
-            models=sorted(models, key=lambda m: -token_total(m)),
-            hours=hours,
-        )
-        from .reconciliation import supplements, add
-
-        with self.connect() as c:
-            extra, conflicts = supplements(c)
-        data['unallocated_intervals'] = []
-        for e in extra:
-            if e['session'] != session:
-                continue
-            add(data['totals'], e)
-            m = next((m for m in data['models'] if m['route'] == e['route'] and m['model'] == e['model']), None)
-            if m is None:
-                m = dict(
-                    route=e['route'],
-                    model=e['model'] or 'unknown',
-                    requests=0,
-                    cost=None,
-                    first_ts=e['start'],
-                    last_ts=e['end'],
-                    **dict.fromkeys(METRICS, 0),
-                )
-                data['models'].append(m)
-            add(m, e)
-            lo = int(e['start'] // 3600) * 3600
-            hi = int((e['end'] - 0.000001) // 3600) * 3600
-            if lo == hi:
-                h = next((h for h in hours if h['hour'] == lo), None)
-                if h is None:
-                    h = dict(hour=lo, requests=0, tokens=0)
-                    hours.append(h)
-                h['tokens'] += e['tokens']
-            else:
-                data['unallocated_intervals'].append(dict(start=e['start'], end=e['end'], tokens=e['tokens']))
-        data['models'].sort(key=lambda m: -token_total(m))
-        hours.sort(key=lambda h: h['hour'])
-        inputs = sum(data['totals'][k] for k in ('uncached_input', 'cached_input', 'cache_creation'))
-        data['cache_share'] = data['totals']['cached_input'] / inputs * 100 if inputs else None
-        return data
+        return store_ops.session_detail(self, session, pricing=pricing)
 
     def _price_segments(self, c, R, route, parts, pricing, scope_sql, scope_args):
         """Each price span's value of one route's records. Rollup rows are hourly, so an
@@ -1866,15 +1537,18 @@ class Store:
             )
             for lo, hi, usd in parts
         ]
+        where, route_args = route_events(route)
         for r in c.execute(
             f"SELECT CASE {cases} ELSE {len(parts) - 1} END AS part,model,date(ts,'unixepoch','+9 hours') AS day,"
             + sums
             + ' FROM '
             + R
-            + ' WHERE route=? AND ts>=? AND ts<?'
+            + ' WHERE '
+            + where
+            + ' AND ts>=? AND ts<?'
             + scope_sql
             + ' GROUP BY 1,2,3',
-            (route, parts[0][0], parts[-1][1], *scope_args),
+            (*route_args, parts[0][0], parts[-1][1], *scope_args),
         ):
             e = result[r['part']]
             e['tokens'] += token_total(dict(r))
@@ -2429,7 +2103,7 @@ class Store:
                         monthly_equiv=est * MONTH_DAYS / days if est is not None else None,
                         effective_usd=weighted(parts) if parts else monthly,
                         price_segments=self._price_segments(c, R, route, parts, pricing, scope_sql, scope_args)
-                        if len(parts) > 1 and (claude_split is None or not is_claude(route))
+                        if len(parts) > 1
                         else None,
                     )
                 )
@@ -2486,160 +2160,13 @@ class Store:
 
     def storage_row(self, checked=None):
         """Database, WAL and backup sizes, so growth is visible before it is a problem."""
+        from . import store_ops
 
-        def size(path):
-            try:
-                return Path(path).stat().st_size
-            except OSError:
-                return 0
-
-        database = size(self.path)
-        wal = size(self.path + '-wal')
-        backups = sorted(Path(self.path).parent.glob('backups/usage-*.db.gz'))
-        kept = sum(size(p) for p in backups)
-        return dict(
-            name='데이터베이스',
-            checked=checked,
-            status='ok',
-            detail=f'DB {database / 1e6:.0f}MB · WAL {wal / 1e6:.0f}MB · 백업 {len(backups)}개 {kept / 1e6:.0f}MB',
-        )
+        return store_ops.storage_row(self, checked=checked)
 
     def _usage_live(self, c, rows, now):
         """Source freshness and availability change with wall time, so they are
         computed on every call instead of being cached with the body."""
-        # The last success lets the page tell a single failed poll from a lasting failure.
-        health = dict(c.execute('SELECT name,last_success FROM source_health').fetchall())
-        sources = [
-            dict(r, last_success=health.get(r['name'])) for r in c.execute('SELECT * FROM sources ORDER BY name')
-        ]
-        stale = self.thresholds['stale_seconds']
-        collector = self.state(c, 'collector', {})
-        sources.append(
-            dict(
-                name='수집기',
-                checked=collector.get('checked'),
-                status='ok'
-                if collector.get('checked') and time.time() - collector['checked'] <= stale
-                else 'stale'
-                if collector.get('checked')
-                else 'unavailable',
-                detail=collector.get('status') or '기록 없음',
-            )
-        )
-        backup = self.state(c, 'backup', {})
-        if backup:
-            fresh = time.time() - backup.get('ts', 0) <= 86400 + stale
-            sources.append(
-                dict(
-                    name='일일 백업',
-                    checked=backup.get('ts'),
-                    status='error' if not backup.get('ok') else 'ok' if fresh else 'stale',
-                    detail=backup.get('error') or f"{backup.get('file', '')} · {backup.get('size', 0) / 1e6:.0f}MB",
-                )
-            )
-        else:
-            sources.append(dict(name='일일 백업', checked=None, status='unavailable', detail='아직 실행되지 않음'))
-        verify = self.state(c, 'verify', {})
-        if verify:
-            from .verify import partial
+        from . import store_ops
 
-            bad = not verify.get('ok')
-            sections = ('antigravity', 'devin', 'codex_original', 'claude', 'opencode', 'aside')
-            misses = sum((verify.get(s) or {}).get('missing_events', 0) for s in sections)
-            mismatch = verify.get('codex', {}).get('mismatches', 0) + sum(
-                (verify.get(s) or {}).get('mismatched_events', 0) for s in sections
-            )
-            errors = sum(
-                (verify.get(s) or {}).get(k, 0)
-                for s in sections
-                for k in ('source_errors', 'source_conflicts', 'alias_errors', 'output_split_errors')
-            )
-            incomplete = partial(verify)
-            sources.append(
-                dict(
-                    name='원본 대조',
-                    checked=verify.get('ts'),
-                    status='error'
-                    if bad
-                    else 'stale'
-                    if time.time() - verify.get('ts', 0) > 86400 + stale
-                    else 'partial'
-                    if incomplete
-                    else 'ok',
-                    detail=verify.get('error')
-                    or (
-                        (
-                            f'누락 {misses}건 · 불일치 {mismatch}건 · 오류 {errors}건'
-                            + (
-                                ' · 시간별 집계가 원본과 달라 다시 계산함'
-                                if (verify.get('rollup') or {}).get('matches') is False
-                                else ''
-                            )
-                        )
-                        if bad
-                        else '확인 가능한 원본과 일치 · 미수집·해석 불가·과거 원본 부족 또는 세부값 상충이 있어 일부만 확인됨'
-                        if incomplete
-                        else '원본과 일치'
-                    ),
-                )
-            )
-        else:
-            sources.append(dict(name='원본 대조', checked=None, status='unavailable', detail='아직 실행되지 않음'))
-        sources.append(self.storage_row(self.state(c, 'last_local')))
-        ops_rows = {'수집기', '일일 백업', '원본 대조', '데이터베이스'}
-        for source in sources:
-            # Ops pseudo-rows carry daily cadences; they compute staleness themselves. A
-            # finished one-time job (the attribution backfill) keeps its result: its age
-            # is not an old value.
-            if source['name'] in ops_rows or source['name'] in ONE_TIME_SOURCES:
-                continue
-            # Resource reads run every 15 minutes, for every Claude account ('claude-credits:<id>').
-            source_stale = (
-                max(1800, self.thresholds['stale_seconds'])
-                if source['name'].split(':')[0] in ('claude-credits', 'claude-resets')
-                else self.thresholds['stale_seconds']
-            )
-            if source['name'] == 'codex-consumption-daily':
-                source_stale = max(source_stale, 7200)
-            elif source['name'] in ('codex-activity', 'codex-consumption-threads'):
-                source_stale = max(source_stale, 1800)
-            if source['status'] == 'ok' and now.timestamp() - source['checked'] > source_stale:
-                source['status'] = 'stale'
-        # A status line reports only while a terminal UI runs it (not the desktop apps
-        # or headless workers). After a day without a receipt it is shown as unused,
-        # not as a failing source; the quota stays visible through account/app polling.
-        for source in sources:
-            if (
-                (source['name'] in STATUS_LINE_SOURCES or source['name'].startswith('claude-code:'))
-                and source['status'] == 'stale'
-                and source.get('checked')
-                and now.timestamp() - source['checked'] > 86400
-            ):
-                source.update(
-                    status='idle',
-                    detail=' · '.join(
-                        filter(
-                            None,
-                            [
-                                source.get('detail'),
-                                '최근 24시간 상태줄 수신 없음 · 터미널(TUI) 실행 중에만 수신 · 한도는 계정/앱 조회로 표시',
-                            ],
-                        )
-                    ),
-                )
-        unavailable_routes = [
-            dict(route=source['name'].removesuffix('-records'), detail=source['detail'])
-            for source in sources
-            if source['name'].endswith('-records')
-            and source['status'] == 'unavailable'
-            and not any(row['route'] == source['name'].removesuffix('-records') for row in rows)
-        ]
-        observation = next((s for s in sources if s['name'] == 'antigravity-tokens'), None)
-        for gap in unavailable_routes:
-            if gap['route'] == 'antigravity' and observation and observation['status'] == 'partial':
-                gap.update(
-                    observed=True,
-                    observation_checked=observation['checked'],
-                    observation_stale=now.timestamp() - observation['checked'] > self.thresholds['stale_seconds'],
-                )
-        return sources, unavailable_routes
+        return store_ops.usage_live(self, c, rows, now)

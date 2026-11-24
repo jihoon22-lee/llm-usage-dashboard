@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 
 from .store import identity, project_label, stamp
+from .util import log_exception, prefix_bounds
 
 API = 'https://api.anthropic.com'
 SESSIONS_BETA = 'ccr-byoc-2025-07-29'
@@ -265,8 +266,9 @@ def _rekey(store, c):
     if not rows:
         return
     prefix = 'claude_cloud_account:'
+    lo, hi = prefix_bounds(prefix)
     readers = {}
-    for name, data in c.execute('SELECT key,data FROM state WHERE substr(key,1,?)=?', (len(prefix), prefix)):
+    for name, data in c.execute('SELECT key,data FROM state WHERE key>=? AND key<?', (lo, hi)):
         readers.setdefault(json.loads(data), set()).add(name[len(prefix) :])
     changed = False
     for r in rows:
@@ -349,6 +351,7 @@ def collect_claude_cloud(store, settings, fetch=None, account=None):
     try:
         sessions = _sessions(fetch, headers)
     except Exception as exc:
+        log_exception(f'claude-cloud sessions {source}', exc)
         # Errors carry no response body or credentials.
         _backoff(store, exc, pause, retry)
         if isinstance(exc, urllib.error.HTTPError):
@@ -496,17 +499,18 @@ def collect_claude_cloud(store, settings, fetch=None, account=None):
                     dict(updated=item.get('updated_at'), missing=True, parser=PARSER_VERSION, checked=time.time()),
                 )
         except Exception as exc:
+            log_exception(f'claude-cloud session {source}', exc)
             failed += 1
             errors.append(type(exc).__name__)
     with store.connect() as c:
         # Entries skipped in this account's sessions, as a local source counts its bad lines.
         current = {_errors(item) for item in sessions}
-        prefix = 'claude-cloud:'
+        lo, hi = prefix_bounds('claude-cloud:')
         unreadable = sum(
             n
             for name, n in c.execute(
-                'SELECT source,COUNT(*) FROM import_errors WHERE substr(source,1,?)=? GROUP BY source',
-                (len(prefix), prefix),
+                'SELECT source,COUNT(*) FROM import_errors WHERE source>=? AND source<? GROUP BY source',
+                (lo, hi),
             )
             if name in current
         )

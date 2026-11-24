@@ -20,16 +20,13 @@ from pathlib import Path
 
 from .cloud import collect_claude_cloud
 from .store import stamp, KST
+from .util import is_finite_number as number, log_exception
 
 OPENCODE_GO_USAGE_URL = 'https://opencode.ai/zen/go/v1/usage'
 
 
 class AccountMetadataMissing(RuntimeError):
     """A missing native account profile is retryable without rotating credentials."""
-
-
-def number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _codex_account_metadata(data, profile):
@@ -411,6 +408,7 @@ def account_poll(store, path, state_key, source, auth_hint, read, record, interv
                 c, state_key, dict(next_attempt=checked + interval, failures=0, credential_mtime=signature)
             )
     except Exception as exc:
+        log_exception(f'account poll {source}', exc)
         failures += 1
         checked = time.time()
         code = exc.code if isinstance(exc, urllib.error.HTTPError) else None
@@ -902,9 +900,9 @@ def _agy_post(servers, method, timeout=10, probe=2):
                 },
             )
             try:
-                with urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=context)).open(
-                    request, timeout=timeout
-                ) as response:
+                with urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), NoRedirect, urllib.request.HTTPSHandler(context=context)
+                ).open(request, timeout=timeout) as response:
                     data = json.load(response)
                 _agy_endpoints[pid] = (host, port)
                 return data
@@ -925,6 +923,8 @@ def read_agy_quota(servers, timeout=10, probe=2):
     return _agy_post(servers, 'RetrieveUserQuotaSummary', timeout, probe)
 
 
+# Dedicated named-pool buckets (e.g. 'gemini-argon-wtu-weekly') distinct from the base 4 buckets.
+AGY_POOL_BUCKET = re.compile(r'(gemini|3p)-[a-z0-9-]+-(5h|weekly)(?:-\d+)?')
 AGY_QUOTA_BUCKET = re.compile(r'[a-z0-9][a-z0-9-]{0,63}')
 
 
@@ -970,12 +970,24 @@ def agy_quota_limits(store, c, data, checked):
                 continue
             store.limit(c, 'antigravity', bucket, fraction * 100, reset, checked, 'antigravity-app')
             written.add(bucket)
+    if written:
+        store.save_state(
+            c,
+            'quota_snapshot:antigravity',
+            dict(checked=checked, source='antigravity-app', buckets=sorted(written)),
+        )
     # Numbered splits exist only when per-model reads disagree; the group-level
-    # summary never produces them, so drop leftovers of an earlier read.
+    # summary never produces them, so drop leftovers of an earlier read. When the
+    # summary parsed cleanly without skipped buckets, also drop retired dedicated
+    # pool buckets (e.g. a removed model-specific pool like gemini-argon-wtu-weekly);
+    # limit_history retains past observations for reports.
+    clean_summary = bool(written) and skipped == 0
     for (bucket,) in c.execute(
         "SELECT bucket FROM limits WHERE route='antigravity' AND source='antigravity-app'"
     ).fetchall():
-        if AGY_SPLIT_BUCKET.fullmatch(bucket) and bucket not in written:
+        if bucket not in written and (
+            AGY_SPLIT_BUCKET.fullmatch(bucket) or (clean_summary and AGY_POOL_BUCKET.fullmatch(bucket))
+        ):
             c.execute("DELETE FROM limits WHERE route='antigravity' AND bucket=?", (bucket,))
     return len(written), skipped
 
@@ -1032,6 +1044,7 @@ def poll_antigravity_app(store, settings, servers=None, reader=None, quota_reade
                 checked,
             )
     except Exception as exc:
+        log_exception('antigravity-app poll', exc)
         # Neither the CSRF token nor the response body is recorded.
         with store.connect() as c:
             store.source(
@@ -1163,6 +1176,7 @@ def poll_codex_thread(store, settings):
                 else '스레드 상세 사용량 미제공 · 계정 합계 수집 유지',
             )
     except Exception as exc:
+        log_exception('codex-thread poll', exc)
         with store.connect() as c:
             store.save_state(c, 'codex-thread:checked', time.time())
             store.source(
@@ -1190,7 +1204,8 @@ def claude_contexts(store, settings):
 
     try:
         return accounts(store, settings)
-    except Exception:  # an unreadable home must not stop quota polling
+    except Exception as exc:  # an unreadable home must not stop quota polling
+        log_exception('claude_contexts', exc)
         return [None]
 
 
@@ -1215,6 +1230,7 @@ def poll_limits(store, settings, manual=False):
         try:
             collect_claude_cloud(store, settings, account=account)
         except Exception as exc:  # never stops the other reads
+            log_exception(f'claude-cloud{tag}', exc)
             with store.connect() as c:
                 store.source(c, 'claude-cloud' + tag, 'error', f'클라우드 세션 수집 실패 ({type(exc).__name__})')
     if 'devin' in ended:
@@ -1272,6 +1288,7 @@ def poll_limits(store, settings, manual=False):
                 if route == 'opencode-go':
                     store.save_state(c, 'opencode_go_poll', {})
         except Exception as exc:
+            log_exception(f'poll_limits {route}', exc)
             # Errors contain no response body, endpoint credentials or command environment.
             poll_error = type(exc).__name__
             detail = f'한도 수집 실패 ({type(exc).__name__})'
@@ -1330,6 +1347,7 @@ def poll_limits(store, settings, manual=False):
                                 f'계정 토큰 조회 실패 ({poll_error}) · 이전 수신값·시각 유지',
                             )
                 except Exception as exc:
+                    log_exception('codex-account-usage', exc)
                     with store.connect() as c:
                         store.source(
                             c, 'codex-account-usage', 'error', f'계정 토큰 합계 기록 실패 ({type(exc).__name__})'

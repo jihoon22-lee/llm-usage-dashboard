@@ -12,7 +12,7 @@ const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,tota
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
   mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
   familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,groupSlots,stackRects,rankLevels,priorChange,
-  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems,weekName})`,
+  reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems,weekName,kstToday})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
 
 test('escaping and number formats',()=>{
@@ -26,6 +26,8 @@ test('escaping and number formats',()=>{
   assert.equal(f.percent(12.345),'12.3%');
   assert.equal(f.pctChange(12.6),'+13%');
   assert.equal(f.pctChange(null),'—');
+  assert.equal(f.kstToday(Date.parse('2026-11-24T15:30:00Z')),'2026-11-25');
+  assert.equal(f.kstToday(Date.parse('2026-11-24T14:59:59Z')),'2026-11-24');
 });
 
 test('consumption preserves missing values and tiny positive percentages',()=>{

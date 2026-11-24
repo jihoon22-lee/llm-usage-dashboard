@@ -196,7 +196,7 @@ function priceRow(model){return $('cfg-pricing').querySelector(`tr[data-price-ro
 function priceMessage(model,text){
  priceMessages.set(model,text);const row=priceRow(model);if(row)row.querySelector('.price-message').textContent=text;
 }
-async function savePrice(model,body){
+async function savePrice(model,body,{skipReload=false}={}){
  if(priceOperations.has(model))return false;
  try{body=body||priceBody(model);}catch(error){priceMessage(model,error.message);return false;}
  const operation=Symbol(),epoch=settingsEpoch,row=priceRow(model);
@@ -206,11 +206,19 @@ async function savePrice(model,body){
  priceMessage(model,'저장 중…');
  try{
   await settingsApi('/api/config/pricing',body);
+  const msg=body.delete||body.unhide?'복원했습니다.':body.hide?'숨겼습니다.':'저장했습니다.';
+  if(skipReload){
+   if(epoch!==settingsEpoch||!settingsOnline)return false;
+   priceMessages.set(model,msg);
+   return true;
+  }
   const cfg=await api('/api/config');
   if(epoch!==settingsEpoch||!settingsOnline)return false;
-  priceMessages.set(model,body.delete||body.unhide?'복원했습니다.':body.hide?'숨겼습니다.':'저장했습니다.');
+  priceMessages.set(model,msg);
   if(priceModels(cfg).includes(model))row.outerHTML=priceRowHtml(cfg,model);else row.remove();
-  applyPriceFilter();return true;
+  applyPriceFilter();
+  window.dispatchEvent(new Event('llm-pricing-change'));
+  return true;
  }catch(error){
   if(epoch===settingsEpoch&&settingsOnline)priceMessage(model,error.message);
   return false;
@@ -227,16 +235,28 @@ $('price-save-all').addEventListener('click',async()=>{
  if(priceBatch)return;
  const batch=Symbol(),epoch=settingsEpoch;priceBatch=batch;$('price-save-all').disabled=true;
  const models=[...$('cfg-pricing').querySelectorAll('tr.dirty')].map(tr=>tr.dataset.priceRow);
- const failed=[];let saved=0;
+ const failed=[],savedModels=[];
  try{
   for(const model of models){
    if(epoch!==settingsEpoch||!settingsOnline)break;
    if(!priceRow(model)?.classList.contains('dirty')||priceOperations.has(model))continue;
-   if(await savePrice(model))saved++;else failed.push(model);
+   if(await savePrice(model,undefined,{skipReload:true}))savedModels.push(model);else failed.push(model);
   }
   if(epoch!==settingsEpoch||!settingsOnline)return;
-  cfgMsg('cfg-pricing-msg',failed.length?`저장 실패: ${failed.join(', ')} · 입력을 확인하고 다시 저장하세요. (${saved}개 저장됨)`:`${saved}개 저장했습니다.`);
-  refresh();
+  if(savedModels.length){
+   const cfg=await api('/api/config');
+   if(epoch!==settingsEpoch||!settingsOnline)return;
+   const present=new Set(priceModels(cfg));
+   for(const model of savedModels){
+    const row=priceRow(model);
+    if(!row)continue;
+    if(present.has(model))row.outerHTML=priceRowHtml(cfg,model);else row.remove();
+   }
+   applyPriceFilter();
+   window.dispatchEvent(new Event('llm-pricing-change'));
+  }
+  cfgMsg('cfg-pricing-msg',failed.length?`저장 실패: ${failed.join(', ')} · 입력을 확인하고 다시 저장하세요. (${savedModels.length}개 저장됨)`:`${savedModels.length}개 저장했습니다.`);
+  if(savedModels.length)refresh();
  }finally{if(priceBatch===batch){priceBatch=null;$('price-save-all').disabled=false;syncPriceDirty();}}
 });
 $('cfg-pricing').addEventListener('click',async e=>{

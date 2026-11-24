@@ -15,6 +15,7 @@ const left=s=>s==null?'초기화 정보 미제공':s<=0?'초기화 경과 · 재
 const soon=s=>s==null?'미제공':s<=0?'재확인 대기':s<3600?`${Math.max(1,Math.floor(s/60))}분`:s<86400?`${Math.floor(s/3600)}시간 ${Math.floor(s%3600/60)}분`:`${Math.floor(s/86400)}일 ${Math.floor(s%86400/3600)}시간`;
 // KST expiry dates; the year is shown only when it differs from the current one.
 const kstYear=t=>new Date(t*1000).toLocaleString('en',{timeZone:'Asia/Seoul',year:'numeric'});
+const kstToday=(now=Date.now())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
 const stamp=(t,now=Date.now()/1000)=>new Date(t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',...(kstYear(t)===kstYear(now)?{}:{year:'numeric'}),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const names={'codex':'OpenAI / Codex','claude-code':'Anthropic / Claude Code','antigravity':'Google / Antigravity','opencode-go':'OpenCode Go','devin':'Cognition / Devin'};
 const routeNames={...names,opencode:'OpenCode'};

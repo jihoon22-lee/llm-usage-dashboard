@@ -84,7 +84,7 @@ for(const id of ['activity-period','activity-kind','activity-state','activity-st
 $('activity-search-form').addEventListener('submit',event=>{event.preventDefault();activityPage=1;void loadCodexView(true);});
 $('activity-prev').addEventListener('click',()=>{if(activityPage>1){activityPage--;void loadCodexView(true);}});
 $('activity-next').addEventListener('click',()=>{activityPage++;void loadCodexView(true);});
-const activityToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+const activityToday=kstToday();
 $('activity-start').value=activityToday;$('activity-end').value=activityToday;
 
 function renderConsumption(data){

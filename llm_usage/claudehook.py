@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import time
 
+HOOK_VERSION = 1
 EVENTS = ('SessionStart', 'UserPromptSubmit', 'Stop')
 SESSION = re.compile(r'^[A-Za-z0-9._-]{1,100}$')
 

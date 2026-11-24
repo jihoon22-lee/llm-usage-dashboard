@@ -101,7 +101,7 @@ function renderResources(data){
  const failed=current.some(r=>!['fresh','manual'].includes(r.status));
  $('resource-summary').textContent=resourcesNeedReload(data)?'저장은 완료됐습니다. 목록 갱신이 필요합니다.':data._offline?'오프라인 사본 · 마지막 확인값입니다.':failed?'재확인이 필요한 항목은 이전 확인값입니다.':current.length?'확인된 만료일이 가까운 순 · 사용·구매는 제공사 화면에서 진행하세요.':'사용·구매는 제공사 화면에서 진행하세요.';
  $('resource-save').disabled=resourceSaving||data._offline;
- if(focused)$('resource-panel').querySelector(`[data-resource-${focused.kind}="${focused.id}"]`)?.focus({preventScroll:true});
+ if(focused)$('resource-panel').querySelector(`[data-resource-${focused.kind}="${CSS.escape(focused.id)}"]`)?.focus({preventScroll:true});
 }
 const resourceTime=t=>t==null?'':new Date(t*1000+9*3600e3).toISOString().slice(0,16);
 const resourceTimestamp=value=>value?Date.parse(value+(value.length===16?':00':'')+'+09:00')/1000:null;

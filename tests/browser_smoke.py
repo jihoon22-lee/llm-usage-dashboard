@@ -14,7 +14,7 @@ parser.add_argument('--origin', help='Explicit HTTPS origin for optional read-on
 args = parser.parse_args()
 if args.origin:
     try:
-        parsed = notification_url(args.origin)
+        parsed = notification_url(args.origin, allow_private=True)
         if parsed.path not in ('', '/') or '?' in args.origin or '#' in args.origin:
             raise ValueError
     except ValueError:
