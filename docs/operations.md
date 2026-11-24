@@ -66,6 +66,15 @@ rollback은 릴리스 환경에서 이전 릴리스를 그 환경과 함께 다�
 브라우저 smoke는 배포 이후 별도 검사이므로 실패가 자동 rollback으로 연결되지 않습니다. 배포 확인에 실패해 이전 릴리스로 복귀할 때는 배포기가 복귀 재시작도 같은 health·heartbeat로 확인하고, 확인되지 않으면 그 사실을 알리고 끝납니다. 그 경우 서비스 상태를 직접 확인해야 합니다.
 공개 CI/릴리스는 운영 자동 배포가 아닙니다. [기여 안내](../CONTRIBUTING.md)의 합성 검사와 실제 사설 인증을 구분합니다.
 
+## 0.15.0 업데이트
+
+Claude·Aside 캐시 분해·중복 대조 보강, 최신 모델 내장 단가(`GPT-6.2 Astra`/`Sol`, `GLM-5.3-Flash`, `Gemini 4 Neon`), Antigravity 폐지 풀 버킷 정리, 알림 SSRF·동시성·SQLite 조회 및 화면 수정 사항을 담습니다. DB 구조와 런타임 의존성은 0.14.2와 같고 위 **업데이트** 명령을 그대로 사용합니다.
+
+- **첫 수집 주기:** Claude·Aside 캐시 분해 재확인을 위해 Claude·Aside 원본을 한 번 다시 읽습니다(요청 ID가 같아 토큰은 중복되지 않습니다).
+- **보조 스크립트(`statusline.py`·`claudehook.py`):** 기존에 복사해 둔 스크립트 버전이 다르면 수집 상태에 `hook-scripts` 안내가 보입니다. `.venv/bin/llm-usage install-hooks`(릴리스 환경에서는 `~/.local/lib/llm-usage/current/.venv/bin/python -m llm_usage.cli install-hooks`)를 실행하면 갱신됩니다.
+- **외부 알림:** 루프백·사설·링크로컬·CGNAT 주소로의 알림 전송이 차단됩니다. 사설 주소가 설정돼 있었다면 공개 HTTPS 주소로 변경하세요.
+- **되돌리기:** `packaging/deploy.py --rollback`으로 0.14.2 코드에 돌아갈 수 있습니다.
+
 ## 0.14.2 업데이트
 
 Aside 사용량 수집과 상단 탭 개선을 담습니다. DB 구조와 런타임 의존성은 0.14.1과 같고 위 **업데이트** 명령을 그대로 사용합니다.
