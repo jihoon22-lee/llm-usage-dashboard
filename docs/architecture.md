@@ -36,14 +36,14 @@ events와 usage_hourly는 같은 트랜잭션의 트리거로 유지합니다. �
 | Codex | sessions/archived_sessions JSONL, account/rateLimits/read | 토큰·계정 한도·크레딧·초기화권 실수신 확인; 저장된 누적 관측 대조는 원본 전체 대조와 다름 |
 | Claude | projects JSONL, 기존 OAuth usage·선불 잔액·초기화권·상태줄 | 읽기 실수신 확인; OAuth는 공개 외부 연동 API 보장 없음, headless 상태줄 제약 |
 | OpenCode Go | opencode.db, Go usage 경로 | 토큰 수집; 당시 계정 구독 오류로 한도 실수신 미확인 |
-| Antigravity | CLI/앱 conversations DB, 상태줄·WSL RPC | CLI 1.1.28/language server 2.19.1 원본 확인; 앱 실행과 내부 스키마 의존 |
+| Antigravity | CLI/앱 conversations DB, 상태줄·구형 WSL RPC | CLI 1.1.28/language server 2.19.1 원본 확인; 2.34.0+ standalone/hub 서버는 `--csrf_token` 미노출로 앱 RPC 미지원(상태줄·대화 DB 사용), 내부 스키마 의존 |
 | Devin CLI | sessions.db, 기존 CLI 계정 상태 경로 | 로컬 요청·일/주간 한도 실수신; Cloud 미지원, 당시 Windows DB 빈 스키마 |
 | Aside | `.aside/u/<프로필>/sessions/*/messages.jsonl`, 자체 한도 없음 | Aside 1.26.1115의 세션 기록으로 확인; 비공개 형식, 구독 외 경로(API 키 등)의 요청은 읽지 않음 |
 
 Aside는 에이전트가 ChatGPT(Codex)·Claude 구독으로 모델을 직접 부르는 브라우저입니다. Aside가 직접 기록한 요청은 선택한 홈의 Aside 세션 파일에서 모델·토큰·추론 수준·시각만 읽어, 쓰인 구독의 경로(`codex`, `claude-code`)에 저장합니다. 응답 ID로 한 번만 세고(압축·분기 뒤 같은 응답이 파일에 다시 나옵니다), Aside에만 있는 요청은 프로젝트 `Aside`로 묶습니다. 같은 Claude 응답 ID가 Claude Code 원본에도 있으면 그 원본의 세션·프로젝트를 사용하고 Aside 출처를 함께 보존합니다. Codex 쪽은 계정 일별 합계에 이미 들어 있던 사용이라 `로컬 미기록`이 그만큼 줄어듭니다. Claude 쪽은 어느 계정의 로그인인지 기록에 없어, 계정이 여러 개면 `계정 미확인`이 됩니다. `config.json`의 `aside_claude_account`에 Aside가 로그인한 Claude 계정의 경로(`claude-code` 또는 `claude-code:<id>`, 설정 화면의 계정 목록 순서)를 적으면 Aside 세션의 Claude 요청을 그 계정으로 귀속합니다. Claude Code 세션에 귀속된 요청에는 그 세션의 계정 근거를 사용합니다. 없는 계정을 적으면 수집 상태에 `Aside 계정` 오류로 알립니다. Aside 안에서 chatgpt.com·claude.ai 웹 채팅을 쓴 것은 토큰 기록이 없어 수집하지 못합니다.
 
 Antigravity의 loopback RPC는 자체 서명 인증서를 사용하는 로컬 서버에만 연결하며 최소 TLS 1.2를 요구합니다.
-Antigravity는 RetrieveUserQuotaSummary를 우선하고 GetUserStatus로 대체할 수 있습니다. 응답에 없는 창은 만들지 않습니다. 일부 생략된 proto3 float 0은 확인된 스키마 의미대로 처리합니다.
+Antigravity는 RetrieveUserQuotaSummary를 우선하고 GetUserStatus로 대체할 수 있습니다. 응답에 없는 창은 만들지 않습니다. 일부 생략된 proto3 float 0은 확인된 스키마 의미대로 처리합니다. Antigravity 2.34.0+의 `--standalone --subclient_type hub` language server는 프로세스 인수에 `--csrf_token`을 넘기지 않아 `antigravity-app` 로컬 RPC로 조회할 수 없으며, 이 환경에서는 상태줄(`status_limits`) 경로로 한도를 수신하고 대화 SQLite DB 수집은 그대로 유지됩니다.
 Claude는 정상 조회 최소 5분, 429는 10/20/40/60분과 더 긴 Retry-After, 네트워크 실패는 1/2/4/8/10분 대기를 적용합니다. 인증 오류는 원래 인증 파일 변경을 기다립니다.
 Claude 선불 잔액과 초기화권 조회는 정상 15분 간격이며 각각 별도 대기 상태를 가집니다. 기본 계정 메타데이터 누락은 인증값 교체 없이도 재시도합니다. 0.2.0의 추가 자원 경로는 Codex CLI 0.162.0과 Claude Code 2.1.288의 응답으로 확인했으며 전역 CLI 버전을 강제로 고정하지 않습니다.
 일반 사용량 응답의 `iguana_necktie`는 클라우드 세션 전용 프로모션으로 별도 저장합니다. 원본 달러 금액과 만료를 보존하고 범용 선불 잔액·지출 한도에 더하지 않습니다. 초기화권의 `ineligible_reason=surface`는 빈 grants가 있어도 미확인으로 처리합니다. 설치된 CLI 버전의 User-Agent와 클라이언트 플랫폼 헤더를 사용하며 내부 응답 형식에 의존합니다.
