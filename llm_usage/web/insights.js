@@ -282,7 +282,7 @@ $('sessions').addEventListener('click',async event=>{
  try{
   if(!sessionDetails.has(id))sessionDetails.set(id,sessionDetailHtml(await api('/api/session?id='+encodeURIComponent(id))));
   if(openSession===id&&row.isConnected)row.insertAdjacentHTML('afterend',sessionDetails.get(id));
- }catch(e){row.insertAdjacentHTML('afterend',`<tr class="sess-detail-row"><td colspan="8"><p class="hint">상세를 불러오지 못했습니다 (${esc(e.message)})</p></td></tr>`);}
+ }catch(e){if(openSession===id&&row.isConnected)row.insertAdjacentHTML('afterend',`<tr class="sess-detail-row"><td colspan="8"><p class="hint">상세를 불러오지 못했습니다 (${esc(e.message)})</p></td></tr>`);}
 });
 $('sess-prev').addEventListener('click',()=>{sessPage--;if(lastUsage)renderSessions(lastUsage);});
 $('sess-next').addEventListener('click',()=>{sessPage++;if(lastUsage)renderSessions(lastUsage);});
@@ -318,7 +318,7 @@ $('projects').addEventListener('click',async event=>{
  try{
   if(!projectDetails.has(name))projectDetails.set(name,projectDetailHtml(await api('/api/project?name='+encodeURIComponent(name))));
   if(openProject===name&&row.isConnected)row.insertAdjacentHTML('afterend',projectDetails.get(name));
- }catch(e){row.insertAdjacentHTML('afterend',`<tr class="sess-detail-row"><td colspan="7"><p class="hint">상세를 불러오지 못했습니다 (${esc(e.message)})</p></td></tr>`);}
+ }catch(e){if(openProject===name&&row.isConnected)row.insertAdjacentHTML('afterend',`<tr class="sess-detail-row"><td colspan="7"><p class="hint">상세를 불러오지 못했습니다 (${esc(e.message)})</p></td></tr>`);}
 });
 function renderProjects(data){
  if(!('projects' in data)){if(!$('projects').textContent.trim())$('projects').innerHTML='<tr><td colspan="7" class="empty">불러오는 중…</td></tr>';return;}
@@ -373,21 +373,20 @@ function renderCalendar(data){
  $('calendar-caption').textContent=`최근 ${calWeeks}주 · 일별 `+metricName();
  if(!('calendar' in data)){if(!$('calendar').textContent.trim())$('calendar').innerHTML='<div class="empty">불러오는 중…</div>';return;}
  const days=Object.fromEntries((data.calendar||[]).map(r=>[r.day,r]));
- const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Seoul'}));
- const dow=(today.getDay()+6)%7,first=new Date(today);first.setDate(today.getDate()-dow-(calWeeks-1)*7);
+ const todayKey=kstToday(),today=new Date(todayKey+'T00:00:00Z');
+ const dow=(today.getUTCDay()+6)%7,first=new Date(today);first.setUTCDate(today.getUTCDate()-dow-(calWeeks-1)*7);
  const cells=[],months=[];let max=0;
  for(let w=0;w<calWeeks;w++)for(let r=0;r<7;r++){
-  const d=new Date(first);d.setDate(first.getDate()+w*7+r);
+  const d=new Date(first);d.setUTCDate(first.getUTCDate()+w*7+r);
   if(d>today)continue;
-  const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const key=d.toISOString().slice(0,10);
   const e=days[key]||{tokens:0,requests:0,cost:0};const v=cellMetric(e);if(v!=null)max=Math.max(max,v);
-  if(d.getDate()===1||(w===0&&r===0))months[w]=d.getMonth()+1;
+  if(d.getUTCDate()===1||(w===0&&r===0))months[w]=d.getUTCMonth()+1;
   cells[w*7+r]={key,v,req:e.requests};
  }
  for(let w=0;w<calWeeks;w++)for(let r=0;r<7;r++)if(!cells[w*7+r])cells[w*7+r]=null;
- const firstKey=`${first.getFullYear()}-${String(first.getMonth()+1).padStart(2,'0')}-${String(first.getDate()).padStart(2,'0')}`;
+ const firstKey=first.toISOString().slice(0,10);
  if(!Object.keys(days).length){$('calendar').innerHTML='<div class="empty">수집된 기록이 없습니다.</div>';return;}
- const todayKey=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
  const level=rankLevels(cells.filter(c=>c&&c.v!=null).map(c=>c.v));
  $('calendar').innerHTML='<div class="cal-scroll"><div class="cal-months">'+months.map((m,w)=>m?`<span class="cal-m${w+1}">${m}월</span>`:'').join('')+'</div><div class="cal-grid" role="group" aria-label="최근 '+calWeeks+'주 일별 활동 달력 · 하루 최대 '+compact(max)+' '+metricName()+'">'+cells.map(c=>{if(!c)return '<span class="cal-cell cal-pad" aria-hidden="true"></span>';
   const tipText=c.v==null?c.key+' · 비용 미산정':`${c.key} · ${metricFmt(c.v)}${metricUnit()} · ${fmt(c.req)}회`;

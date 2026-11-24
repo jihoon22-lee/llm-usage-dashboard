@@ -5,6 +5,11 @@
 - Claude 응답의 5분·1시간 캐시 생성량은 호출별 분해와 응답 전체 합계가 일치할 때 사용합니다. 이전 파서가 승인한 분해를 원본이 반박하면, 다른 사본에서 확인한 분해를 쓰거나 해당 생성량을 미확인으로 돌립니다. 업그레이드 후 Claude·Aside 원본을 다시 읽습니다.
 - Claude와 Aside에 같은 응답 ID가 있으면 Claude 원본의 세션·프로젝트에 한 번만 집계합니다. 부모 요청과 advisor도 같은 세션에 표시됩니다.
 - 일일 원본 대조에 Aside 세션 파일을 포함합니다. 같은 응답의 여러 기록에서 최종 출력의 추론 관측 여부를 대조하고, 캐시 분해 상충이나 해석할 수 없는 기록은 부분 확인으로 표시합니다. 업그레이드 후 첫 정기 수집에서 새 검사 범위를 적용합니다.
+- 내장 단가표에 Gemini 4 Neon($3/$0.15/$15)을 더하고, 기존 전체 내장 단가를 2026-11-24 공개 단가표 기준으로 재확인했습니다.
+- Antigravity `RetrieveUserQuotaSummary`가 정상 응답했을 때 `quota_snapshot:antigravity`를 저장하고, 제공사가 종료한 전용 풀 버킷(`gemini-argon-wtu-weekly` 등)을 현재 한도 목록에서 정리합니다(과거 이력은 `limit_history`에 보존). `omitted_latest` 버킷은 다음 초기화 일정에서도 제외합니다.
+- 외부 알림 URL 검증과 전송 시 사설·루프백·링크로컬·CGNAT 주소(DNS 해석 결과 포함)와 잘못된 Telegram 토큰/채팅 ID를 차단합니다. Antigravity 로컬 앱 RPC는 시스템 프록시를 우회해 로컬 CSRF 토큰 유출을 막습니다.
+- 백엔드 안정성·성능 개선: `_capacity_memo` 동시성 보호, `pricing.json` 프로세스 간 파일 락(`pricing.lock`), 외부 `local.json` 변경 자동 감지, `limits`/`project_detail`/`session_detail`/`/api/config` 단일 스냅샷 조회 및 `usage_hourly` 활용, `collect.py`·`cloud.py`·`claude_attribution.py` 인덱스 범위 스캔 전환(`_` 와일드카드·삭제 파일 오류 집계 수정 포함), `devin.open_db`의 `open_readonly` 전환, `backup.py` KST 기준 파일명·스트리밍 압축, 다중 Claude 계정 구독 구간별 단가(`price_segments`) 지원, 일일 삭제 파일 체크포인트 정리 및 보조 스크립트(`statusline.py`·`claudehook.py`) 버전 불일치 진단, `webapp_config.py`·`store_ops.py` 모듈 분리.
+- 프론트엔드 수정: 활동 달력(`renderCalendar`)의 브라우저 시간대 독립 KST/UTC 계산, 단가 저장 시 What-if 단가 캐시 무효화, 자정 이후 날짜 갱신(`kstToday`), 일괄 단가 저장 시 `/api/config` 단일 재조회, 자원 포커스 복원 `CSS.escape` 적용, 세션/프로젝트 상세 실패 시 stale DOM 삽입 방지.
 - 내장 단가표에 GPT-6.2 Astra($8/$0.40/$40, 캐시 쓰기 $10), GPT-6.2 Sol($2/$0.10/$10, 캐시 쓰기 $2.50), GLM-5.3-Flash($0.15/$0.03/$0.50)를 더했습니다. OpenCode의 `glm-5.3-flash-free`는 다른 무료 변형처럼 유료 모델 단가로 환산합니다. OpenCode의 무료 비공개 모델 `big-pickle`은 공개 유료 단가가 없어 미등록 모델 안내에서 뺍니다. Devin `swe-2-flash`는 공개된 토큰 단가가 없어 그대로 미산정입니다. Claude·OpenAI·Gemini·DeepSeek의 기존 단가는 2026-11-18 공개 단가와 같습니다.
 
 ## 0.14.2 — 2026-11-15

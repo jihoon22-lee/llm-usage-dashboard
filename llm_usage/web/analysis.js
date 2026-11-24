@@ -155,7 +155,7 @@ window.addEventListener('popstate',()=>{
    const value=v??FILTER_DEFAULTS[id];
    if(value&&id==='scope'&&![...el.options].some(o=>o.value===value))el.add(new Option(value,value));
    if([...el.options].some(o=>o.value===value))el.value=value;
-  }else el.value=/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:(id==='start'||id==='end'?today:FILTER_DEFAULTS[id]||'');
+  }else el.value=/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:(id==='start'||id==='end'?kstToday():FILTER_DEFAULTS[id]||'');
  }
  const custom=$('period').value==='custom';$('start-wrap').hidden=!custom;$('end-wrap').hidden=!custom;
  setUsageView(params.get('usage_view')||'tokens',false,false);
@@ -474,8 +474,12 @@ function paletteFor(labels,fixed={},store=labelColorIndex){
  return color;
 }
 $('chart-by-model').addEventListener('click',()=>applyDrill({group:'model'}));
-// What-if: the period's tokens at another model's current list rate (rates load once).
+// What-if: the period's tokens at another model's current list rate (reloads when pricing changes).
 let whatifRates=null;
+window.addEventListener('llm-pricing-change',()=>{
+ whatifRates=null;
+ if($('whatif-model').value)loadWhatif().then(renderWhatif).catch(()=>{});
+});
 async function loadWhatif(){
  if(whatifRates)return whatifRates;
  const cfg=await api('/api/config');

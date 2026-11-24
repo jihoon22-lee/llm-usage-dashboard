@@ -165,7 +165,7 @@ notifyBox.addEventListener('change',async()=>{
  }catch(error){notificationStatus(true);}
 });
 document.addEventListener('visibilitychange',()=>{schedule();if(!document.hidden&&$('auto').checked)refresh();});
-const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());$('start').value=today;$('end').value=today;
+const initialToday=kstToday();$('start').value=initialToday;$('end').value=initialToday;
 {
  const params=new URLSearchParams(location.search);
  const stored=(()=>{try{return JSON.parse(storage.get('llmDefaults'))||{}}catch{return{}}})();
@@ -190,6 +190,7 @@ const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric
 }
 $('filter-reset').addEventListener('click',()=>{
  $('period').value='7d';$('granularity').value='day';$('group').value='route';$('cumulative').value='0';$('metric').value='tokens';$('compare').value='';$('scope').value='';
+ const today=kstToday();
  $('start').value=today;$('end').value=today;$('start-wrap').hidden=true;$('end-wrap').hidden=true;
  saveDefaults();syncUrl();filterSummary();refresh();
 });
