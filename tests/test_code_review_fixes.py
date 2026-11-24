@@ -286,6 +286,51 @@ class StoreAndCollectorFixTests(unittest.TestCase):
         collect.check_hook_versions(self.store, {'status_dir': str(status_dir)})
         with self.store.connect() as c:
             self.assertIsNone(c.execute("SELECT 1 FROM sources WHERE name='hook-scripts'").fetchone())
+        win_inbox = self.root / 'win-status'
+        win_inbox.mkdir()
+        (win_inbox / 'statusline.py').write_text('# outdated windows copy\n')
+        collect.check_hook_versions(
+            self.store, {'status_dir': str(status_dir), 'status_inboxes': [str(status_dir), str(win_inbox)]}
+        )
+        with self.store.connect() as c:
+            row = dict(c.execute("SELECT status,detail FROM sources WHERE name='hook-scripts'").fetchone())
+        self.assertEqual(row['status'], 'partial')
+        self.assertIn('statusline.py', row['detail'])
+
+    def test_collect_status_empty_event_preserves_prior_ok_source(self):
+        inbox = self.root / 'inbox'
+        inbox.mkdir()
+        now = 1_700_000_000.0
+        # Initial empty event with no prior ok still records unavailable.
+        (inbox / 'antigravity.json').write_text(json.dumps({'checked': now - 300, 'data': {'quota': {}}}))
+        with patch('llm_usage.store.time.time', return_value=now):
+            collect.collect_status(self.store, {'status_inboxes': [str(inbox)]})
+        with self.store.connect() as c:
+            src = dict(c.execute("SELECT status,checked FROM sources WHERE name='antigravity'").fetchone())
+        self.assertEqual(src['status'], 'unavailable')
+        # Valid quota event transitions source to ok.
+        (inbox / 'antigravity.json').write_text(
+            json.dumps(
+                {
+                    'checked': now - 100,
+                    'data': {'quota': {'gemini-5h': {'remaining_fraction': 0.9, 'reset_in_seconds': 3600}}},
+                }
+            )
+        )
+        with patch('llm_usage.store.time.time', return_value=now):
+            collect.collect_status(self.store, {'status_inboxes': [str(inbox)]})
+        # Subsequent empty quota event must NOT clobber ok or advance source.checked.
+        (inbox / 'antigravity.json').write_text(json.dumps({'checked': now - 10, 'data': {'quota': {}}}))
+        with patch('llm_usage.store.time.time', return_value=now):
+            collect.collect_status(self.store, {'status_inboxes': [str(inbox)]})
+        with self.store.connect() as c:
+            src = dict(c.execute("SELECT status,checked FROM sources WHERE name='antigravity'").fetchone())
+            ckpt = self.store.state(c, 'status:' + str(inbox / 'antigravity.json'))
+        self.assertEqual(src['status'], 'ok')
+        self.assertEqual(src['checked'], now - 100)
+        self.assertEqual(ckpt, now - 10)
+        api_rows = [r for r in self.store.limits(now)['limits'] if r['route'] == 'antigravity']
+        self.assertEqual(api_rows[0]['status'], 'fresh')
 
     def test_backup_uses_kst_date_and_handles_hash_in_path(self):
         folder = self.root / 'db#backup'
