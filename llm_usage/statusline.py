@@ -18,6 +18,8 @@ import sys
 import tempfile
 import time
 
+HOOK_VERSION = 1
+
 
 def sanitize(route, data):
     key = 'rate_limits' if route == 'claude-code' else 'quota'

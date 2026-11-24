@@ -13,12 +13,10 @@ renewal) can differ; the span's price is a time-weighted approximation.
 
 import math
 
+from .util import is_finite_number as _number
+
 MONTH_DAYS = 30.44
 MODES = ('now', 'at', 'correct', 'all')
-
-
-def _number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def clean_history(raw):

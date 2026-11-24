@@ -35,6 +35,7 @@ from .claude_accounts import (
     bind_primary,
     transcript_sources,
 )
+from .util import log_exception, prefix_bounds
 
 # Evidence may be stamped a moment after the request it explains (clock jitter).
 TOLERANCE = 2
@@ -286,8 +287,8 @@ def session_roots(c, roots, *, unambiguous=False):
     """
     found = {}
     for root in roots:
-        prefix = 'file:' + root + '/'
-        for (key,) in c.execute('SELECT key FROM state WHERE substr(key,1,?)=?', (len(prefix), prefix)):
+        lo, hi = prefix_bounds('file:' + root + '/')
+        for (key,) in c.execute('SELECT key FROM state WHERE key>=? AND key<?', (lo, hi)):
             path = Path(key[5:])
             session = path.parent.parent.name if path.parent.name == 'subagents' else path.stem
             if SESSION.match(session):
@@ -482,6 +483,7 @@ def refresh(store, settings, *, evidence=True):
             _summarized[store.path] = time.time()
         return changed
     except Exception as exc:  # never stops collection
+        log_exception('claude_attribution refresh', exc)
         with store.connect() as c:
             store.source_changed(
                 c, 'claude-accounts', 'error', f'계정 구분 실패 ({type(exc).__name__}) · 기존 계정 구분은 유지합니다.'

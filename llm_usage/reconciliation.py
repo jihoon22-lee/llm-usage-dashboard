@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timezone
 
 from .store import TOKENS, KST, identity, stamp
+from .util import is_nonnegative_int as number
 
 PARTS = TOKENS[:4]
 # The Codex account residual (account day total minus this PC's records) has no model,
@@ -47,10 +48,6 @@ def initialize(c):
           id TEXT PRIMARY KEY, route TEXT, ts REAL, session TEXT, model TEXT,
           alias TEXT, parts TEXT);
     ''')
-
-
-def number(value):
-    return type(value) is int and 0 <= value <= 2**63 - 1
 
 
 def snapshot(
@@ -431,7 +428,6 @@ def series_label(e, group):
 def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None, origins=True):
     """Overlay a COPY of the cached request-only response; never mutate the cache.
     `origins`: also split the period's records by where they came from (`origin_tokens`)."""
-    data = copy.deepcopy(body)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
     # reach back as far as the local records (whose first record is taken in the scope too).
     received = []
@@ -441,10 +437,11 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
     for r in received:
         if matches(r, scope):
             first_seen[r['source']] = min(first_seen.get(r['source'], math.inf), r['start'])
-    a, b = stamp(data['start']), stamp(data['end_exclusive'])
+    a, b = stamp(body['start']), stamp(body['end_exclusive'])
     conflicts = [e for e in conflicts if matches(e, scope) and e['start'] < b and a < e['end']]
     if not entries and not conflicts:
-        return data
+        return body
+    data = copy.deepcopy(body)
     # Recover only supplemented candidates omitted from the cached top 100. They
     # are already counted in sessions_total and need their real request metadata.
     # Keeping all local sessions in every cached response would make large ranges costly.
@@ -601,6 +598,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         data['sessions'] = sorted(data['sessions'], key=lambda s: (-total(s), s['session']))[:100]
     for e in entries:
         add(data['lifetime'], e)
+    accepted_ids = {id(e) for e in accepted}
     for e in entries:
         begin = datetime.fromtimestamp(e['start'], KST)
         finish = datetime.fromtimestamp(e['end'] - 0.000001, KST)
@@ -611,7 +609,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                 cell = dict(day=day, tokens=0, requests=0, cost=None)
                 data['calendar'].append(cell)
             cell['tokens'] += e['tokens']
-        if e in accepted and begin.date() == finish.date() and begin.hour == finish.hour:
+        if id(e) in accepted_ids and begin.date() == finish.date() and begin.hour == finish.hour:
             dow = (begin.weekday() + 1) % 7
             cell = next((x for x in data.get('heatmap', []) if x['dow'] == dow and x['hour'] == begin.hour), None)
             if cell is None:

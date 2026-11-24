@@ -14,6 +14,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from .claude_accounts import family, is_claude, suffix
+from .util import is_finite_number as number
 
 ROUTES = ('codex', 'claude-code', 'antigravity', 'opencode-go', 'devin')
 KINDS = ('usage_credit', 'api_credit', 'reset')
@@ -29,10 +30,6 @@ SKEW = 120
 
 def key(*parts):
     return hashlib.sha256(json.dumps(parts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-
-
-def number(value):
-    return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def amount(value):
