@@ -672,13 +672,18 @@ def collect_status(store, settings):
                     if checked <= store.state(c, 'status:' + str(path), 0):
                         continue
                     count = status_limits(store, c, route, data['data'], checked)
-                    store.source(
-                        c,
-                        route,
-                        'ok' if count else 'unavailable',
-                        '' if count else '최근 상태줄 이벤트에 한도 필드가 없습니다.',
-                        checked,
-                    )
+                    if count:
+                        store.source(c, route, 'ok', '', checked)
+                    else:
+                        existing = c.execute('SELECT status FROM sources WHERE name=?', (route,)).fetchone()
+                        if not existing or existing[0] != 'ok':
+                            store.source(
+                                c,
+                                route,
+                                'unavailable',
+                                '최근 상태줄 이벤트에 한도 필드가 없습니다.',
+                                checked,
+                            )
                     store.save_state(c, 'status:' + str(path), checked)
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 with store.connect() as c:
@@ -737,8 +742,21 @@ def check_hook_versions(store, settings):
     from .claudehook import HOOK_VERSION as CLAUDE_HOOK_VERSION
     from .statusline import HOOK_VERSION as STATUSLINE_VERSION
 
-    dirs = [Path(settings.get('status_dir', Path(store.path).parent / 'status'))]
-    dirs.extend(Path(p) for p in settings.get('extra_status_dirs') or [])
+    raw_dirs = [
+        settings.get('status_dir', Path(store.path).parent / 'status'),
+        *(settings.get('extra_status_dirs') or []),
+        *(settings.get('status_inboxes') or []),
+    ]
+    dirs = []
+    seen_dirs = set()
+    for p in raw_dirs:
+        if not p:
+            continue
+        folder = Path(p)
+        key = str(folder)
+        if key not in seen_dirs:
+            seen_dirs.add(key)
+            dirs.append(folder)
     mismatched = []
     expected = (('statusline.py', STATUSLINE_VERSION), ('claudehook.py', CLAUDE_HOOK_VERSION))
     for folder in dirs:

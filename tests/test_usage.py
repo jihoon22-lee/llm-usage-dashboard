@@ -1,4 +1,5 @@
 from contextlib import closing
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ from llm_usage.collect import collect_file, collect_opencode, collect_status
 from llm_usage.config import settings
 from llm_usage.limits import codex_limits, status_limits, go_limits
 from llm_usage.pricing import rate_for
-from llm_usage.store import Store, stamp, DETAILS
+from llm_usage.store import KST, Store, stamp, DETAILS
 from llm_usage.statusline import sanitize
 from llm_usage.webapp import create_app
 
@@ -1071,7 +1072,7 @@ class BackupTests(unittest.TestCase):
             with closing(sqlite3.connect(plain)) as c, c:
                 self.assertEqual(c.execute('PRAGMA quick_check').fetchone()[0], 'ok')
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
-            self.assertTrue((root / 'backups' / ('pricing.json-' + time.strftime('%Y%m%d'))).exists())
+            self.assertTrue((root / 'backups' / ('pricing.json-' + datetime.now(KST).strftime('%Y%m%d'))).exists())
 
     def test_failed_compression_leaves_no_partial_gz(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1091,16 +1092,16 @@ class BackupTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             backups = Path(td)
+            now = time.time()
             for age in (1, 10, 40, 80):
-                day = time.strftime('%Y%m%d', time.localtime(time.time() - age * 86400))
+                day = datetime.fromtimestamp(now - age * 86400, KST).strftime('%Y%m%d')
                 (backups / f'usage-{day}.db.gz').write_bytes(b'x')
             _prune(backups)
             kept = [p.name for p in backups.glob('usage-*.db.gz')]
-            self.assertTrue(
-                any(n.endswith(time.strftime('%Y%m%d', time.localtime(time.time() - 86400)) + '.db.gz') for n in kept)
-            )
+            yesterday = datetime.fromtimestamp(now - 86400, KST).strftime('%Y%m%d')
+            self.assertTrue(any(n.endswith(yesterday + '.db.gz') for n in kept))
             # 10일 전만 주간 보존 구간(28일) 안 — 월요일이면 유지.
-            self.assertEqual(len(kept), 1 + (time.localtime(time.time() - 10 * 86400).tm_wday == 0))
+            self.assertEqual(len(kept), 1 + (datetime.fromtimestamp(now - 10 * 86400, KST).weekday() == 0))
 
 
 class WebTests(unittest.TestCase):
