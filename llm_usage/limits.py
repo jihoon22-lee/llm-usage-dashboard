@@ -255,25 +255,32 @@ def poll_slow_sources(store, settings, *, claude_accounts=None, poll_codex_threa
                 log_exception('poll_slow_sources', exc)
 
 
-def poll_limits(store, settings, manual=False, include_slow=True):
+def poll_limits(store, settings, manual=False, include_slow=True, targets=None):
     from concurrent.futures import ThreadPoolExecutor
 
     from .claude_accounts import is_claude, suffix
     from .config import ended_routes
 
+    target_set = set(targets) if targets is not None else None
+
+    def _want(name):
+        return target_set is None or name in target_set
+
     ended = ended_routes(settings)
     # Ended Claude accounts, discoverable now or not: their sources (and status line) end.
-    for route in sorted(r for r in ended if is_claude(r)):
-        mark_ended(store, route, *(name + suffix(route) for name in CLAUDE_SOURCES))
+    if _want('claude-code'):
+        for route in sorted(r for r in ended if is_claude(r)):
+            mark_ended(store, route, *(name + suffix(route) for name in CLAUDE_SOURCES))
     active_claude = []
-    for account in claude_contexts(store, settings):
-        # An account seen only through a home whose login is never read (Windows).
-        if account is not None and not account.get('home'):
-            continue
-        route = (account or {}).get('route', 'claude-code')
-        if route in ended:
-            continue
-        active_claude.append(account)
+    if _want('claude-code'):
+        for account in claude_contexts(store, settings):
+            # An account seen only through a home whose login is never read (Windows).
+            if account is not None and not account.get('home'):
+                continue
+            route = (account or {}).get('route', 'claude-code')
+            if route in ended:
+                continue
+            active_claude.append(account)
 
     tasks = []
     if active_claude:
@@ -283,15 +290,19 @@ def poll_limits(store, settings, manual=False, include_slow=True):
                 _poll_claude_account_fast(store, settings, account)
 
         tasks.append(('claude', _poll_all_claude))
-    if 'devin' in ended:
-        mark_ended(store, 'devin')
-    else:
-        tasks.append(('devin', lambda: poll_devin(store, settings)))
-    if 'antigravity' in ended:
-        mark_ended(store, 'antigravity-app')
-    else:
-        tasks.append(('antigravity', lambda: poll_antigravity_app(store, settings)))
+    if _want('devin'):
+        if 'devin' in ended:
+            mark_ended(store, 'devin')
+        else:
+            tasks.append(('devin', lambda: poll_devin(store, settings)))
+    if _want('antigravity'):
+        if 'antigravity' in ended:
+            mark_ended(store, 'antigravity-app')
+        else:
+            tasks.append(('antigravity', lambda: poll_antigravity_app(store, settings)))
     for route in ('codex', 'opencode-go'):
+        if not _want(route):
+            continue
         if route in ended:
             mark_ended(store, route, *(('codex-account-usage', 'codex-thread-usage') if route == 'codex' else ()))
         else:
@@ -310,4 +321,5 @@ def poll_limits(store, settings, manual=False, include_slow=True):
                     log_exception(f'poll_limits {name}', exc)
     if include_slow:
         poll_slow_sources(store, settings, claude_accounts=active_claude, poll_codex_threads=codex_thread_ready)
+    return dict(claude_accounts=active_claude, codex_thread_ready=codex_thread_ready)
     return dict(claude_accounts=active_claude, codex_thread_ready=codex_thread_ready)

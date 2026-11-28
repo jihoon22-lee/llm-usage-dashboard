@@ -67,13 +67,15 @@ def _period(usage, now):
     )
 
 
-def _projects(store, start, end, pricing=None):
+def _projects(store, start, end, pricing=None, project_aliases=None):
     """Tokens and estimated cost per project in [start, end). Tokens are counted as the usage
     tab counts a `project:` scope: the records plus the server totals wholly inside the range.
     The cost covers the records only (a server total has no token types to price) and is None
     for a project with no priced record. The account residual is no project."""
+    from .aliases import resolve_project, safe_aliases
     from .pricing import estimate, rate_for
 
+    aliases = safe_aliases(project_aliases)
     totals, costs = {}, {}
     with store.connect() as c:
         c.execute('BEGIN')
@@ -85,14 +87,15 @@ def _projects(store, start, end, pricing=None):
             (start, end),
         ):
             row = dict(r)
-            totals[row['name']] = totals.get(row['name'], 0) + token_total(row)
+            name = resolve_project(row['name'], aliases)
+            totals[name] = totals.get(name, 0) + token_total(row)
             rate = rate_for(row['model'], pricing, row['day']) if pricing else None
             if rate:
-                costs[row['name']] = costs.get(row['name'], 0.0) + estimate(row, rate)
+                costs[name] = costs.get(name, 0.0) + estimate(row, rate)
         for e in supplements(c)[0]:
             if residual(e) or not (start <= e['start'] and e['end'] <= end):
                 continue
-            name = e['project'] or '미분류'
+            name = resolve_project(e['project'], aliases)
             totals[name] = totals.get(name, 0) + e['tokens']
     return totals, costs
 
@@ -314,14 +317,23 @@ def _subscription_facts(prices, usage, month):
     return facts
 
 
-def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, names=None):
+def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, names=None, project_aliases=None):
     """The 개요 response. `subscriptions`: the monthly prices of the subscriptions not ended."""
     from .reports import recent as reports
 
     now = now or time.time()
     midnight = datetime.fromtimestamp(now, KST).replace(hour=0, minute=0, second=0, microsecond=0)
     monday = midnight - timedelta(days=midnight.weekday())
-    span = dict(group='route', pricing=pricing, sections='core', now=now, ended=ended, names=names, origins=False)
+    span = dict(
+        group='route',
+        pricing=pricing,
+        sections='core',
+        now=now,
+        ended=ended,
+        names=names,
+        origins=False,
+        project_aliases=project_aliases,
+    )
     # One reading of the server totals serves every period below.
     with held():
         today = store.usage(period='today', granularity='hour', **span)
@@ -329,7 +341,9 @@ def build(store, now=None, *, pricing=None, subscriptions=None, ended=None, name
             period='custom', start=_day(monday), end=_day(monday + timedelta(days=6)), granularity='day', **span
         )
         last30 = store.usage(period='30d', granularity='day', **span)
-        projects, project_costs = _projects(store, stamp(last30['start']), stamp(last30['end_exclusive']), pricing)
+        projects, project_costs = _projects(
+            store, stamp(last30['start']), stamp(last30['end_exclusive']), pricing, project_aliases=project_aliases
+        )
     recent, per_day = _recent(last30, now)
     models, model_routes, model_costs = _models(last30)
     cost_total = (last30.get('cost') or {}).get('period')

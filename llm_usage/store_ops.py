@@ -4,16 +4,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-def project_month(store, c, now, pricing=None):
+def project_month(store, c, now, pricing=None, project_aliases=None):
     """Month-to-date (KST calendar month) tokens and estimated cost per project.
 
     cost is None when no token of the project has a rate; priced_share tells how
     much of the tokens the cost covers."""
+    from .aliases import resolve_project, safe_aliases
     from .insights import token_total
     from .pricing import estimate, rate_for
     from .reconciliation import supplements
     from .store import KST, METRICS
 
+    aliases = safe_aliases(project_aliases)
     now = now if isinstance(now, datetime) else datetime.fromtimestamp(now, KST)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
@@ -28,7 +30,8 @@ def project_month(store, c, now, pricing=None):
     ):
         row = dict(r)
         tokens = token_total(row)
-        e = out.setdefault(row['project'], dict(tokens=0, cost=0.0, priced_tokens=0))
+        label = resolve_project(row['project'], aliases)
+        e = out.setdefault(label, dict(tokens=0, cost=0.0, priced_tokens=0))
         e['tokens'] += tokens
         rate = rate_for(row['model'], pricing, row['day']) if pricing else None
         if rate:
@@ -42,7 +45,8 @@ def project_month(store, c, now, pricing=None):
             if r['source'] == 'codex-account':
                 residual += r['tokens']
                 continue
-            e = out.setdefault(r['project'] or '미분류', dict(tokens=0, cost=0.0, priced_tokens=0))
+            label = resolve_project(r['project'], aliases)
+            e = out.setdefault(label, dict(tokens=0, cost=0.0, priced_tokens=0))
             e['tokens'] += r['tokens']
     for e in out.values():
         e['cost'] = round(e['cost'], 4) if e['priced_tokens'] else None
@@ -50,21 +54,25 @@ def project_month(store, c, now, pricing=None):
     return dict(month=start.strftime('%Y-%m'), projects=out, residual_tokens=residual)
 
 
-def project_detail(store, project, now, pricing=None, days=30, budget=None):
+def project_detail(store, project, now, pricing=None, days=30, budget=None, project_aliases=None):
     """One project over the last `days` KST days: models, daily use, busiest sessions,
     and this month so far with a straight-line month-end projection (and the budget
     share when a budget is given). '미분류' is the bucket of records with no project."""
+    from .aliases import raw_names_for, resolve_project, safe_aliases
     from .insights import token_total
     from .pricing import estimate, rate_for
     from .reconciliation import supplements
     from .store import KST, METRICS, PROJECTION_FROM_DAY
 
+    aliases = safe_aliases(project_aliases)
+    raw_names = raw_names_for(project, aliases)
+    placeholders = ','.join('?' for _ in raw_names)
     now = now if isinstance(now, datetime) else datetime.fromtimestamp(now, KST)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     start = midnight - timedelta(days=days - 1)
     month_start = midnight.replace(day=1)
     sums = ','.join(f'COALESCE(SUM({k}),0) AS {k}' for k in METRICS)
-    where = " WHERE COALESCE(project,'미분류')=? AND ts>=?"
+    where = f" WHERE COALESCE(project,'미분류') IN ({placeholders}) AND ts>=?" if raw_names else ' WHERE 1=0 AND ts>=?'
     models = {}
     daily = {}
     month = dict(tokens=0, cost=0.0, priced=0)
@@ -79,7 +87,7 @@ def project_detail(store, project, now, pricing=None, days=30, budget=None):
             + store.table
             + where
             + ' GROUP BY route,model,day',
-            (project, min(start, month_start).timestamp()),
+            (*raw_names, min(start, month_start).timestamp()),
         ):
             row = dict(r)
             tokens = token_total(row)
@@ -109,7 +117,7 @@ def project_detail(store, project, now, pricing=None, days=30, budget=None):
                 'SELECT session,MAX(route),SUM(uncached_input+cached_input+output+cache_creation),SUM(requests),MIN(ts),MAX(ts) FROM events'
                 + where
                 + ' AND session IS NOT NULL GROUP BY session ORDER BY 3 DESC',
-                (project, start.timestamp()),
+                (*raw_names, start.timestamp()),
             )
         ]
         extra, _ = supplements(c)
@@ -117,7 +125,11 @@ def project_detail(store, project, now, pricing=None, days=30, budget=None):
     unallocated = []
     for e in extra:
         # The Codex account residual is listed apart from '미분류' (see reconciliation.RESIDUAL).
-        if e['source'] == 'codex-account' or (e['project'] or '미분류') != project or e['end'] > now.timestamp():
+        if (
+            e['source'] == 'codex-account'
+            or resolve_project(e['project'], aliases) != project
+            or e['end'] > now.timestamp()
+        ):
             continue
         if e['start'] >= month_start.timestamp():
             month['tokens'] += e['tokens']
@@ -180,6 +192,7 @@ def project_detail(store, project, now, pricing=None, days=30, budget=None):
         m['cost'] = round(m['cost'], 4) if m['cost'] is not None else None
     return dict(
         project=project,
+        aliases=sorted(n for n in raw_names if n != project),
         days=days,
         start=start.strftime('%Y-%m-%d'),
         unallocated_intervals=unallocated,
@@ -190,20 +203,30 @@ def project_detail(store, project, now, pricing=None, days=30, budget=None):
     )
 
 
-def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None):
+def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None, project_aliases=None):
     """Request-only session rows in the selected range, optionally for a bounded ID batch.
 
     Reconciliation uses the same aggregation to recover local detail for a
     supplemented session that did not make the request-only top 100."""
+    from .aliases import raw_names_for, resolve_project, safe_aliases
     from .pricing import estimate, rate_for
     from .store import METRICS
 
+    aliases = safe_aliases(project_aliases)
     where = 'ts>=? AND ts<? AND session IS NOT NULL'
     args = [start, end]
     if scope:
         kind, _, value = scope.partition(':')
-        where += ' AND ' + cls.SCOPE_KINDS[kind] + '=?'
-        args.append(value)
+        if kind == 'project' and aliases:
+            names = raw_names_for(value, aliases)
+            if not names:
+                return {}
+            placeholders = ','.join('?' for _ in names)
+            where += f' AND {cls.SCOPE_KINDS[kind]} IN ({placeholders})'
+            args.extend(names)
+        else:
+            where += ' AND ' + cls.SCOPE_KINDS[kind] + '=?'
+            args.append(value)
     if ids is not None:
         if not ids:
             return {}
@@ -223,12 +246,13 @@ def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None):
         + ' GROUP BY session,model,day,4',
         args,
     ):
+        proj = resolve_project(r['project'], aliases) if r['project'] and aliases else r['project']
         e = sessions.setdefault(
             r['session'],
             dict(
                 session=r['session'],
                 route=r['route'],
-                project=r['project'],
+                project=proj,
                 kind=r['kind'],
                 first_ts=r['first_ts'],
                 last_ts=r['last_ts'],
@@ -304,7 +328,7 @@ def session_detail(store, session, pricing=None):
                 'SELECT * FROM usage_evidence WHERE session=? ORDER BY end DESC LIMIT 1', (session,)
             ).fetchone()
             if not evidence:
-                return dict(session=session, models=[], hours=[])
+                return dict(session=session, models=[], hours=[], cache_hours=[], efforts=[], tree=[])
             models = [
                 dict(
                     route=evidence['route'],
@@ -317,14 +341,148 @@ def session_detail(store, session, pricing=None):
                 )
             ]
         meta = c.execute('SELECT MAX(project),MAX(agent_kind) FROM events WHERE session=?', (session,)).fetchone()
-        hours = [
-            dict(hour=r[0] * 3600, requests=r[1], tokens=r[2])
+        hours = []
+        cache_hours = []
+        for r in c.execute(
+            'SELECT CAST(ts/3600 AS INTEGER),SUM(requests),'
+            'SUM(uncached_input),SUM(cached_input),SUM(output),SUM(cache_creation) '
+            'FROM events WHERE session=? GROUP BY 1 ORDER BY 1',
+            (session,),
+        ):
+            hour_ts = r[0] * 3600
+            reqs = r[1] or 0
+            uncached, cached, output_t, cache_create = r[2] or 0, r[3] or 0, r[4] or 0, r[5] or 0
+            tok = uncached + cached + output_t + cache_create
+            inp = uncached + cached + cache_create
+            hours.append(dict(hour=hour_ts, requests=reqs, tokens=tok))
+            cache_hours.append(
+                dict(
+                    hour=hour_ts,
+                    requests=reqs,
+                    tokens=tok,
+                    uncached_input=uncached,
+                    cached_input=cached,
+                    cache_creation=cache_create,
+                    output=output_t,
+                    cache_share=round(cached / inp * 100, 2) if inp else None,
+                    avg_context=round(inp / reqs) if reqs else None,
+                )
+            )
+        # Effort / speed breakdown within this session.
+        efforts_map = {}
+        for r in c.execute(
+            "SELECT route,model,effort,speed,date(ts,'unixepoch','+9 hours') AS day,"
+            'COALESCE(SUM(requests),0) AS requests,'
+            + sums
+            + ' FROM events WHERE session=? GROUP BY route,model,effort,speed,day',
+            (session,),
+        ):
+            row = dict(r)
+            ekey = (row['route'], row['model'], row['effort'], row['speed'])
+            entry = efforts_map.setdefault(
+                ekey,
+                dict(
+                    route=row['route'],
+                    model=row['model'],
+                    effort=row['effort'],
+                    speed=row['speed'],
+                    requests=0,
+                    tokens=0,
+                    output=0,
+                    reasoning=0,
+                    cost=None,
+                ),
+            )
+            entry['requests'] += row['requests']
+            entry['tokens'] += token_total(row)
+            entry['output'] += row['output']
+            entry['reasoning'] += row['reasoning']
+            rate = rate_for(row['model'], pricing, row['day']) if pricing else None
+            if rate:
+                entry['cost'] = (entry['cost'] or 0.0) + estimate(row, rate)
+        efforts = sorted(
+            ({**e, 'cost': round(e['cost'], 4) if e['cost'] is not None else None} for e in efforts_map.values()),
+            key=lambda e: (-e['tokens'], e['route'], e['model'], e['effort'] or '', e['speed'] or ''),
+        )
+        # Call tree: group main / subagent / advisor calls using parent_id and agent_kind.
+        raw_events = [
+            dict(r)
             for r in c.execute(
-                'SELECT CAST(ts/3600 AS INTEGER),SUM(requests),SUM(uncached_input+cached_input+output+cache_creation) '
-                'FROM events WHERE session=? GROUP BY 1 ORDER BY 1',
+                'SELECT id,parent_id,agent_kind,route,model,requests,advisor_calls,'
+                'uncached_input,cached_input,output,cache_creation,reasoning '
+                'FROM events WHERE session=? ORDER BY ts,id',
                 (session,),
             )
         ]
+        parent_lookup = {ev['id']: (ev['agent_kind'] or 'main', ev['route'], ev['model']) for ev in raw_events}
+        roots = {}
+        children_by_parent = {}
+
+        def _acc(bucket, ev):
+            bucket['requests'] += ev['requests'] or 0
+            bucket['advisor_calls'] += ev['advisor_calls'] or 0
+            bucket['uncached_input'] += ev['uncached_input'] or 0
+            bucket['cached_input'] += ev['cached_input'] or 0
+            bucket['cache_creation'] += ev['cache_creation'] or 0
+            bucket['output'] += ev['output'] or 0
+            bucket['reasoning'] += ev['reasoning'] or 0
+            bucket['tokens'] += (
+                (ev['uncached_input'] or 0)
+                + (ev['cached_input'] or 0)
+                + (ev['output'] or 0)
+                + (ev['cache_creation'] or 0)
+            )
+
+        def _make_node(kind, route, model):
+            return dict(
+                kind=kind,
+                route=route,
+                model=model,
+                requests=0,
+                advisor_calls=0,
+                tokens=0,
+                uncached_input=0,
+                cached_input=0,
+                cache_creation=0,
+                output=0,
+                reasoning=0,
+            )
+
+        for ev in raw_events:
+            pid = ev['parent_id']
+            kind = ev['agent_kind'] or ('advisor' if pid else 'main')
+            nkey = (kind, ev['route'], ev['model'])
+            if pid and pid in parent_lookup:
+                pkey = parent_lookup[pid]
+                cdict = children_by_parent.setdefault(pkey, {})
+                node = cdict.setdefault(nkey, _make_node(*nkey))
+                _acc(node, ev)
+            else:
+                node = roots.setdefault(nkey, _make_node(*nkey))
+                _acc(node, ev)
+
+        def _finalize_node(node, kids=()):
+            inp = node['uncached_input'] + node['cached_input'] + node['cache_creation']
+            return dict(
+                kind=node['kind'],
+                route=node['route'],
+                model=node['model'],
+                requests=node['requests'],
+                advisor_calls=node['advisor_calls'],
+                tokens=node['tokens'],
+                output=node['output'],
+                reasoning=node['reasoning'],
+                cache_share=round(node['cached_input'] / inp * 100, 2) if inp else None,
+                children=list(kids),
+            )
+
+        tree = []
+        for rkey, rnode in sorted(roots.items(), key=lambda kv: (-kv[1]['tokens'], kv[0])):
+            kids = [
+                _finalize_node(cn)
+                for _, cn in sorted(children_by_parent.get(rkey, {}).items(), key=lambda kv: (-kv[1]['tokens'], kv[0]))
+            ]
+            tree.append(_finalize_node(rnode, kids))
         extra, _ = supplements(c)
     totals = {k: sum(m[k] for m in models) for k in METRICS}
     inputs = totals['uncached_input'] + totals['cached_input'] + totals['cache_creation']
@@ -342,6 +500,9 @@ def session_detail(store, session, pricing=None):
         cost=round(cost, 4) if rated else None,
         models=sorted(models, key=lambda m: -token_total(m)),
         hours=hours,
+        cache_hours=cache_hours,
+        efforts=efforts,
+        tree=tree,
     )
     data['unallocated_intervals'] = []
     for e in extra:

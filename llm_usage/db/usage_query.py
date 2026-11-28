@@ -262,7 +262,11 @@ class UsageMixin:
         ended=None,
         price_history=None,
         origins=True,
+        project_aliases=None,
     ):
+        from ..aliases import raw_names_for, safe_aliases
+
+        aliases = safe_aliases(project_aliases)
         if granularity not in BUCKET_SQL or group not in self.GROUPS or sections not in ('all', 'core', 'insights'):
             raise ValueError('집계 단위가 올바르지 않습니다.')
         scope_sql, scope_args = '', ()
@@ -270,8 +274,17 @@ class UsageMixin:
             kind, _, value = scope.partition(':')
             if kind not in self.SCOPE_KINDS or not value:
                 raise ValueError('범위가 올바르지 않습니다.')
-            scope_sql = ' AND ' + self.SCOPE_KINDS[kind] + '=?'
-            scope_args = (value,)
+            if kind == 'project' and aliases:
+                raw_names = raw_names_for(value, aliases)
+                if not raw_names:
+                    scope_sql, scope_args = ' AND 1=0', ()
+                else:
+                    placeholders = ','.join('?' for _ in raw_names)
+                    scope_sql = f' AND {self.SCOPE_KINDS[kind]} IN ({placeholders})'
+                    scope_args = tuple(raw_names)
+            else:
+                scope_sql = ' AND ' + self.SCOPE_KINDS[kind] + '=?'
+                scope_args = (value,)
         now = datetime.fromtimestamp(now or time.time(), KST)
         if as_of is not None and (
             period != '1h'
@@ -322,6 +335,7 @@ class UsageMixin:
                 json.dumps(subscriptions, sort_keys=True) if subscriptions else None,
                 tuple(sorted(ended or ())),
                 json.dumps(price_history, sort_keys=True) if price_history else None,
+                json.dumps(aliases, sort_keys=True) if aliases else None,
             )
             body = self._usage_get(key)
             if body is None:
@@ -349,6 +363,7 @@ class UsageMixin:
                     cutoff,
                     set(ended or ()),
                     price_history,
+                    aliases,
                 )
                 if len(body['series']) <= 5000:
                     self._usage_put(key, body)
@@ -371,6 +386,7 @@ class UsageMixin:
                 pricing=pricing,
                 calendar_start=(midnight - timedelta(days=181)).date().isoformat(),
                 origins=origins,
+                project_aliases=aliases,
             )
             sources, unavailable_routes = self._usage_live(c, body['rows'], now)
             from ..claude_accounts import describe
@@ -379,7 +395,7 @@ class UsageMixin:
             from ..signals import usage_spike
 
             spike = usage_spike(c, now.timestamp()) if sections != 'insights' else None
-            month = self.project_month(c, now, pricing) if sections != 'insights' else None
+            month = self.project_month(c, now, pricing, project_aliases=aliases) if sections != 'insights' else None
             gap = self.account_gap(c, 'codex', now.timestamp()) if sections != 'insights' else None
         data = {
             **body,
@@ -412,24 +428,34 @@ class UsageMixin:
         }
         return {k: v for k, v in data.items() if k in insight_keys | shared}
 
-    def project_month(self, c, now, pricing=None):
+    def project_month(self, c, now, pricing=None, project_aliases=None):
         """Month-to-date (KST calendar month) tokens and estimated cost per project."""
         from .. import store_ops
 
-        return store_ops.project_month(self, c, now, pricing=pricing)
+        return store_ops.project_month(self, c, now, pricing=pricing, project_aliases=project_aliases)
 
-    def project_detail(self, project, now=None, pricing=None, days=30, budget=None):
+    def project_detail(self, project, now=None, pricing=None, days=30, budget=None, project_aliases=None):
         """One project over the last `days` KST days."""
         from .. import store_ops
 
-        return store_ops.project_detail(self, project, now or time.time(), pricing=pricing, days=days, budget=budget)
+        return store_ops.project_detail(
+            self,
+            project,
+            now or time.time(),
+            pricing=pricing,
+            days=days,
+            budget=budget,
+            project_aliases=project_aliases,
+        )
 
     @classmethod
-    def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None):
+    def session_rows(cls, c, start, end, pricing=None, scope=None, ids=None, project_aliases=None):
         """Request-only session rows in the selected range, optionally for a bounded ID batch."""
         from .. import store_ops
 
-        return store_ops.session_rows(cls, c, start, end, pricing=pricing, scope=scope, ids=ids)
+        return store_ops.session_rows(
+            cls, c, start, end, pricing=pricing, scope=scope, ids=ids, project_aliases=project_aliases
+        )
 
     def session_detail(self, session, pricing=None):
         """One session's models, hourly activity and cache share; no message content exists here."""
@@ -557,13 +583,16 @@ class UsageMixin:
         cutoff,
         ended=frozenset(),
         price_history=None,
+        project_aliases=None,
     ):
+        from ..aliases import resolve_project
+
         first = c.execute('SELECT MIN(ts) FROM events WHERE 1=1' + scope_sql, scope_args).fetchone()[0]
         if period == 'all':
             from ..reconciliation import supplements, matches
 
             extra, _ = supplements(c)
-            starts = [e['start'] for e in extra if matches(e, scope)]
+            starts = [e['start'] for e in extra if matches(e, scope, project_aliases)]
             if starts:
                 first = min([first] + starts) if first is not None else min(starts)
         if period == '1h':
@@ -673,8 +702,11 @@ class UsageMixin:
             + ' GROUP BY bucket,label,model,day',
             (a.timestamp(), b.timestamp(), *scope_args),
         ):
+            blabel = (
+                resolve_project(r['label'], project_aliases) if group == 'project' and project_aliases else r['label']
+            )
             e = buckets.setdefault(
-                (r['bucket'], r['label']), dict(requests=0, cost=0.0, unpriced=0, **dict.fromkeys(METRICS, 0))
+                (r['bucket'], blabel), dict(requests=0, cost=0.0, unpriced=0, **dict.fromkeys(METRICS, 0))
             )
             for k in METRICS:
                 e[k] += r[k]
@@ -713,8 +745,13 @@ class UsageMixin:
                 + ' GROUP BY bucket,label,model,day',
                 (a2.timestamp(), b2.timestamp(), *scope_args),
             ):
+                clabel = (
+                    resolve_project(r['label'], project_aliases)
+                    if group == 'project' and project_aliases
+                    else r['label']
+                )
                 e = cmp_buckets.setdefault(
-                    (r['bucket'], r['label']), dict(requests=0, cost=0.0, **dict.fromkeys(METRICS, 0))
+                    (r['bucket'], clabel), dict(requests=0, cost=0.0, **dict.fromkeys(METRICS, 0))
                 )
                 for k in METRICS:
                     e[k] += r[k]
@@ -763,7 +800,9 @@ class UsageMixin:
         project_list = []
         sessions_total = 0
         if sections != 'core':
-            sessions = self.session_rows(c, a.timestamp(), b.timestamp(), pricing, scope)
+            sessions = self.session_rows(
+                c, a.timestamp(), b.timestamp(), pricing, scope, project_aliases=project_aliases
+            )
             sessions_total = len(sessions)
             session_list = sorted(
                 sessions.values(),
@@ -774,14 +813,24 @@ class UsageMixin:
                 (a.timestamp(), b.timestamp(), *scope_args),
             ).fetchone()[0]
             projects = {}
-            project_sessions = dict(
-                c.execute(
-                    "SELECT COALESCE(NULLIF(project,''),'미분류'),COUNT(DISTINCT session) FROM events WHERE ts>=? AND ts<?"
-                    + scope_sql
-                    + " GROUP BY COALESCE(NULLIF(project,''),'미분류')",
+            if project_aliases:
+                session_sets = {}
+                for raw_proj, sid in c.execute(
+                    "SELECT COALESCE(NULLIF(project,''),'미분류'), session FROM events "
+                    'WHERE ts>=? AND ts<? AND session IS NOT NULL' + scope_sql + ' GROUP BY 1, 2',
                     (a.timestamp(), b.timestamp(), *scope_args),
+                ):
+                    session_sets.setdefault(resolve_project(raw_proj, project_aliases), set()).add(sid)
+                project_sessions = {k: len(v) for k, v in session_sets.items()}
+            else:
+                project_sessions = dict(
+                    c.execute(
+                        "SELECT COALESCE(NULLIF(project,''),'미분류'),COUNT(DISTINCT session) FROM events WHERE ts>=? AND ts<?"
+                        + scope_sql
+                        + " GROUP BY COALESCE(NULLIF(project,''),'미분류')",
+                        (a.timestamp(), b.timestamp(), *scope_args),
+                    )
                 )
-            )
             for r in c.execute(
                 '''SELECT project,model,date(ts,'unixepoch','+9 hours') AS day,MAX(ts) AS last_ts,'''
                 + count
@@ -794,12 +843,12 @@ class UsageMixin:
                 '',
                 (a.timestamp(), b.timestamp(), *scope_args),
             ):
-                label = r['project'] or '미분류'
+                label = resolve_project(r['project'], project_aliases)
                 e = projects.setdefault(
                     label,
                     dict(
                         project=label,
-                        sessions=project_sessions[label],
+                        sessions=project_sessions.get(label, 0),
                         last_ts=r['last_ts'],
                         requests=0,
                         cost=0.0,
@@ -844,6 +893,10 @@ class UsageMixin:
                 ]
                 for kind, expr in self.SCOPE_KINDS.items()
             }
+            if project_aliases and 'project' in scope_options:
+                scope_options['project'] = list(
+                    dict.fromkeys(resolve_project(v, project_aliases) for v in scope_options['project'])
+                )
             scope_options['account'] = [v for v in scope_options['account'] if is_claude(v)]
             if len(scope_options['account']) < 2:
                 scope_options.pop('account')

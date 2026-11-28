@@ -64,6 +64,13 @@ def register_config_routes(app, config, store, persist, json_object):
                     (since_ts,),
                 )
             }
+            raw_projects = [
+                r[0]
+                for r in c.execute(
+                    f"SELECT project FROM {store.table} WHERE project IS NOT NULL AND project!='' "
+                    'GROUP BY project ORDER BY SUM(uncached_input+cached_input+output+cache_creation) DESC, project LIMIT 200'
+                )
+            ]
         upcoming = {m: e for m in {*models, *pricing} if (e := upcoming_for(m, pricing, today))}
         return jsonify(
             subscription_routes=sorted(routes),
@@ -75,6 +82,8 @@ def register_config_routes(app, config, store, persist, json_object):
             notify=masked(config.get('notify')),
             residual_label=config.get('residual_label'),
             project_budgets=config.get('project_budgets') or {},
+            project_aliases=config.get('project_aliases') or {},
+            raw_projects=raw_projects,
             model_usage_30d=usage30,
             thresholds=store.thresholds,
             pricing={m: r for m, r in pricing.items() if r is not None},
@@ -410,3 +419,273 @@ def register_config_routes(app, config, store, persist, json_object):
             abort(400, description='월 환산 알림은 0~1000000 USD 범위이거나 비워 두세요.')
         persist({'value_alert_usd': value})
         return jsonify(value_alert_usd=value)
+
+    @app.post('/api/config/project-aliases')
+    def set_project_aliases():
+        from .aliases import validate_aliases
+
+        raw = json_object().get('aliases')
+        try:
+            clean = validate_aliases(raw)
+        except ValueError as error:
+            abort(400, description=str(error))
+        persist({'project_aliases': clean})
+        return jsonify(project_aliases=clean)
+
+    @app.get('/api/config/export')
+    def export_config():
+        """Export portable non-secret settings and user pricing overrides as JSON."""
+        from .pricing import _read_json
+        from .subscriptions import clean_history
+
+        notify = config.get('notify') or {}
+        notify_prefs = {}
+        if isinstance(notify.get('events'), dict):
+            notify_prefs['events'] = notify['events']
+        if 'quiet' in notify:
+            notify_prefs['quiet'] = notify['quiet']
+
+        path = pricing_write_path()
+        if path:
+            overrides = _read_json(path) if path.exists() else {}
+            if not isinstance(overrides, dict):
+                overrides = {}
+        else:
+            overrides = dict(config.get('pricing') or {})
+
+        return jsonify(
+            format='llm-usage-config-v1',
+            exported_at=datetime.now(KST).isoformat(),
+            settings=dict(
+                subscription_prices=config.get('subscription_prices') or {},
+                subscription_price_history=clean_history(config.get('subscription_price_history')),
+                ended_subscriptions=config.get('ended_subscriptions') or {},
+                claude_account_names=config.get('claude_account_names') or {},
+                residual_label=config.get('residual_label'),
+                project_budgets=config.get('project_budgets') or {},
+                project_aliases=config.get('project_aliases') or {},
+                thresholds=store.thresholds,
+                refresh_seconds=config.get('refresh_seconds', 300),
+                value_alert_usd=config.get('value_alert_usd'),
+                notify_preferences=notify_prefs,
+            ),
+            pricing_overrides=overrides,
+        )
+
+    @app.post('/api/config/import')
+    def import_config():
+        """Import a validated non-secret settings & pricing JSON bundle.
+
+        Never accepts or overwrites secret_key, allowed_logins, origin, or notify channel credentials.
+        """
+        from .aliases import validate_aliases
+        from .notify import EVENTS
+        from .pricing import _valid
+        from .subscriptions import clean_history
+
+        body = json_object()
+        if body.get('format') != 'llm-usage-config-v1':
+            abort(400, description='지원하지 않는 설정 파일 형식입니다 (llm-usage-config-v1 필요).')
+
+        raw_settings = body.get('settings')
+        if raw_settings is not None and not isinstance(raw_settings, dict):
+            abort(400, description='settings 필드는 JSON 객체여야 합니다.')
+        raw_settings = raw_settings or {}
+
+        forbidden = {'secret_key', 'allowed_logins', 'origin', 'notify', 'database', 'config_file'}
+        if any(k in raw_settings for k in forbidden):
+            abort(400, description='인증 정보나 시스템 경로 필드는 가져올 수 없습니다.')
+
+        patch = {}
+        notify_prefs_patch = None
+
+        if 'subscription_prices' in raw_settings:
+            prices = raw_settings['subscription_prices']
+            if not isinstance(prices, dict) or len(prices) > 64:
+                abort(400, description='구독료 목록을 확인하세요.')
+            clean_prices = {}
+            for route, val in prices.items():
+                if not isinstance(route, str) or not _webapp.ROUTE_RE.fullmatch(route) or not _number(val, 0, 100000):
+                    abort(400, description='구독료 항목이 올바르지 않습니다.')
+                clean_prices[route] = val
+            patch['subscription_prices'] = clean_prices
+
+        if 'subscription_price_history' in raw_settings:
+            raw_hist = raw_settings['subscription_price_history']
+            if not isinstance(raw_hist, dict) or len(raw_hist) > 64:
+                abort(400, description='구독료 변경 이력을 확인하세요.')
+            patch['subscription_price_history'] = clean_history(raw_hist)
+
+        if 'ended_subscriptions' in raw_settings:
+            ended = raw_settings['ended_subscriptions']
+            if not isinstance(ended, dict) or len(ended) > 64:
+                abort(400, description='구독 종료 목록을 확인하세요.')
+            clean_ended = {}
+            for route, info in ended.items():
+                if not isinstance(route, str) or not _webapp.ROUTE_RE.fullmatch(route) or not isinstance(info, dict):
+                    abort(400, description='구독 종료 항목이 올바르지 않습니다.')
+                since = info.get('since')
+                clean_ended[route] = {'since': float(since) if _number(since, 1, 1e12) else time.time()}
+            patch['ended_subscriptions'] = clean_ended
+
+        if 'claude_account_names' in raw_settings:
+            names = raw_settings['claude_account_names']
+            if (
+                not isinstance(names, dict)
+                or len(names) > 16
+                or not all(
+                    isinstance(r, str)
+                    and _webapp.ROUTE_RE.fullmatch(r)
+                    and r.startswith('claude-code')
+                    and isinstance(v, str)
+                    and len(v.strip()) <= 40
+                    and not any(ord(ch) < 32 or ord(ch) == 127 for ch in v)
+                    for r, v in names.items()
+                )
+            ):
+                abort(400, description='계정 이름은 40자 이하로 입력하세요.')
+            patch['claude_account_names'] = {r: v.strip() for r, v in names.items() if v.strip()}
+
+        if 'residual_label' in raw_settings:
+            label = raw_settings['residual_label']
+            if label is not None and (
+                not isinstance(label, str)
+                or len(label.strip()) > 20
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in label)
+            ):
+                abort(400, description='계정 합계 차이 이름을 확인하세요.')
+            patch['residual_label'] = label.strip() or None if isinstance(label, str) else None
+
+        if 'project_budgets' in raw_settings:
+            budgets = raw_settings['project_budgets']
+            if not isinstance(budgets, dict) or len(budgets) > 200:
+                abort(400, description='프로젝트 예산 목록을 확인하세요.')
+            clean_budgets = {}
+            for proj, b in budgets.items():
+                if not isinstance(proj, str) or not 0 < len(proj) <= 200 or not isinstance(b, dict):
+                    abort(400, description='프로젝트 예산 항목이 올바르지 않습니다.')
+                tokens, usd = b.get('tokens'), b.get('usd')
+                if tokens is not None and not (
+                    isinstance(tokens, int) and not isinstance(tokens, bool) and 0 < tokens <= 10**15
+                ):
+                    abort(400, description='토큰 예산은 양의 정수여야 합니다.')
+                if usd is not None and not _number(usd, 0.01, 1000000):
+                    abort(400, description='USD 예산은 0.01~1000000 범위여야 합니다.')
+                if tokens is not None or usd is not None:
+                    clean_budgets[proj] = dict(tokens=tokens, usd=usd)
+            patch['project_budgets'] = clean_budgets
+
+        if 'project_aliases' in raw_settings:
+            try:
+                patch['project_aliases'] = validate_aliases(raw_settings['project_aliases'])
+            except ValueError as error:
+                abort(400, description=str(error))
+
+        if 'thresholds' in raw_settings:
+            raw_th = raw_settings['thresholds']
+            if not isinstance(raw_th, dict):
+                abort(400, description='임계값 형식을 확인하세요.')
+            th_clean = {}
+            for key, (lo, hi) in {
+                'stale_seconds': (60, 86400),
+                'retention_days': (1, 365),
+                'low_percent': (1, 50),
+                'quota_hide_days': (1, 90),
+                'unused_percent': (10, 100),
+                'unused_hours': (1, 72),
+            }.items():
+                if key in raw_th:
+                    if not _number(raw_th[key], lo, hi):
+                        abort(400, description=f'{key}는 {lo}~{hi} 범위여야 합니다.')
+                    th_clean[key] = raw_th[key]
+            patch['thresholds'] = {**Store.DEFAULT_THRESHOLDS, **th_clean}
+
+        if 'refresh_seconds' in raw_settings:
+            rs = raw_settings['refresh_seconds']
+            if not _number(rs, 30, 3600):
+                abort(400, description='갱신 주기는 30~3600초 범위여야 합니다.')
+            patch['refresh_seconds'] = int(rs)
+
+        if 'value_alert_usd' in raw_settings:
+            va = raw_settings['value_alert_usd']
+            if va is not None and not _number(va, 0, 1000000):
+                abort(400, description='월 환산 알림 값을 확인하세요.')
+            patch['value_alert_usd'] = va
+
+        if 'notify_preferences' in raw_settings:
+            np = raw_settings['notify_preferences']
+            if not isinstance(np, dict):
+                abort(400, description='알림 기본 설정 형식을 확인하세요.')
+            prefs = {}
+            if 'events' in np:
+                ev = np['events']
+                if not isinstance(ev, dict) or not all(k in EVENTS and isinstance(v, bool) for k, v in ev.items()):
+                    abort(400, description='알림 종류 설정을 확인하세요.')
+                prefs['events'] = ev
+            if 'quiet' in np:
+                q = np['quiet']
+                if q is not None and not (
+                    isinstance(q, list)
+                    and len(q) == 2
+                    and all(isinstance(h, int) and not isinstance(h, bool) and 0 <= h <= 23 for h in q)
+                    and q[0] != q[1]
+                ):
+                    abort(400, description='방해 금지 시간 형식을 확인하세요.')
+                prefs['quiet'] = q
+            notify_prefs_patch = prefs
+
+        raw_pricing = body.get('pricing_overrides')
+        clean_pricing = None
+        if raw_pricing is not None:
+            if not isinstance(raw_pricing, dict) or len(raw_pricing) > 500:
+                abort(400, description='단가 목록 형식을 확인하세요.')
+            clean_pricing = {}
+            for model, entry in raw_pricing.items():
+                if not isinstance(model, str) or not _webapp.MODEL_RE.fullmatch(model):
+                    abort(400, description='단가 모델 이름을 확인하세요.')
+                if entry is None or entry == 'builtin':
+                    clean_pricing[model] = entry
+                elif isinstance(entry, dict) and _valid(entry):
+                    clean_pricing[model] = entry
+                elif isinstance(entry, list) and entry and len(entry) <= 50 and all(_valid(e) for e in entry):
+                    clean_pricing[model] = entry
+                else:
+                    abort(400, description=f'모델 단가 형식이 올바르지 않습니다: {model}')
+
+        if patch or notify_prefs_patch is not None:
+
+            def apply_all(current):
+                merged = dict(patch)
+                if notify_prefs_patch is not None:
+                    cur_notify = dict(current.get('notify') or {})
+                    if 'events' in notify_prefs_patch:
+                        cur_notify['events'] = {**(cur_notify.get('events') or {}), **notify_prefs_patch['events']}
+                    if 'quiet' in notify_prefs_patch:
+                        cur_notify['quiet'] = notify_prefs_patch['quiet']
+                    merged['notify'] = cur_notify
+                return merged
+
+            persist(apply_all)
+
+        if clean_pricing is not None:
+            path = pricing_write_path()
+            with _webapp.pricing_lock:
+                if path:
+                    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    fd = os.open(path.with_name('pricing.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+                    with os.fdopen(fd, 'a+') as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        try:
+                            _webapp.atomic_json(path, clean_pricing)
+                        finally:
+                            fcntl.flock(lock, fcntl.LOCK_UN)
+                else:
+                    config['pricing'] = clean_pricing
+
+        return jsonify(
+            imported=True,
+            applied_settings=sorted(
+                [*patch.keys(), *(['notify_preferences'] if notify_prefs_patch is not None else [])]
+            ),
+            applied_pricing=len(clean_pricing) if clean_pricing is not None else 0,
+        )

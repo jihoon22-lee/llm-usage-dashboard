@@ -384,14 +384,18 @@ def _account(c, row):
     return json.loads(found[0]) if found else 'claude-code'
 
 
-def matches(row, scope):
+def matches(row, scope, project_aliases=None):
     if not scope:
         return True
     kind, _, value = scope.partition(':')
     # The Codex account residual is no model and no project: not 'unknown' or '미분류'.
     if row.get('source') == 'codex-account' and kind in ('model', 'project'):
         return False
-    return (row.get(kind) or ('unknown' if kind == 'model' else '미분류' if kind == 'project' else None)) == value
+    if kind == 'project':
+        from .aliases import resolve_project
+
+        return resolve_project(row.get('project'), project_aliases) == value
+    return (row.get(kind) or ('unknown' if kind == 'model' else None)) == value
 
 
 def total(row):
@@ -417,22 +421,40 @@ def residual(e):
     return e['source'] == 'codex-account'
 
 
-def series_label(e, group):
+def series_label(e, group, project_aliases=None):
     if residual(e) and group in ('model', 'project'):
         return RESIDUAL
     if group == 'agent':
         return '미귀속'
-    return e.get(group) or ('unknown' if group == 'model' else '미분류' if group == 'project' else '미귀속')
+    if group == 'project':
+        from .aliases import resolve_project
+
+        return resolve_project(e.get('project'), project_aliases)
+    return e.get(group) or ('unknown' if group == 'model' else '미귀속')
 
 
-def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_start, pricing=None, origins=True):
+def apply(
+    c,
+    body,
+    group='route',
+    cumulative=False,
+    scope=None,
+    *,
+    calendar_start,
+    pricing=None,
+    origins=True,
+    project_aliases=None,
+):
     """Overlay a COPY of the cached request-only response; never mutate the cache.
     `origins`: also split the period's records by where they came from (`origin_tokens`)."""
+    from .aliases import resolve_project, safe_aliases
+
+    aliases = safe_aliases(project_aliases)
     # Where each aggregate source's evidence of the scope begins: a comparison needs it to
     # reach back as far as the local records (whose first record is taken in the scope too).
     received = []
     entries, conflicts = supplements(c, received)
-    entries = [e for e in entries if matches(e, scope)]
+    entries = [e for e in entries if matches(e, scope, aliases)]
     first_seen = {}
     for r in received:
         if matches(r, scope):
@@ -496,7 +518,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
                 part = dict(account=account, tokens=0, requests=0, cost=None)
                 split.append(part)
             part['tokens'] += e['tokens']
-        label = series_label(e, group)
+        label = series_label(e, group, aliases)
         located = False
         for p in data['series']:
             lo = stamp(p.get('range_start', p['time']))
@@ -531,7 +553,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             )
             data['rows'].append(row)
         add(row, e)
-        project = RESIDUAL if residual(e) else e['project'] or '미분류'
+        project = RESIDUAL if residual(e) else resolve_project(e['project'], aliases)
         for collection, key, value in [('sessions', 'session', e['session']), ('projects', 'project', project)]:
             if key == 'session' and not value:
                 continue
@@ -560,7 +582,10 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             # The residual is not an unknown model or an unassigned project to filter by.
             if residual(e) and kind in ('model', 'project'):
                 continue
-            value = e.get(kind) or ('unknown' if kind == 'model' else '미분류' if kind == 'project' else None)
+            if kind == 'project':
+                value = resolve_project(e.get('project'), aliases)
+            else:
+                value = e.get(kind) or ('unknown' if kind == 'model' else None)
             if kind == 'account' and value and not value.startswith('claude-code'):
                 continue
             options = data.get('scope_options', {}).get(kind)
@@ -643,7 +668,17 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
         args = [a, b]
         if scope:
             kind, _, value = scope.partition(':')
-            if kind in ('route', 'provider', 'model', 'project', 'account'):
+            if kind == 'project' and aliases:
+                from .aliases import raw_names_for
+
+                names = raw_names_for(value, aliases)
+                if not names:
+                    where += ' AND 1=0'
+                else:
+                    placeholders = ','.join('?' for _ in names)
+                    where += f" AND COALESCE(e.project,'미분류') IN ({placeholders})"
+                    args.extend(names)
+            elif kind in ('route', 'provider', 'model', 'project', 'account'):
                 column = (
                     "COALESCE(e.project,'미분류')"
                     if kind == 'project'
@@ -675,7 +710,7 @@ def apply(c, body, group='route', cumulative=False, scope=None, *, calendar_star
             if not (ca <= e['start'] and e['end'] <= cb):
                 continue
             placed = False
-            label = series_label(e, group)
+            label = series_label(e, group, aliases)
             for p, grid in zip(comparison.get('series', []), data['series']):
                 lo = stamp(grid.get('range_start', grid['time'])) - shift
                 hi = stamp(grid.get('range_end_exclusive', data['end_exclusive'])) - shift

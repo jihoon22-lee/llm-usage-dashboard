@@ -147,3 +147,72 @@ class CollectionStatusResponse(TypedDict):
     completed: float
     request_id: int
     completed_id: int
+
+
+class SessionTreeNode(TypedDict):
+    kind: str
+    route: str
+    model: str
+    requests: int
+    advisor_calls: int
+    tokens: int
+    output: int
+    reasoning: int
+    cache_share: float | None
+    children: list['SessionTreeNode']
+
+
+class SessionCacheHour(TypedDict):
+    hour: int
+    requests: int
+    tokens: int
+    uncached_input: int
+    cached_input: int
+    cache_creation: int
+    output: int
+    cache_share: float | None
+    avg_context: int | None
+
+
+class SessionEffortRow(TypedDict):
+    route: str
+    model: str
+    effort: str | None
+    speed: str | None
+    requests: int
+    tokens: int
+    output: int
+    reasoning: int
+    cost: float | None
+
+
+class SimulatorResponse(TypedDict):
+    period: str
+    start: str
+    end_exclusive: str
+    elapsed_days: float
+    total_tokens: int
+    priced_tokens: int
+    coverage: float | None
+    baseline_api_period: float | None
+    simulated_api_period: float | None
+    baseline_api_monthly: float | None
+    simulated_api_monthly: float | None
+    savings_period: float | None
+    savings_monthly: float | None
+    savings_pct: float | None
+    subscription_monthly: float | None
+    subscription_period: float | None
+    baseline_vs_subscription: dict[str, Any]
+    simulated_vs_subscription: dict[str, Any]
+    by_route: list[dict[str, Any]]
+    breakdown: list[dict[str, Any]]
+    unpriced_targets: list[str]
+
+
+class SystemDiagnosticsResponse(TypedDict):
+    database: dict[str, Any]
+    backups: dict[str, Any]
+    hooks: dict[str, Any]
+    refresh: dict[str, Any]
+    available_targets: list[str]
