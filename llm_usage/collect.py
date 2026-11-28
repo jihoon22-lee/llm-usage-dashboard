@@ -600,9 +600,14 @@ def run(settings, once=False):
                 request = store.state(c, 'refresh_request_id', 0)
                 requested_at = store.state(c, 'refresh_requested', 0)
                 completed = store.state(c, 'refresh_completed_id', 0)
+                refresh_targets = store.state(c, 'refresh_targets')
             now = time.time()
             manual = request > completed
-            collecting = once or manual or now - last_local >= 300
+            targeted = manual and isinstance(refresh_targets, list) and bool(refresh_targets)
+            want_local = (not targeted) or ('local' in refresh_targets)
+            provider_targets = [t for t in refresh_targets if t != 'local'] if targeted else None
+            want_limits = (not targeted) or bool(provider_targets)
+            collecting = once or (manual and want_local) or now - last_local >= 300
             if collecting:
                 with store.connect() as c:
                     store.save_state(c, 'collector', dict(status='collecting', started=now, checked=now))
@@ -622,15 +627,19 @@ def run(settings, once=False):
                     attribute_accounts(store, current_settings, evidence=False)
                 last_local = time.time()
             manual_acked = False
-            if once or manual or now - last_limits >= 300:
+            if once or (manual and want_limits) or now - last_limits >= 300:
                 fast_manual = manual and not once
-                poll_meta = poll_limits(store, current_settings, manual=manual, include_slow=not fast_manual) or {}
+                poll_kwargs = dict(manual=manual, include_slow=not fast_manual)
+                if provider_targets is not None:
+                    poll_kwargs['targets'] = provider_targets
+                poll_meta = poll_limits(store, current_settings, **poll_kwargs) or {}
                 if fast_manual:
                     # Interactive refresh: unblock the web UI as soon as local files and live quotas finish,
                     # then run heavier cloud-session and Codex activity sync immediately after.
                     with store.connect() as c:
                         store.save_state(c, 'refresh_completed_id', request)
                         store.save_state(c, 'refresh_completed', requested_at)
+                        store.save_state(c, 'refresh_targets', None)
                     manual_acked = True
                     from .limits import poll_slow_sources
 
@@ -640,9 +649,10 @@ def run(settings, once=False):
                         claude_accounts=poll_meta.get('claude_accounts'),
                         poll_codex_threads=bool(poll_meta.get('codex_thread_ready')),
                     )
-                from .codex_activity_collect import collect as collect_activity
+                if provider_targets is None or 'codex' in provider_targets:
+                    from .codex_activity_collect import collect as collect_activity
 
-                collect_activity(store, current_settings)
+                    collect_activity(store, current_settings)
                 last_limits = time.time()
                 if current_settings.get('statusline_summary'):
                     write_summaries(store, current_settings)
@@ -662,7 +672,9 @@ def run(settings, once=False):
                         with store.connect() as c:
                             spike = usage_spike(c, current)
                             sources = [dict(r) for r in c.execute('SELECT name,status,detail FROM sources')]
-                            month = store.project_month(c, current, load_pricing(local))
+                            month = store.project_month(
+                                c, current, load_pricing(local), project_aliases=local.get('project_aliases')
+                            )
                         from .config import ended_routes
 
                         notify_evaluate(
@@ -769,6 +781,7 @@ def run(settings, once=False):
                 if manual and not manual_acked:
                     store.save_state(c, 'refresh_completed_id', request)
                     store.save_state(c, 'refresh_completed', requested_at)
+                    store.save_state(c, 'refresh_targets', None)
                 store.prune_history(c)
             if once:
                 return

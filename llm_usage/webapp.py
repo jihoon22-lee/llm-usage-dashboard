@@ -268,6 +268,7 @@ def create_app(config=None):
                 names=config.get('claude_account_names'),
                 ended=ended_routes(config),
                 price_history=config.get('subscription_price_history'),
+                project_aliases=config.get('project_aliases'),
             )
             # The residual's name is a display setting, not part of the cached usage body.
             return jsonify(
@@ -275,6 +276,7 @@ def create_app(config=None):
                     **data,
                     'unpriced_models': unpriced(data, pricing),
                     'project_budgets': config.get('project_budgets') or {},
+                    'project_aliases': config.get('project_aliases') or {},
                     'residual_label': residual_label(),
                 }
                 if 'rows' in data
@@ -294,6 +296,7 @@ def create_app(config=None):
                 subscriptions=active_prices(),
                 ended=ended_routes(config),
                 names=config.get('claude_account_names'),
+                project_aliases=config.get('project_aliases'),
             )
         )
 
@@ -311,9 +314,69 @@ def create_app(config=None):
             abort(400, description='프로젝트 이름을 확인하세요.')
         return jsonify(
             store.project_detail(
-                name, pricing=load_pricing(config), budget=(config.get('project_budgets') or {}).get(name)
+                name,
+                pricing=load_pricing(config),
+                budget=(config.get('project_budgets') or {}).get(name),
+                project_aliases=config.get('project_aliases'),
             )
         )
+
+    @app.post('/api/simulate')
+    def simulate_cost():
+        from .simulator import simulate, validate_substitutions
+
+        body = json_object()
+        try:
+            subs_rules = validate_substitutions(body.get('substitutions'), MODEL_RE)
+            raw_subs = body.get('subscriptions')
+            if raw_subs is None:
+                sub_prices = active_prices()
+            elif isinstance(raw_subs, dict) and len(raw_subs) <= 64:
+                sub_prices = {}
+                for route, val in raw_subs.items():
+                    if (
+                        not isinstance(route, str)
+                        or not ROUTE_RE.fullmatch(route)
+                        or isinstance(val, bool)
+                        or not isinstance(val, (int, float))
+                        or not 0 <= val <= 100000
+                    ):
+                        raise ValueError('구독료 입력이 올바르지 않습니다.')
+                    sub_prices[route] = float(val)
+            else:
+                raise ValueError('구독료 입력이 올바르지 않습니다.')
+            return jsonify(
+                simulate(
+                    store,
+                    period=body.get('period') or '30d',
+                    start=body.get('start'),
+                    end=body.get('end'),
+                    scope=body.get('scope') or None,
+                    substitutions=subs_rules,
+                    pricing=load_pricing(config),
+                    subscriptions=sub_prices,
+                    project_aliases=config.get('project_aliases'),
+                )
+            )
+        except (ValueError, TypeError, OverflowError) as error:
+            refused('simulate', error, '시뮬레이션 조건(기간·모델·비율·구독료)을 확인하세요.')
+
+    @app.get('/api/diagnostics/system')
+    def diagnostics_system():
+        from .diagnostics import system_diagnostics
+
+        return jsonify(system_diagnostics(store))
+
+    @app.post('/api/diagnostics/backup')
+    def diagnostics_backup():
+        from .diagnostics import trigger_manual_backup
+
+        result, wait = trigger_manual_backup(store)
+        if result is None:
+            return jsonify(ok=False, error=f'백업은 {wait}초 뒤에 다시 실행할 수 있습니다.', retry_after=wait), 429
+        if not result.get('ok'):
+            return jsonify(ok=False, backup=result, error=result.get('error') or '백업 실패'), 500
+        return jsonify(ok=True, backup=result)
 
     @app.get('/api/notify/log')
     def notify_log():
@@ -420,6 +483,18 @@ def create_app(config=None):
 
     @app.post('/api/refresh')
     def refresh():
+        from .diagnostics import validate_refresh_targets
+
+        body = payload()
+        targets = None
+        if body is not None:
+            if not isinstance(body, dict):
+                abort(400, description='요청 본문은 JSON 객체여야 합니다.')
+            if 'targets' in body and body['targets'] is not None:
+                try:
+                    targets = validate_refresh_targets(body['targets'])
+                except ValueError as error:
+                    refused('refresh', error, '갱신 대상을 확인하세요.')
         with store.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             requested = store.state(c, 'refresh_requested', 0)
@@ -429,9 +504,10 @@ def create_app(config=None):
             if request_id <= completed_id and time.time() - requested >= 10:
                 requested = time.time()
                 store.save_state(c, 'refresh_requested', requested)
+                store.save_state(c, 'refresh_targets', targets)
                 request_id += 1
                 store.save_state(c, 'refresh_request_id', request_id)
-        return jsonify(accepted=True, requested=requested, request_id=request_id), 202
+        return jsonify(accepted=True, requested=requested, request_id=request_id, targets=targets or ['all']), 202
 
     def persist(patch):
         with config_lock:

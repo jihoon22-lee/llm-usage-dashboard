@@ -18,6 +18,7 @@ LOCAL_KEYS = {
     'value_alert_usd',
     'notify',
     'project_budgets',
+    'project_aliases',
     'ended_subscriptions',
     'claude_account_names',
     'residual_label',
