@@ -44,7 +44,7 @@ asset_names = {
 assert {p.name for p in (root / 'llm_usage/web').iterdir() if p.is_file()} == asset_names
 assets = {'llm_usage/web/' + name: sha256(root / 'llm_usage/web' / name) for name in sorted(asset_names)}
 data_files = {p.relative_to(root).as_posix() for p in (root / 'llm_usage/data').glob('*.json')}
-package_files = {p.relative_to(root).as_posix() for p in (root / 'llm_usage').glob('*.py')} | set(assets) | data_files
+package_files = {p.relative_to(root).as_posix() for p in (root / 'llm_usage').rglob('*.py')} | set(assets) | data_files
 with zipfile.ZipFile(wheel) as archive:
     names = set(archive.namelist())
     (metadata_name,) = [n for n in names if n.endswith('.dist-info/METADATA')]
