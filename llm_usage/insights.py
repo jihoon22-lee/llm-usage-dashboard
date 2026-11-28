@@ -203,83 +203,48 @@ def window_seconds(bucket):
     return None
 
 
-# Windows longer than a day are judged on a longer trailing pace: a 15-minute burst
-# extrapolated over several days raised false "depletes before reset" alerts.
-LONG_WINDOW = 86400
+OBSERVATION_FLAGS = ('identity_unverified', 'locked', 'reset_unparsed')
 
 
-def pace_lookback(bucket):
-    """(trailing seconds, minimum observed minutes) for a bucket's pace and forecast."""
-    span = window_seconds(bucket)
-    return (3 * 3600, 90) if span and span > LONG_WINDOW else (3600, 15)
+def scope_for(row):
+    from .claude_accounts import is_claude
+
+    meta = row.get('scope') or {}
+    if meta.get('role') in ('common', 'model', 'family', 'unknown'):
+        return meta
+    route, bucket = row['route'], row['bucket']
+    if route == 'codex' and ' · ' in bucket:
+        group = bucket.split(' · ')[0]
+        return dict(
+            role='common' if group == 'codex' else 'model',
+            group='common' if group == 'codex' else group,
+            label='공통 한도' if group == 'codex' else group,
+        )
+    if is_claude(route):
+        if bucket in ('five_hour', 'seven_day'):
+            return dict(role='common', group='common', label='공통 한도')
+        if bucket in ('seven_day_opus', 'seven_day_sonnet'):
+            name = bucket.removeprefix('seven_day_')
+            return dict(role='model', group=name, label=name.title())
+        return dict(role='unknown', group=bucket, label=row.get('display_name') or bucket)
+    if route == 'antigravity' and bucket.startswith(('gemini-', '3p-')):
+        family = bucket.split('-')[0]
+        # Numbered split buckets represent distinct pools, not duplicate models.
+        suffix = bucket.rsplit('-', 1)[-1]
+        group = family + ('-' + suffix if suffix.isdigit() else '')
+        return dict(
+            role='family',
+            group=group,
+            label=('Gemini' if family == 'gemini' else '3rd party') + (' ' + suffix if suffix.isdigit() else ''),
+        )
+    return dict(role='common', group='common', label='공통 한도')
 
 
-def quota_forecast(row, now):
-    """Projected depletion from the observed pace; never invents a reset."""
-    pace = row.get('pace_per_hour')
-    remaining = row.get('remaining')
-    resets = row.get('resets')
-    minutes = row.get('pace_minutes')
-    if row.get('status') != 'fresh' or pace is None or remaining is None or not resets or resets <= now:
-        return None
-    if minutes is None or minutes < pace_lookback(row.get('bucket'))[1]:
-        return None
-    seconds_to_deplete = remaining / pace * 3600 if pace > 0 else None
-    projected = remaining - pace * (resets - now) / 3600
-    return dict(
-        per_hour=pace,
-        observed_minutes=minutes,
-        depletes_at=now + seconds_to_deplete if seconds_to_deplete is not None else None,
-        within_window=bool(seconds_to_deplete is not None and now + seconds_to_deplete < resets),
-        projected_remaining=max(0, projected),
-    )
-
-
-def quota_plan(row, now):
-    """Even-pace comparison inside the current window, from its original reset and
-    the window length in the bucket name. Positive 'ahead' means more remains than
-    an even spend would leave; nothing is returned without both values."""
-    span = window_seconds(row.get('bucket'))
-    resets = row.get('resets')
-    remaining = row.get('remaining')
-    if row.get('status') != 'fresh' or not span or not resets or remaining is None or resets <= now:
-        return None
-    elapsed = now - (resets - span)
-    if not 0 <= elapsed <= span:
-        return None
-    expected = 100 * (1 - elapsed / span)
-    return dict(
-        elapsed_fraction=elapsed / span,
-        expected_remaining=expected,
-        ahead=remaining - expected,
-        window_start=resets - span,
-    )
-
-
-def quota_pace(history, now, status, lookback=3600):
-    """(percent/hour, observed minutes) over the trailing lookback of the last
-    uninterrupted segment. Averages away single-sample quantization noise, so
-    the caller can require enough observation before forecasting."""
-    if status != 'fresh':
-        return None
-    segment = []
-    for point in history:
-        if point.get('break_before'):
-            segment = []
-        segment.append(point)
-    if len(segment) < 2 or now - segment[-1]['checked'] > 600:
-        return None
-    end = segment[-1]
-    if end['resets'] is None or end['resets'] <= now:
-        return None
-    points = [p for p in segment if p['checked'] >= end['checked'] - lookback]
-    if len(points) < 2:
-        return None
-    start = points[0]
-    seconds = end['checked'] - start['checked']
-    if seconds < 60 or start['remaining'] is None or end['remaining'] is None:
-        return None
-    return ((start['remaining'] - end['remaining']) * 3600 / seconds, seconds / 60)
+def attach_scopes(rows):
+    """Attach derived window scopes while preserving observation flags."""
+    for row in rows:
+        observed = row.get('scope') or {}
+        row['scope'] = {**{k: observed[k] for k in OBSERVATION_FLAGS if k in observed}, **scope_for(row)}
 
 
 def quota_trends(history, now, status):

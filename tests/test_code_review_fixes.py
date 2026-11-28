@@ -1,6 +1,5 @@
 """Regression tests for code-review security, concurrency, ops, and Python/JS parity fixes."""
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import gzip
 import json
@@ -111,22 +110,6 @@ class StoreAndCollectorFixTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.store = Store(self.root / 'usage.db')
-
-    def test_capacity_history_is_thread_safe_across_clears(self):
-        now = stamp('2026-11-24T12:00:00Z')
-        with self.store.connect() as c:
-            self.store.limit(c, 'codex', 'five_hour', 50.0, now - 3600, now - 7200, 'codex')
-            self.store.event(c, 'e1', now - 5400, 'OpenAI', 'codex', 'gpt-6.2-sol', {'uncached_input': 1000})
-        row = dict(route='codex', bucket='five_hour', source='codex', checked=now - 7200, window_seconds=18000)
-
-        def worker(_):
-            with self.store.connect() as c:
-                out = self.store.capacity_history(c, row, now)
-            self.assertEqual(len(out), 1)
-            self.assertEqual(out[0]['tokens'], 1000)
-
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            list(pool.map(worker, range(24)))
 
     def test_usage_live_uses_explicit_now_parameter(self):
         base = stamp('2026-11-24T09:00:00Z')

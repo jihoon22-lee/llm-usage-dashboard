@@ -119,7 +119,7 @@ for item in blocked['limits']:
             item['note'] = PLAN_NOTE
 row = next(r for r in blocked['limits'] if r['bucket'] == '3p-5h')
 assert row['remaining'] == 90.0 and row['blocked_by']['bucket'] == '3p-weekly', row
-assert row['forecast'], 'fixture must produce a forecast so hiding it is observable'
+assert 'forecast' not in row, row
 stale = fixture(3600)
 assert next(r for r in stale['limits'] if r['bucket'] == '3p-5h')['blocked_by'] is None
 

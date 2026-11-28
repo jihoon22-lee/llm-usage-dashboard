@@ -437,24 +437,22 @@ class InsightTests(unittest.TestCase):
                 self.store.limit(c, 'codex', 'weekly', 70, self.now + 3600, self.now, 'codex')
             result = self.store.limits(self.now)['limits'][0]
             self.assertEqual(len(result['history']), 3)
-            self.assertEqual(result['pace_per_hour'], 60)
-            # Ten observed minutes is below the forecast floor, so the pace is
-            # reported for display but no depletion forecast is produced.
-            self.assertEqual(result['pace_minutes'], 10)
-            self.assertIsNone(result['forecast'])
+            self.assertEqual(result['trends'][0]['decrease_pp'], 10)
+            self.assertEqual(result['trends'][0]['observed_minutes'], 10)
+            self.assertNotIn('forecast', result)
             with self.store.connect() as c:
                 self.store.source(c, 'codex', 'error', 'failure', self.now - 100)
             result = self.store.limits(self.now)['limits'][0]
-            self.assertIsNone(result['pace_per_hour'])
+            self.assertFalse(result['trends'][0]['available'])
             self.assertTrue(result['history'][-1]['break_before'])
             with self.store.connect() as c:
                 self.store.source(c, 'codex', 'ok', '', self.now)
-            self.assertIsNone(self.store.limits(self.now)['limits'][0]['pace_per_hour'])
+            self.assertFalse(self.store.limits(self.now)['limits'][0]['trends'][0]['available'])
             with patch('llm_usage.store.time.time', return_value=self.now + 300), self.store.connect() as c:
                 self.store.limit(c, 'codex', 'weekly', 100, self.now + 7200, self.now + 300, 'codex')
             result = self.store.limits(self.now + 300)['limits'][0]
             self.assertTrue(result['history'][-1]['break_before'])
-            self.assertIsNone(result['pace_per_hour'])
+            self.assertFalse(result['trends'][0]['available'])
             self.assertEqual(self.store.limits(self.now + 8000)['limits'][0]['remaining'], 100)
             self.assertEqual(self.store.limits(self.now + 8000)['limits'][0]['status'], 'stale')
 

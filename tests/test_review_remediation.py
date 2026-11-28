@@ -378,29 +378,6 @@ class FeatureTests(Base):
         )
         self.assertAlmostEqual(early['budget_ratio'], early['cost'] / 40)
 
-    def test_capacity_history_per_finished_window(self):
-        now = stamp('2026-10-03T03:00:00Z')
-        span = 18000
-        with patch('llm_usage.store.time.time', return_value=now), self.store.connect() as c:
-            for w, (reset, lowest, tokens) in enumerate(((now - 3 * span, 60, 4_000_000), (now - span, 80, 1_000_000))):
-                for i, remaining in enumerate((100, 90, lowest)):
-                    self.store.limit(
-                        c,
-                        'claude-code',
-                        'five_hour',
-                        remaining,
-                        reset + (1 if i == 1 else 0),
-                        reset - span + 600 + i * 600,
-                        'claude-oauth',
-                    )
-                self.store.event(c, f'w{w}', reset - 1000, 'Anthropic', 'claude-code', 'claude-x', dict(output=tokens))
-            self.store.limit(c, 'claude-code', 'five_hour', 97, now + span - 60, now - 60, 'claude-oauth')
-            self.store.source(c, 'claude-oauth', 'ok', '', now - 60)
-        row = next(r for r in self.store.limits(now)['limits'] if r['bucket'] == 'five_hour')
-        self.assertEqual(
-            [(h['used_points'], h['tokens_per_point']) for h in row['capacity_history']], [(40, 100_000), (20, 50_000)]
-        )
-
     def test_notification_history_endpoint_has_no_secrets(self):
         import socket
         from types import SimpleNamespace

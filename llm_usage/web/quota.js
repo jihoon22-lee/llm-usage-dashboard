@@ -150,7 +150,6 @@ function renderLimits(data){
   if(editingQuota)return `<div class="quota-edit-row" data-order-route="${route}"><button type="button" data-move="${route}" data-dir="-1" aria-label="위로">↑</button><span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span><span class="overview-value">${value}</span><button type="button" data-move="${route}" data-dir="1" aria-label="아래로">↓</button></div>`;
   return `<button type="button" class="quota-overview-row" data-quota="${route}" aria-controls="quota-${route}" aria-expanded="${selectedQuota===route}"><span class="overview-name">${gauge}<span><strong>${shortService[route]}</strong><small class="overview-status ${state}">${esc(stateLabel)}</small></span></span><span class="overview-value">${value}</span><span aria-hidden="true">${selectedQuota===route?'−':'＋'}</span></button>`;
  }).join('');
- $('quota-strip').hidden=true;$('quota-strip').replaceChildren();
  // An exhausted quota's reset is what the user waits for, so it is never cut off;
  // a window blocked by its exhausted parent is left out because its reset frees nothing.
  // A window of the conditions before an account or plan change resets nothing now.

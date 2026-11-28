@@ -1,4 +1,4 @@
-"""Derived signals over stored observations: quota events, capacity and usage spikes.
+"""Derived signals over stored observations: quota events and usage spikes.
 
 Every value here is computed from recorded observations; nothing is filled in for
 a window, hour or bucket that was not observed.
@@ -39,27 +39,6 @@ def quota_events(c, route, bucket, source, now, days=EVENT_DAYS, since=0):
         exhausted=len(exhausted),
         last_exhausted=exhausted[-1]['ts'] if exhausted else None,
         recent=events[-8:],
-    )
-
-
-def capacity(row, min_used=5):
-    """Tokens and requests one percentage point bought in the current window, and
-    what the remaining percentage would buy at that rate. Needs a window that
-    started full and has used at least min_used points; an estimate, not a quota."""
-    window = row.get('window') or {}
-    remaining = row.get('remaining')
-    if row.get('status') != 'fresh' or remaining is None or not window.get('open') or not window.get('tokens'):
-        return None
-    plan = row.get('plan')
-    used = 100 - remaining
-    if used < min_used or plan is None:
-        return None
-    per_point = window['tokens'] / used
-    return dict(
-        tokens_per_point=per_point,
-        remaining_tokens=per_point * remaining,
-        remaining_requests=(window.get('requests') or 0) / used * remaining,
-        used_points=used,
     )
 
 

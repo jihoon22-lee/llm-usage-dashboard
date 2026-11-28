@@ -415,21 +415,12 @@ class DetailTests(unittest.TestCase):
             self.assertAlmostEqual(result['totals']['cost'], usage['cost']['period'])
             self.assertEqual(result['totals']['cache_creation_1h'], 20)
 
-    def test_project_sessions_and_finished_quota_windows_count_api_requests_only(self):
+    def test_project_sessions_count_api_requests_only(self):
         self.collect(message())
         project = self.store.project_detail('project', now=NOW, pricing=RATES)
         self.assertEqual((project['sessions'][0]['requests'], project['sessions'][0]['tokens']), (1, 520))
         self.assertEqual(sum(row['requests'] for row in project['models']), 1)
         self.assertEqual(sum(row['requests'] for row in project['daily']), 1)
-        with self.store.connect() as c:
-            c.execute(
-                'INSERT INTO limit_history VALUES (?,?,?,?,?,?)',
-                ('claude-code', 'window', NOW - 10, 50, NOW, 'fixture'),
-            )
-            history = self.store.capacity_history(
-                c, dict(route='claude-code', bucket='window', source='fixture', window_seconds=86400, checked=NOW), NOW
-            )
-        self.assertEqual((history[0]['requests'], history[0]['tokens']), (1, 520))
 
     def test_legacy_normalization_retains_parent_account_and_copies_advisor_links(self):
         value = message()

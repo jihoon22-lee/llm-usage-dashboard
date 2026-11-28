@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from llm_usage.collect import collect_file, collect_local, sd_notify
-from llm_usage.insights import pace_lookback, quota_forecast, quota_plan
+from llm_usage.insights import window_seconds
 from llm_usage.sqlite_ro import open_readonly
 from llm_usage.store import Store, project_label, repository_root
 
@@ -208,30 +208,11 @@ class ProjectLabelTests(unittest.TestCase):
         self.assertEqual(project_label('/home'), 'home')
 
 
-class ForecastWindowTests(unittest.TestCase):
-    def test_long_windows_need_a_longer_observation(self):
-        self.assertEqual(pace_lookback('seven_day'), (3 * 3600, 90))
-        self.assertEqual(pace_lookback('five_hour'), (3600, 15))
-        now = 1000000.0
-        row = dict(
-            bucket='seven_day',
-            status='fresh',
-            pace_per_hour=11.8,
-            pace_minutes=15,
-            remaining=82,
-            resets=now + 3 * 86400,
-        )
-        self.assertIsNone(quota_forecast(row, now))
-        self.assertTrue(quota_forecast({**row, 'pace_minutes': 120}, now)['within_window'])
-        self.assertIsNotNone(quota_forecast({**row, 'bucket': 'five_hour', 'resets': now + 3600}, now))
-
-    def test_even_pace_plan(self):
-        now = 1000000.0
-        plan = quota_plan(dict(bucket='five_hour', status='fresh', remaining=70, resets=now + 3600 * 3), now)
-        self.assertAlmostEqual(plan['elapsed_fraction'], 0.4)
-        self.assertAlmostEqual(plan['ahead'], 10)
-        self.assertIsNone(quota_plan(dict(bucket='3p-unknown', status='fresh', remaining=70, resets=now + 60), now))
-        self.assertIsNone(quota_plan(dict(bucket='five_hour', status='stale', remaining=70, resets=now + 60), now))
+class WindowLengthTests(unittest.TestCase):
+    def test_known_window_lengths(self):
+        self.assertEqual(window_seconds('seven_day'), 604800)
+        self.assertEqual(window_seconds('five_hour'), 18000)
+        self.assertIsNone(window_seconds('3p-unknown'))
 
 
 class StatusPresentationTests(unittest.TestCase):

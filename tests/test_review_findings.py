@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from llm_usage import notify, planning
+from llm_usage import insights, notify
 from llm_usage.collect import collect_local
 from llm_usage.pricing import BUILTIN, entry_key, estimate, load_pricing, rate_for
 from llm_usage.sqlite_ro import open_readonly
@@ -168,7 +168,7 @@ class PlanningTests(unittest.TestCase):
                 scope={'identity_unverified': True},
             )
         ]
-        planning.enrich(rows, NOW)
+        insights.attach_scopes(rows)
         self.assertEqual((rows[0]['scope']['role'], rows[0]['scope'].get('identity_unverified')), ('common', True))
         # An unverified local reading raises no quota notice.
         self.assertEqual(notify.quota_messages(rows, {}, 10, NOW)[0], [])
