@@ -251,42 +251,6 @@ function niceStep(max){
 }
 // Relative time reads at a glance; the exact KST time stays in the tooltip.
 const ago=t=>{const s=Math.max(0,Date.now()/1000-t);return s<60?'방금':s<3600?`${Math.floor(s/60)}분 전`:s<86400?`${Math.floor(s/3600)}시간 전`:when(t);};
-// The window most likely to stop work, from current values only: a blocked window or one
-// forecast to run out before its reset comes first (soonest first), then the lowest
-// remaining expected at the reset (the forecast when there is one, else the current value).
-function urgencyKey(r){
- if(r.blocked_by)return [0,r.blocked_by.seconds_to_reset??Infinity];
- const f=r.forecast;
- if(f&&f.within_window)return [1,f.depletes_at??Infinity];
- return [2,f?f.projected_remaining:r.remaining];
-}
-function mostUrgent(rows){
- const fresh=rows.filter(r=>!modelQuota(r)&&r.status==='fresh'&&r.remaining!=null);
- return fresh.sort((a,b)=>{const x=urgencyKey(a),y=urgencyKey(b);return x[0]-y[0]||x[1]-y[1];})[0]||null;
-}
-function urgencyText(r){
- if(r.blocked_by)return `${quotaLabel(r)} 사용 불가 · 주간 초기화 ${left(r.blocked_by.seconds_to_reset)}`;
- const f=r.forecast;
- if(f&&f.within_window)return `${quotaLabel(r)} ${percent(r.remaining)} · 초기화 전 소진 예상 ${when(f.depletes_at)}`;
- return `${quotaLabel(r)} ${percent(r.remaining)}${f?` · 초기화 시 약 ${percent(f.projected_remaining)} 예상`:''} · ${r.resets?'초기화 '+left(r.seconds_to_reset):'초기화 정보 미제공'}`;
-}
-// Which service to reach for now: services with room in their tightest current window,
-// those whose long window (a day or more) resets within a day with plenty left first —
-// that remainder is lost at the reset — then by room.
-function recommendations(groups,minimum=20){
- const items=[];
- for(const g of groups){
-  const tight=availability(g.rows);
-  if(!tight||usable(tight)<minimum)continue;
-  // A service already on course to run out before a reset is not a place to add work.
-  if(g.rows.some(r=>!modelQuota(r)&&r.status==='fresh'&&r.forecast&&r.forecast.within_window))continue;
-  const expiring=g.rows.find(r=>!modelQuota(r)&&r.status==='fresh'&&!r.blocked_by&&r.remaining>=30
-   &&(r.window_seconds||0)>=86400&&r.seconds_to_reset!=null&&r.seconds_to_reset<=86400);
-  items.push({route:g.route,value:usable(tight),expiring,
-   note:expiring?`${bucketName(expiring)} ${percent(expiring.remaining)} 남음 · ${left(expiring.seconds_to_reset).replace(' 남음','')} 후 초기화`:''});
- }
- return items.sort((a,b)=>(!!b.expiring-!!a.expiring)||b.value-a.value);
-}
 // Weekdays and weekend days (KST calendar days) in [start, end), stopping at now.
 function dayKinds(startIso,endIso,nowSec){
  const start=Date.parse(startIso),end=Math.min(Date.parse(endIso),nowSec*1000);
@@ -335,8 +299,7 @@ function currentLimits(data,now,offline=false){
   const old=offline||r.checked==null||r.checked>now+120||now-r.checked>ttl||(r.resets&&r.resets<=now);
   if(old&&r.status==='fresh')r.status='stale';
   if(r.status!=='fresh'){
-   r.stale=true;r.forecast=null;r.capacity=null;r.plan=null;r.pace_per_hour=null;
-   r.paces={recent:{per_hour:null,reason:'최신 한도 확인 필요'},baseline:{per_hour:null,reason:'최신 한도 확인 필요'}};
+   r.stale=true;
    r.blocked_by=null;
   }
   return r;
@@ -357,7 +320,6 @@ function currentLimits(data,now,offline=false){
  return {...data,now,limits:rows,resources:{...data.resources,items},_offline:offline};
 }
 
-const duration=s=>{if(s==null)return '추정 보류';if(s<=0)return '현재 소진';if(s<60)return '1분 미만';const minutes=Math.round(s/60);return `${Math.floor(minutes/60)?Math.floor(minutes/60)+'시간 ':''}${minutes%60}분`;};
 // Resources and reset grants that run out within `within` seconds (default a day). Past expiry,
 // folded rows (previous account, expired, unlinked duplicates), spending allowances (their date
 // is a renewal), used grants and empty balances are skipped. Grants of one resource ending in the

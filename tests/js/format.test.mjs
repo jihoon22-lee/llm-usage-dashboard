@@ -10,7 +10,7 @@ const source=readFileSync(new URL('../../llm_usage/web/format.js',import.meta.ur
 // script itself hands them back. No window/document exists here: any DOM use fails.
 const f=vm.runInNewContext(source+`;({esc,fmt,compact,when,left,usd,percent,total,modelTotal,agyBucket,bucketName,
   quotaLabel,quotaValue,usable,availability,levelOf,modelQuota,budgetState,scopeText,niceStep,ago,pctChange,sourceGroup,agyWindows,
-  mostUrgent,urgencyText,recommendations,dayKinds,estimateWith,costCsvFields,currentLimits,duration,soon,stamp,expiringResources,observedDecrease,resourceGroups,
+  dayKinds,estimateWith,costCsvFields,currentLimits,soon,stamp,expiringResources,observedDecrease,resourceGroups,
   familyOf,setClaudeAccounts,multiClaude,accountLabel,serviceFull,serviceShort,sourceName,accountWhere,amountText,shortId,sourceBase,otherAccounts,RESIDUAL,setResidualName,residualText,groupSlots,stackRects,rankLevels,priorChange,
   reasoningKnown,callText,cacheTTLText,usageDetailsText,detailCsvFields,consumptionNumber,consumptionPercent,consumptionGroups,sourceProblems,weekName,kstToday})`,
   {Intl,Date,Math,Number,String,Set,Map,JSON,RegExp,Object,Array});
@@ -76,10 +76,10 @@ test('reset countdown and relative time',()=>{
 test('cached quotas and countdowns age without mutating observations',()=>{
  const now=10000;
  const data={now,stale_seconds:600,limits:[{route:'codex',bucket:'weekly',status:'fresh',checked:now,remaining:80,resets:now+1800,
-  seconds_to_reset:1800,forecast:{within_window:true},paces:{recent:{per_hour:2}}}]};
+  seconds_to_reset:1800}]};
  const view=f.currentLimits(data,now+7200,true);
  assert.equal(view.limits[0].status,'stale');assert.equal(view.limits[0].remaining,80);
- assert.equal(view.limits[0].seconds_to_reset,0);assert.equal(view.limits[0].forecast,null);
+ assert.equal(view.limits[0].seconds_to_reset,0);
  assert.equal(data.limits[0].status,'fresh');assert.equal(data.limits[0].seconds_to_reset,1800);
  assert.equal(f.currentLimits(data,now+150).limits[0].status,'fresh');
  assert.equal(f.currentLimits(data,now+700).limits[0].status,'stale');
@@ -99,44 +99,10 @@ test('resource expiry and spending-condition age do not imply remaining funds or
  assert.equal(f.currentLimits(resets,1200).resources.items[0].status,'fresh'); // already-accounted historical grant
 });
 
-test('conditional duration rounds away floating point noise instead of losing a minute',()=>{
- assert.equal(f.duration(5399.999999999),'1시간 30분');
- assert.equal(f.duration(null),'추정 보류');assert.equal(f.duration(0),'현재 소진');
-});
-
 test('the model total is the same total the cards and charts use',()=>{
   const v={uncached_input:1,cached_input:2,output:3,cache_creation:4};
   assert.equal(f.modelTotal(v),10);
   assert.equal(f.total(v),10);
-});
-
-const row=(over)=>({route:'codex',bucket:'codex · 10080분',status:'fresh',remaining:50,resets:2e9,seconds_to_reset:3600,...over});
-
-test('the most urgent window is a blocked or depleting one, then the lowest expected at reset',()=>{
-  const weekly=row({remaining:45,seconds_to_reset:5*86400});
-  const fast=row({route:'claude-code',bucket:'five_hour',remaining:80,forecast:{within_window:true,depletes_at:1.9e9,projected_remaining:0}});
-  const blocked=row({route:'devin',bucket:'daily',remaining:100,blocked_by:{seconds_to_reset:7200}});
-  const easy=row({route:'claude-code',bucket:'seven_day',remaining:60,forecast:{within_window:false,projected_remaining:30}});
-  assert.equal(f.mostUrgent([weekly,fast,easy]),fast);
-  assert.equal(f.mostUrgent([weekly,fast,blocked]),blocked);
-  assert.equal(f.mostUrgent([weekly,easy]),easy);  // 30% expected at reset beats 45% now
-  assert.equal(f.mostUrgent([row({status:'stale',remaining:1})]),null);
-  assert.match(f.urgencyText(fast),/초기화 전 소진 예상/);
-  assert.match(f.urgencyText(easy),/초기화 시 약 30.0% 예상/);
-});
-
-test('recommendations put a long window that is about to reset with room left first',()=>{
-  const groups=[
-    {route:'claude-code',rows:[row({route:'claude-code',bucket:'five_hour',remaining:90,window_seconds:18000})]},
-    {route:'codex',rows:[row({remaining:60,window_seconds:604800,seconds_to_reset:20*3600})]},
-    {route:'devin',rows:[row({route:'devin',bucket:'daily',remaining:10,window_seconds:86400})]},
-  ];
-  const result=f.recommendations(groups);
-  assert.deepEqual([...result.map(r=>r.route)],['codex','claude-code']);
-  assert.match(result[0].note,/60.0% 남음/);
-  assert.equal(result[1].note,'');
-  groups[1].rows[0].forecast={within_window:true,depletes_at:1.9e9};
-  assert.deepEqual([...f.recommendations(groups).map(r=>r.route)],['claude-code']);
 });
 
 test('weekday and weekend days stop at now',()=>{

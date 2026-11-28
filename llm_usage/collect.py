@@ -1187,8 +1187,25 @@ def run(settings, once=False):
                     attribute_aside(store, current_settings)
                     attribute_accounts(store, current_settings, evidence=False)
                 last_local = time.time()
+            manual_acked = False
             if once or manual or now - last_limits >= 300:
-                poll_limits(store, current_settings, manual=manual)
+                fast_manual = manual and not once
+                poll_meta = poll_limits(store, current_settings, manual=manual, include_slow=not fast_manual) or {}
+                if fast_manual:
+                    # Interactive refresh: unblock the web UI as soon as local files and live quotas finish,
+                    # then run heavier cloud-session and Codex activity sync immediately after.
+                    with store.connect() as c:
+                        store.save_state(c, 'refresh_completed_id', request)
+                        store.save_state(c, 'refresh_completed', requested_at)
+                    manual_acked = True
+                    from .limits import poll_slow_sources
+
+                    poll_slow_sources(
+                        store,
+                        current_settings,
+                        claude_accounts=poll_meta.get('claude_accounts'),
+                        poll_codex_threads=bool(poll_meta.get('codex_thread_ready')),
+                    )
                 from .codex_activity_collect import collect as collect_activity
 
                 collect_activity(store, current_settings)
@@ -1315,7 +1332,7 @@ def run(settings, once=False):
                     last_beat = time.time()
                     store.save_state(c, 'collector', dict(status='idle', checked=last_beat))
                 # A request arriving during these calls stays pending for the next loop.
-                if manual:
+                if manual and not manual_acked:
                     store.save_state(c, 'refresh_completed_id', request)
                     store.save_state(c, 'refresh_completed', requested_at)
                 store.prune_history(c)

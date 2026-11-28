@@ -287,19 +287,13 @@ th button {background:none; color:inherit; padding:0; border-radius:0; font:inhe
 .bucket-detail>summary{font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:4px 0;list-style-position:inside}
 .bucket-detail>summary small{margin-left:6px}
 .bucket-detail[open]>summary{margin-bottom:4px}
-.plan,.capacity,.quota-events{font-size:var(--fs-xs);margin-top:6px}
-.capacity small{display:block;color:var(--muted);font-size:var(--fs-xs)}
+.quota-events{font-size:var(--fs-xs);margin-top:6px}
 progress.level-mid::-webkit-progress-value{background:var(--meter-mid)}
 progress.level-low::-webkit-progress-value{background:var(--meter-low)}
 progress.level-mid::-moz-progress-bar{background:var(--meter-mid)}
 progress.level-low::-moz-progress-bar{background:var(--meter-low)}
 progress.level-mid{accent-color:var(--meter-mid)}
 progress.level-low{accent-color:var(--meter-low)}
-.quota-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:0 0 14px}
-.quota-strip[hidden]{display:none}
-.quota-strip>div{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 14px}
-.quota-strip span{display:block;font-size:var(--fs-xs);color:var(--muted)}
-.quota-strip strong{display:block;font-size:var(--fs-xs);margin-top:3px;font-variant-numeric:tabular-nums}
 .ring{width:22px;height:22px;flex:none}
 .ring-bg,.ring-fg{fill:none;stroke-width:4}
 .ring-bg{stroke:var(--line)}
@@ -320,7 +314,6 @@ progress.level-low{accent-color:var(--meter-low)}
 .quota-line text,.quota-bars text{font-size:var(--fs-xs);fill:var(--muted)}
 .quota-line .quota-end{font-weight:700;fill:var(--ink);font-size:var(--fs-sm)}
 .quota-break{stroke:var(--border);stroke-dasharray:3 4}
-.quota-line .quota-forecast{stroke:var(--warning-ink);stroke-dasharray:5 4;stroke-width:2}
 #reset-timeline:empty{display:none}
 .reset-schedule{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);padding:14px 18px 8px;margin:0 0 16px}
 .reset-schedule h3{margin:0;font-size:var(--fs-xs);color:var(--muted);font-weight:600}
@@ -338,8 +331,7 @@ progress.level-low{accent-color:var(--meter-low)}
 .quota-blocked-note{font-size:var(--fs-xs);color:var(--warning-ink);display:block;margin-top:2px}
 .quota-bars rect{fill:var(--chart-1)}
 .badge.low{background:var(--error-bg);color:var(--error-ink);margin-left:5px}
-.forecast,.window-usage{font-size:var(--fs-xs);margin-top:7px}
-.forecast.warn strong,.forecast.warn{color:var(--error-ink)}
+.window-usage{font-size:var(--fs-xs);margin-top:7px}
 .window-usage strong{color:var(--ink)}
 .heat-grid{display:grid;grid-template-columns:26px repeat(24,minmax(0,1fr));gap:2px;align-items:center;margin:6px 0}
 .heat-axis{font-size:var(--fs-xs);color:var(--muted);text-align:center;white-space:nowrap}
@@ -657,8 +649,7 @@ details.source-group[open]>summary{margin-bottom:-8px}
 .quota-quiet-toggle>summary{width:max-content;cursor:pointer}
 /* Values a source does not report (reasoning on Claude Code/Devin) read as not provided, not as 0. */
 .na-text{color:var(--muted);font-size:var(--fs-xs)}
-/* Overview: risk-ordered strip, recommended order and the reset axis. */
-.quota-strip span small{font-size:var(--fs-xs);margin-left:4px;opacity:.8}
+/* Overview: reset axis. */
 .reset-scale{margin-top:6px}
 .reset-axis{position:relative;height:16px}
 .reset-tick{position:absolute;top:0;font-style:normal}

@@ -101,8 +101,7 @@ async function refresh(manual=false){
     const collect=manual||queuedManual;manual=false;queuedManual=false;
     $('error').hidden=true;$('updated').textContent='불러오는 중…';
     try{
-     // The token is only needed to write; an unreachable server still shows the last data copy.
-     if(!csrf){try{const b=await api('/api/bootstrap');csrf=b.csrf;applyRefreshMs((b.refresh_seconds||300)*1000);}catch(error){if(collect)throw error;}}
+     // CSRF is only required for writes; read refreshes avoid a serial /api/bootstrap round-trip.
      if(collect){
       const b=await api('/api/bootstrap');csrf=b.csrf;applyRefreshMs((b.refresh_seconds||300)*1000);
       const job=await api('/api/refresh',{});$('updated').textContent='수집 요청 중…';
@@ -118,6 +117,8 @@ async function refresh(manual=false){
      activeQuery=query().toString();queued=false;
      const core=query();core.set('sections','core');coreController=new AbortController();
      const sources={core:{},limits:limitsReadSource()};
+     // Start 개요 alongside /api/usage and /api/limits instead of waiting in a serial waterfall.
+     if(currentView==='overview')void loadOverview(true);
      const [usage,limits]=await Promise.all([api('/api/usage?'+core,undefined,undefined,{signal:coreController.signal,source:sources.core}),
        api('/api/limits',undefined,undefined,{signal:coreController.signal,source:sources.limits})]);
      if(activeQuery!==query().toString()){queued=true;continue;}
@@ -131,7 +132,6 @@ async function refresh(manual=false){
      if(INSIGHT_VIEWS.includes(currentView)&&(currentView!=='usage'||usageView==='tokens'))await loadInsights();
      if(currentView==='usage'&&usageView!=='tokens')void loadCodexView(true);
      if(currentView==='status')loadNotifyLog();
-     if(currentView==='overview')void loadOverview(true);
      refreshFailed=false;renderDataStatus();
     }catch(e){
      if(activeQuery!==query().toString())queued=true;
@@ -142,6 +142,7 @@ async function refresh(manual=false){
  })();return pending;
 }
 function applyRefreshMs(ms){refreshMs=ms;$('auto-label').textContent=(ms>=60000?`${Math.round(ms/60000)}분`:`${Math.round(ms/1000)}초`)+' 자동 갱신';}
+{const meta=Number(document.querySelector('meta[name="llm-refresh"]')?.content);if(Number.isFinite(meta)&&meta>=30)applyRefreshMs(meta*1000);}
 function schedule(){clearTimeout(timer);if($('auto').checked&&!document.hidden)timer=setTimeout(()=>refresh(),refreshMs);}
 $('theme').value=window.LLMTheme.choice;
 $('theme').addEventListener('change',()=>window.LLMTheme.set($('theme').value));

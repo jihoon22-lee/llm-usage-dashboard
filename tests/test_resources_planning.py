@@ -1,6 +1,5 @@
 """Resource/decision scenarios, isolated from credentials, billing and live APIs."""
 
-import copy
 import json
 from io import BytesIO
 import socket
@@ -11,7 +10,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from llm_usage.limits import codex_limits, claude_limits, claude_cli_version, claude_headers, poll_claude_resources
-from llm_usage.planning import decide, plan
 from llm_usage.resources import (
     Conflict,
     account,
@@ -109,14 +107,14 @@ class ResourcesPlanningTests(unittest.TestCase):
         self.assertEqual(item['amount'], 2)
         self.assertFalse(item['details_known'])
 
-    def test_account_switch_breaks_pace_and_manual_ownership(self):
+    def test_account_switch_breaks_history_and_manual_ownership(self):
         for minute in range(20, 0, -5):
             self.codex(self.now - minute * 60, 90, 90)
         manual = write_manual(self.store, self.manual())
         self.codex(self.now, 30, 30, owner='B')
         data = self.store.limits(self.now)
         row = next(r for r in data['limits'] if r['bucket'] == 'codex · 300분')
-        self.assertIsNone(row['paces']['recent']['per_hour'])
+        self.assertFalse(row['trends'][0]['available'])
         self.assertEqual(len(row['history']), 1)
         item = next(r for r in data['resources']['items'] if r['id'] == manual['id'])
         self.assertEqual(item['status'], 'previous_account')
@@ -202,17 +200,6 @@ class ResourcesPlanningTests(unittest.TestCase):
         with self.store.connect() as c:
             self.assertEqual(account(c, 'codex')['since'], self.now)
 
-    def test_two_hour_job_binds_on_weekly_before_session(self):
-        result = plan(self.paced(), 'codex', hours=2)
-        self.assertEqual(result['state'], 'shortage')
-        self.assertEqual(result['bottleneck'], 'codex · 10080분')
-        self.assertAlmostEqual(result['seconds'], 5400)
-
-    def test_partial_stale_required_quota_does_not_recommend_service(self):
-        data = self.paced()
-        next(r for r in data['limits'] if r['bucket'] == 'codex · 10080분')['status'] = 'stale'
-        self.assertEqual(decide(data, 'codex')['state'], 'unknown')
-
     def test_partial_response_does_not_leave_missing_window_fresh(self):
         self.paced()
         with self.store.connect() as c:
@@ -229,7 +216,6 @@ class ResourcesPlanningTests(unittest.TestCase):
         weekly = next(r for r in data['limits'] if r['bucket'] == 'codex · 10080분')
         self.assertEqual(weekly['status'], 'unavailable')
         self.assertEqual(weekly['remaining'], 12)
-        self.assertEqual(decide(data, 'codex')['state'], 'unknown')
 
     def test_credit_only_response_is_a_successful_resource_read(self):
         with self.store.connect() as c:
@@ -242,65 +228,7 @@ class ResourcesPlanningTests(unittest.TestCase):
             self.store.source(c, 'codex', 'ok' if count else 'unavailable', checked=self.now)
         self.assertEqual(self.item('workspace-credits')['status'], 'fresh')
 
-    def test_expired_snapshot_cannot_recommend_even_if_status_says_fresh(self):
-        data = self.paced()
-        self.assertEqual(decide(data, 'codex', now=self.now + 7200)['state'], 'unknown')
-
-    def test_idle_is_not_unlimited_capacity(self):
-        for minute in range(30, -1, -5):
-            self.codex(self.now - minute * 60, 80, 80)
-        data = self.store.limits(self.now)
-        self.assertEqual(decide(data, 'codex')['state'], 'unknown')
-        self.assertIsNone(next(r for r in data['limits'] if r['route'] == 'codex')['capacity'])
-
-    def test_recent_burst_is_not_hidden_by_three_hour_average(self):
-        for minute in range(180, -1, -5):
-            value = 50 if minute >= 15 else 40 + 10 * minute / 15
-            self.codex(self.now - minute * 60, value, value)
-        row = next(r for r in self.store.limits(self.now)['limits'] if r['bucket'] == 'codex · 10080분')
-        self.assertEqual(row['pace_change'], 'faster')
-        self.assertAlmostEqual(row['paces']['recent']['per_hour'], 20)
-        self.assertAlmostEqual(row['paces']['baseline']['per_hour'], 10 / 3)
-
-    def test_reset_inside_job_does_not_invent_next_window(self):
-        data = self.paced()
-        for row in data['limits']:
-            if row['route'] == 'codex':
-                row['remaining'] = 90
-                row['resets'] = self.now + 1800
-        self.assertEqual(decide(data, 'codex')['state'], 'reset_pending')
-
-    def test_another_window_resetting_sooner_does_not_hide_a_shortage(self):
-        data = self.paced()
-        for row in data['limits']:
-            if row['bucket'] == 'codex · 300분':
-                row['remaining'] = 90
-                row['resets'] = self.now + 1800
-        # The 5-hour window resets in half an hour; the weekly one (12% left at 8%/h) still
-        # runs out in an hour and a half, inside the two planned hours.
-        result = decide(data, 'codex')
-        self.assertEqual((result['state'], result['bottleneck']), ('shortage', 'codex · 10080분'))
-        self.assertAlmostEqual(result['seconds'], 5400, delta=60)
-
-    def test_specific_model_zero_does_not_hide_usable_other_model(self):
-        for minute in range(30, -1, -5):
-            with self.store.connect() as c:
-                claude_limits(
-                    self.store,
-                    c,
-                    {
-                        'five_hour': dict(utilization=20 - minute / 30, resets_at=self.now + 14400),
-                        'seven_day': dict(utilization=20 - minute / 30, resets_at=self.now + 86400),
-                        'seven_day_opus': dict(utilization=100, resets_at=self.now + 86400),
-                    },
-                    self.now - minute * 60,
-                )
-        data = self.store.limits(self.now)
-        self.assertEqual(decide(data, 'claude-code', 'opus')['state'], 'shortage')
-        self.assertEqual(decide(data, 'claude-code', 'sonnet')['state'], 'room')
-        self.assertEqual(decide(data, 'claude-code', 'common')['state'], 'unknown')
-
-    def test_explicitly_absent_optional_model_window_is_not_a_permanent_block(self):
+    def test_explicitly_absent_optional_model_window_is_marked_not_applicable(self):
         for minute in range(30, -1, -5):
             with self.store.connect() as c:
                 claude_limits(
@@ -314,28 +242,9 @@ class ResourcesPlanningTests(unittest.TestCase):
                     self.now - minute * 60,
                 )
         data = self.store.limits(self.now)
-        self.assertEqual(decide(data, 'claude-code', 'opus')['state'], 'room')
         old = next(r for r in data['limits'] if r['bucket'] == 'seven_day_opus')
         self.assertTrue(old['not_applicable'])
         self.assertEqual(old['remaining'], 0)
-
-    def test_codex_additional_model_quota_participates_in_decision(self):
-        data = self.paced()
-        row = copy.deepcopy(next(r for r in data['limits'] if r['bucket'] == 'codex · 300분'))
-        row.update(
-            bucket='special · 300분', remaining=0, scope={'role': 'model', 'group': 'special', 'label': 'Special'}
-        )
-        data['limits'].append(row)
-        self.assertEqual(decide(data, 'codex', 'special')['seconds'], 0)
-
-    def test_provider_block_overrides_positive_percent_without_changing_it(self):
-        data = self.paced()
-        row = next(r for r in data['limits'] if r['bucket'] == 'codex · 300분')
-        row['scope']['locked'] = True
-        decision = decide(data, 'codex')
-        self.assertEqual(decision['state'], 'shortage')
-        self.assertTrue(decision['provider_blocked'])
-        self.assertEqual(row['remaining'], 40)
 
     def test_claude_money_and_balance_are_separate_and_zero_is_known(self):
         with self.store.connect() as c:
@@ -411,11 +320,6 @@ class ResourcesPlanningTests(unittest.TestCase):
         self.assertNotIn('usage_conditions', cloud)
         self.assertEqual(cloud['expires'], self.now + 86400)
         self.assertEqual(self.item('prepaid-credits')['amount'], 0)
-        from llm_usage.planning import fallback_resources
-
-        self.assertEqual(
-            fallback_resources(self.store.limits(self.now), 'claude-code', 'opus', ['seven_day'], self.now), []
-        )
 
     def test_cloud_missing_is_not_zero_and_does_not_create_an_unowned_promotion(self):
         with self.store.connect() as c:
@@ -552,92 +456,6 @@ class ResourcesPlanningTests(unittest.TestCase):
             ]
             poll_claude_resources(self.store, cfg)
             self.assertEqual(opener.return_value.open.call_count, 2)
-
-    def test_credit_balance_cannot_bypass_disabled_or_spent_cap(self):
-        from llm_usage.planning import fallback_resources
-
-        for enabled, remaining in ((False, 30), (True, 0)):
-            with self.subTest(enabled=enabled, remaining=remaining):
-                data = {
-                    'resources': {
-                        'items': [
-                            dict(
-                                id='balance',
-                                route='claude-code',
-                                label='크레딧',
-                                kind='usage_credit',
-                                origin='auto',
-                                status='fresh',
-                                active_account=True,
-                                amount=50,
-                                unit='USD',
-                                scope='subscription',
-                            ),
-                            dict(
-                                id='cap',
-                                route='claude-code',
-                                label='지출',
-                                kind='usage_credit',
-                                origin='auto',
-                                status='fresh',
-                                active_account=True,
-                                allowance=True,
-                                amount=remaining,
-                                unit='USD',
-                                enabled=enabled,
-                                spend_remaining=remaining,
-                            ),
-                        ]
-                    }
-                }
-                result = fallback_resources(data, 'claude-code', 'sonnet', ['seven_day'], self.now)
-                self.assertFalse(result[0]['can_resolve'])
-
-    def test_api_credit_is_not_subscription_fallback(self):
-        write_manual(self.store, {**self.manual(), 'kind': 'api_credit', 'scope': 'api', 'unit': 'USD'})
-        from llm_usage.planning import fallback_resources
-
-        self.assertEqual(fallback_resources(self.store.limits(self.now), 'codex', 'common', ['weekly'], self.now), [])
-
-    def test_partial_reset_cannot_clear_other_exhausted_window(self):
-        with self.store.connect() as c:
-            claude_resets(
-                c,
-                {
-                    'cedar_ember': {
-                        'eligible': True,
-                        'grants': [
-                            dict(id='g', resets_left=1, clears=['five_hour'], usable_now=True, ends_at=self.now + 3600)
-                        ],
-                    }
-                },
-                self.now,
-            )
-        from llm_usage.planning import fallback_resources
-
-        result = fallback_resources(
-            self.store.limits(self.now), 'claude-code', 'sonnet', ['five_hour', 'seven_day'], self.now
-        )
-        self.assertIsNone(result[0]['can_resolve'])
-
-    def test_expired_or_paused_grants_are_not_recommended(self):
-        with self.store.connect() as c:
-            claude_resets(
-                c,
-                {
-                    'cedar_ember': {
-                        'eligible': True,
-                        'grants': [
-                            dict(id='g', resets_left=1, clears=['five_hour'], usable_now=True, ends_at=self.now - 1)
-                        ],
-                    }
-                },
-                self.now,
-            )
-        from llm_usage.planning import fallback_resources
-
-        result = fallback_resources(self.store.limits(self.now), 'claude-code', 'sonnet', ['five_hour'], self.now)
-        self.assertFalse(result[0]['can_resolve'])
 
     def test_linked_manual_record_is_not_a_second_balance(self):
         self.codex(self.now, credits=dict(balance='20', hasCredits=True))

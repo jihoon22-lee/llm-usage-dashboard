@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory, session
 from werkzeug.exceptions import HTTPException
 
+from .compress import apply_etag_and_compression
 from .config import (
     LOCAL_KEYS,
     atomic_json as atomic_json,
@@ -159,7 +160,8 @@ def create_app(config=None):
                 'Content-Security-Policy': CSP,
             }
         )
-        return response
+        static_etag = cached or request.path in ('/sw.js', '/manifest.json')
+        return apply_etag_and_compression(request, response, cacheable=static_etag)
 
     @app.errorhandler(HTTPException)
     def http_error(error):
@@ -175,7 +177,7 @@ def create_app(config=None):
 
     @app.get('/')
     def index():
-        return render_template('index.html', v=version)
+        return render_template('index.html', v=version, refresh_seconds=config.get('refresh_seconds', 300))
 
     @app.get('/sw.js')
     def service_worker():

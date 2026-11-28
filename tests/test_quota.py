@@ -17,7 +17,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from llm_usage.insights import quota_trends, quota_decreases, quota_pace
+from llm_usage.insights import quota_trends, quota_decreases
 from llm_usage.limits import poll_claude, poll_limits, read_codex, retry_delay, NoRedirect
 from llm_usage.store import Store, stamp
 
@@ -182,42 +182,6 @@ class QuotaTests(unittest.TestCase):
         self.assertFalse(quota_trends(points, NOW, 'fresh')[0]['available'])
         self.assertEqual(sum(r['decrease_pp'] or 0 for r in quota_decreases(points, NOW)), 10)
         self.assertFalse(quota_trends([], NOW, 'fresh')[0]['available'])
-
-    def test_pace_averages_the_last_hour_of_the_current_segment(self):
-        # Providers report integer percentages, so two adjacent samples are
-        # either flat or a whole point apart. The trailing-hour average stays
-        # at 2%/h here while a two-sample pace would alternate 12%/h and 0.
-        points = [
-            dict(
-                checked=NOW - 3600 + i * 300,
-                remaining=90 - (2 if i * 300 >= 1800 else 0),
-                resets=NOW + 86400,
-                break_before=(i == 0),
-                source='codex',
-            )
-            for i in range(13)
-        ]
-        pace = quota_pace(points, NOW, 'fresh')
-        self.assertEqual(pace, (2.0, 60.0))
-        # A segment shorter than an hour still reports what was observed.
-        short = points[-2:]
-        self.assertEqual(quota_pace(short, NOW, 'fresh'), (0.0, 5.0))
-
-    def test_pace_never_bridges_breaks_stale_or_expired_values(self):
-        points = [
-            dict(checked=NOW - 600, remaining=20, resets=NOW + 1000, break_before=True, source='codex'),
-            dict(checked=NOW - 300, remaining=15, resets=NOW + 1000, break_before=False, source='codex'),
-            dict(checked=NOW, remaining=10, resets=NOW + 1000, break_before=False, source='codex'),
-        ]
-        self.assertEqual(quota_pace(points, NOW, 'fresh'), (60.0, 10.0))
-        self.assertIsNone(quota_pace(points, NOW, 'stale'))
-        self.assertIsNone(quota_pace(points, NOW + 700, 'fresh'))
-        points[-1]['resets'] = NOW - 1
-        self.assertIsNone(quota_pace(points, NOW, 'fresh'))
-        points[-1]['resets'] = NOW + 1000
-        points[-1]['break_before'] = True
-        self.assertIsNone(quota_pace(points, NOW, 'fresh'))
-        self.assertIsNone(quota_pace([], NOW, 'fresh'))
 
     def fake_app_server(self, reply):
         server = self.root / 'fake-codex'

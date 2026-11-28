@@ -17,7 +17,7 @@ Issues = "https://github.com/jihoon22-lee/llm-usage-dashboard/issues"
 [project.scripts]
 llm-usage = "llm_usage.cli:main"
 [tool.setuptools.package-data]
-llm_usage = ["web/*"]
+llm_usage = ["web/*", "data/*.json"]
 [tool.setuptools.packages.find]
 include = ["llm_usage*"]
 

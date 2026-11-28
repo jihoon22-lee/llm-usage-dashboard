@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm_usage.insights import quota_forecast, window_seconds
+from llm_usage.insights import window_seconds
 from llm_usage.pricing import (
     BUILTIN,
     edited_rates,
@@ -33,59 +33,6 @@ class WindowSecondsTests(unittest.TestCase):
     def test_unknown_or_missing_names_return_none(self):
         for name in (None, '', '미제공', 'custom-bucket', 'x · 날짜'):
             self.assertIsNone(window_seconds(name))
-
-
-class ForecastTests(unittest.TestCase):
-    def test_depleting_pace_flags_within_window(self):
-        now = 1000.0
-        row = dict(status='fresh', pace_per_hour=5.0, pace_minutes=30, remaining=10.0, resets=now + 4 * 3600)
-        forecast = quota_forecast(row, now)
-        self.assertTrue(forecast['within_window'])
-        self.assertEqual(forecast['depletes_at'], now + 2 * 3600)
-        self.assertEqual(forecast['projected_remaining'], 0)
-
-    def test_spare_pace_projects_remaining(self):
-        now = 1000.0
-        row = dict(status='fresh', pace_per_hour=1.0, pace_minutes=60, remaining=50.0, resets=now + 10 * 3600)
-        forecast = quota_forecast(row, now)
-        self.assertFalse(forecast['within_window'])
-        self.assertAlmostEqual(forecast['projected_remaining'], 40.0)
-
-    def test_no_forecast_without_fresh_pace_or_reset(self):
-        now = 1000.0
-        self.assertIsNone(
-            quota_forecast(dict(status='stale', pace_per_hour=5, pace_minutes=60, remaining=10, resets=now + 3600), now)
-        )
-        self.assertIsNone(
-            quota_forecast(
-                dict(status='fresh', pace_per_hour=None, pace_minutes=60, remaining=10, resets=now + 3600), now
-            )
-        )
-        self.assertIsNone(
-            quota_forecast(
-                dict(status='fresh', pace_per_hour=5, pace_minutes=60, remaining=None, resets=now + 3600), now
-            )
-        )
-        self.assertIsNone(
-            quota_forecast(dict(status='fresh', pace_per_hour=5, pace_minutes=60, remaining=10, resets=None), now)
-        )
-        self.assertIsNone(
-            quota_forecast(dict(status='fresh', pace_per_hour=5, pace_minutes=60, remaining=10, resets=now - 1), now)
-        )
-        # A pace derived from less than fifteen minutes of observation is
-        # quantization noise; do not forecast from it.
-        self.assertIsNone(
-            quota_forecast(dict(status='fresh', pace_per_hour=5, pace_minutes=14, remaining=10, resets=now + 3600), now)
-        )
-        self.assertIsNone(quota_forecast(dict(status='fresh', pace_per_hour=5, remaining=10, resets=now + 3600), now))
-
-    def test_zero_pace_never_depletes(self):
-        forecast = quota_forecast(
-            dict(status='fresh', pace_per_hour=0.0, pace_minutes=60, remaining=50.0, resets=4000.0), 1000.0
-        )
-        self.assertFalse(forecast['within_window'])
-        self.assertIsNone(forecast['depletes_at'])
-        self.assertEqual(forecast['projected_remaining'], 50.0)
 
 
 class PricingTests(unittest.TestCase):

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from llm_usage import notify
-from llm_usage.signals import capacity, quota_events, usage_spike
+from llm_usage.signals import quota_events, usage_spike
 from llm_usage.store import Store, stamp
 from llm_usage.webapp import create_app
 
@@ -54,18 +54,6 @@ class SignalTests(unittest.TestCase):
             events = quota_events(c, 'claude-code', 'five_hour', 'claude-oauth', NOW)
         self.assertEqual([e['kind'] for e in events['recent']], ['exhausted', 'recovered', 'exhausted'])
         self.assertEqual((events['exhausted'], events['last_exhausted']), (2, NOW - 100 * 60))
-
-    def test_capacity_needs_a_used_open_window(self):
-        row = dict(
-            status='fresh', remaining=80.0, plan={'ahead': 0}, window=dict(open=True, tokens=2_000_000, requests=40)
-        )
-        self.assertEqual(
-            capacity(row),
-            dict(tokens_per_point=100_000, remaining_tokens=8_000_000, remaining_requests=160, used_points=20),
-        )
-        self.assertIsNone(capacity({**row, 'remaining': 97.0}))
-        self.assertIsNone(capacity({**row, 'plan': None}))
-        self.assertIsNone(capacity({**row, 'window': {**row['window'], 'open': False}}))
 
     def test_spike_against_this_accounts_usual_hours(self):
         hour = int(NOW // 3600)

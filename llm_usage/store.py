@@ -806,15 +806,12 @@ class Store:
         """Quota rows; `ended` holds the subscriptions the user marked as ended and
         `names` the user's names for Claude accounts."""
         from .insights import (
-            quota_history,
-            quota_pace,
-            quota_plan,
-            quota_trends,
+            attach_scopes,
             quota_decreases,
-            quota_forecast,
-            pace_lookback,
-            window_seconds,
+            quota_history,
+            quota_trends,
             token_total,
+            window_seconds,
         )
 
         now = now or time.time()
@@ -944,14 +941,9 @@ class Store:
                 row['history'] = history.get((row['route'], row['bucket']), [])
                 if previous_account:
                     row['history'] = []
-                pace = quota_pace(row['history'], now, row['status'], pace_lookback(row['bucket'])[0])
-                row['pace_per_hour'] = pace[0] if pace else None
-                row['pace_minutes'] = pace[1] if pace else None
                 row['trends'] = quota_trends(row['history'], now, row['status'])
                 row['decreases'] = quota_decreases(row['history'], now)
                 row['history_source'] = row['history'][-1]['source'] if row['history'] else None
-                row['forecast'] = quota_forecast(row, now)
-                row['plan'] = quota_plan(row, now)
                 row['window'] = None
                 row['window_seconds'] = window_seconds(row['bucket'])
                 # Per-point route/bucket/source repeat the row; keep what the chart reads.
@@ -1013,7 +1005,7 @@ class Store:
                 row['window'] = dict(
                     start=start, end=end, open=end < row['resets'], requests=r['requests'], tokens=token_total(dict(r))
                 )
-            from .signals import capacity, quota_events
+            from .signals import quota_events
 
             for row in rows:
                 row['events'] = (
@@ -1028,11 +1020,7 @@ class Store:
                     if row['checked']
                     else None
                 )
-                row['capacity'] = capacity(row)
-                row['capacity_history'] = [] if row['route'] in accounts else self.capacity_history(c, row, now)
-        from .planning import enrich
-
-        enrich(rows, now)
+        attach_scopes(rows)
         return dict(
             limits=rows,
             sources=list(sources.values()),
@@ -1048,60 +1036,6 @@ class Store:
             unused_percent=self.thresholds['unused_percent'],
             unused_hours=self.thresholds['unused_hours'],
         )
-
-    def capacity_history(self, c, row, now, keep=8, min_used=5):
-        """Tokens one percentage point bought in recent finished windows of this bucket.
-
-        A window is identified by its original reset (jitter of seconds merged); its use
-        is 100 minus the lowest remaining observed before that reset, and its tokens are
-        this route's events inside [reset - window length, reset). Windows that used
-        under min_used points are left out. A drop against earlier windows can mean the
-        provider changed the quota; it is an observation, not a published limit."""
-        span = row.get('window_seconds')
-        source = row.get('history_source') or row.get('source')
-        if not span or not row.get('checked'):
-            return []
-        epochs = []
-        for resets, remaining in c.execute(
-            'SELECT resets,MIN(remaining) FROM limit_history WHERE route=? AND bucket=? AND source=? '
-            'AND resets IS NOT NULL AND resets<=? AND resets>=? GROUP BY CAST(resets/60 AS INTEGER) ORDER BY resets',
-            (row['route'], row['bucket'], source, now, now - 30 * 86400),
-        ):
-            if epochs and resets - epochs[-1][0] <= 120:
-                epochs[-1][1] = min(epochs[-1][1], remaining)
-            else:
-                epochs.append([resets, remaining])
-        result = []
-        for resets, lowest in epochs[-keep:]:
-            used = 100 - (lowest if lowest is not None else 100)
-            if used < min_used:
-                continue
-            key = (row['route'], row['bucket'], int(resets // 60), round(used, 3))
-            with self._usage_lock:
-                memo = self.__dict__.setdefault('_capacity_memo', {})
-                entry = memo.get(key)
-            if entry is None:
-                where, args = route_events(row['route'])
-                r = c.execute(
-                    'SELECT COALESCE(SUM(uncached_input+cached_input+output+cache_creation),0),COALESCE(SUM(requests),0) FROM events '
-                    'WHERE ' + where + ' AND ts>=? AND ts<?',
-                    (*args, resets - span, resets),
-                ).fetchone()
-                entry = dict(
-                    resets=resets,
-                    used_points=used,
-                    tokens=r[0],
-                    requests=r[1],
-                    tokens_per_point=r[0] / used if r[0] else None,
-                )
-                with self._usage_lock:
-                    memo = self.__dict__.setdefault('_capacity_memo', {})
-                    if len(memo) > 5000:
-                        memo.clear()
-                    memo[key] = entry
-            if entry['tokens_per_point']:
-                result.append(entry)
-        return result
 
     # Subscription accounts: one per route, Claude Code split by account (pending = original).
     ACCOUNT_SQL = "CASE WHEN route='claude-code' THEN COALESCE(account,'claude-code') ELSE route END"
