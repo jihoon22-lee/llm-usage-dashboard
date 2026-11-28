@@ -8,15 +8,74 @@ import re
 import socket
 import sqlite3
 import time
-import tempfile
 from pathlib import Path
 
-from .config import local_path, local_problem, with_local
-from .limits import codex_limits, poll_limits, status_limits
-from .sqlite_ro import open_readonly
+from .config import local_path, with_local
+from .limits import codex_limits, poll_limits
 from .record_files import RecordReadError, compressed, open_record, record_files, unsupported_files
 from .store import Store, identity, project_label, stamp
 from .util import log_exception, prefix_bounds
+from .collect_backfill import (
+    _codex_kind,
+    _codex_meta,
+    backfill_attribution,
+    backfill_devin,
+    backfill_jsonl,
+    backfill_opencode,
+    prepare_normalization,
+)
+from .collect_sources import (
+    DAY,
+    HEARTBEAT_SECONDS,
+    RETRY_AFTER_FAILURE,
+    check_hook_versions,
+    collect_antigravity_tokens,
+    collect_opencode,
+    collect_status,
+    prune_stale_file_state,
+    report_local_settings,
+    status_files,
+    status_route,
+    write_summaries,
+)
+
+__all__ = [
+    'DAY',
+    'HEARTBEAT_SECONDS',
+    'PARSER_VERSION',
+    'RECORD_ERRORS',
+    'RETRY_AFTER_FAILURE',
+    'SQL_RECORD_ERRORS',
+    '_codex_kind',
+    '_codex_meta',
+    'backfill_attribution',
+    'backfill_devin',
+    'backfill_jsonl',
+    'backfill_opencode',
+    'changed_files',
+    'check_hook_versions',
+    'collect_antigravity_tokens',
+    'collect_file',
+    'collect_local',
+    'collect_opencode',
+    'collect_status',
+    'due',
+    'file_parser_version',
+    'local_sources',
+    'model_provider',
+    'parse_line',
+    'prepare_normalization',
+    'prune_stale_file_state',
+    'repair_provider_labels',
+    'report_local_settings',
+    'retire_legacy_sources',
+    'run',
+    'sd_notify',
+    'status_files',
+    'status_route',
+    'sync_thresholds',
+    'write_summaries',
+]
 
 # What one malformed record can raise. A value SQLite cannot bind or store (a list where a
 # session id belongs, a NaN time) fails only its own statement, so the record is counted
@@ -332,93 +391,6 @@ def changed_files(store, root, paths, route=None):
         yield path
 
 
-def collect_opencode(store, path):
-    src = open_readonly(path)
-    try:
-        with store.connect() as c:
-            key = 'opencode:' + str(path)
-            checkpoint = store.state(c, key, 0)
-            if not store.state(c, key + ':details-v1'):
-                checkpoint = 0
-            newest = checkpoint
-            cols = {r[1] for r in src.execute('PRAGMA table_info(message)')}
-            has_session = (
-                'session_id' in cols
-                and src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone()
-                is not None
-            )
-            sel = (
-                'SELECT m.id,m.time_created,m.time_updated,m.data,m.session_id,s.directory,s.parent_id '
-                'FROM message m LEFT JOIN session s ON s.id=m.session_id'
-                if has_session
-                else 'SELECT id,time_created,time_updated,data,'
-                + ('session_id' if 'session_id' in cols else 'NULL')
-                + ',NULL,NULL FROM message'
-            )
-
-            def ingest(row):
-                mid, created, updated, raw, sid, directory, parent_id = row
-                try:
-                    d = json.loads(raw)
-                    if d.get('role') == 'assistant' and d.get('tokens'):
-                        t = d['tokens']
-                        cache = t.get('cache', {})
-                        model = d.get('modelID', 'unknown')
-                        # OpenCode output excludes reasoning, input excludes cache read/write.
-                        store.event(
-                            c,
-                            identity('opencode', mid),
-                            created / 1000,
-                            model_provider(model),
-                            d.get('providerID', 'opencode'),
-                            model,
-                            dict(
-                                uncached_input=t.get('input', 0),
-                                cached_input=cache.get('read', 0),
-                                cache_creation=cache.get('write', 0),
-                                output=t.get('output', 0) + t.get('reasoning', 0),
-                                reasoning=t.get('reasoning', 0),
-                                reasoning_observed=int(t.get('reasoning') is not None),
-                            ),
-                            session=sid,
-                            project=project_label(directory),
-                            agent_kind='sub' if parent_id else 'main',
-                        )
-                    c.execute('DELETE FROM import_errors WHERE source=? AND record=?', (key, mid))
-                except RECORD_ERRORS as exc:
-                    store.import_error(c, key, mid, type(exc).__name__)
-
-            # Retry a bounded batch even if a repaired row retains its old time_updated.
-            retries = c.execute(
-                'SELECT record FROM import_errors WHERE source=? ORDER BY checked LIMIT 200', (key,)
-            ).fetchall()
-            for failed in retries:
-                row = src.execute(
-                    sel + ' WHERE m.id=?' if has_session else sel + ' WHERE id=?', (failed['record'],)
-                ).fetchone()
-                if row and row[2] < checkpoint:
-                    ingest(row)
-                elif row is None:
-                    # Rotate missing IDs too, so they cannot starve later retries.
-                    store.import_error(c, key, failed['record'], 'MissingRecord')
-            for row in src.execute(
-                sel
-                + (
-                    ' WHERE m.time_updated>=? ORDER BY m.time_updated'
-                    if has_session
-                    else ' WHERE time_updated>=? ORDER BY time_updated'
-                ),
-                (checkpoint,),
-            ):
-                newest = max(newest, row[2])
-                ingest(row)
-            store.save_state(c, key, newest)
-            store.save_state(c, key + ':details-v1', True)
-            return store.error_count(c, key)
-    finally:
-        src.close()
-
-
 def local_sources(store, settings):
     from .claude_accounts import observed_homes, transcript_sources
 
@@ -535,544 +507,6 @@ def collect_local(store, settings, *, include_derived=True):
 
         claude_summary(store, c)
         store.save_state(c, 'last_local', time.time())
-
-
-def collect_antigravity_tokens(store, settings):
-    from .statusline import validate_observation, observation_key
-
-    errors = 0
-    for folder in settings.get('status_inboxes', []):
-        path = Path(folder) / 'antigravity-tokens.db'
-        if not path.exists():
-            continue
-        key = 'agy-tokens:' + str(path)
-        try:
-            with store.connect() as c:
-                stat = path.stat()
-                signature = [stat.st_ino, stat.st_size, stat.st_mtime_ns]
-                if store.state(c, key) == signature:
-                    continue
-                source = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
-                try:
-                    for first, last, raw in source.execute(
-                        'SELECT first_seen,last_seen,data FROM observations ORDER BY last_seen'
-                    ):
-                        if (
-                            not all(isinstance(v, (int, float)) and 0 < v <= time.time() + 60 for v in (first, last))
-                            or first > last
-                        ):
-                            raise ValueError('invalid observation time')
-                        value = validate_observation(json.loads(raw))
-                        c.execute(
-                            'INSERT INTO agy_token_observations VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
-                            'first_seen=MIN(first_seen,excluded.first_seen),last_seen=MAX(last_seen,excluded.last_seen)',
-                            (observation_key(value), first, last, json.dumps(value, sort_keys=True)),
-                        )
-                    store.save_state(c, key, signature)
-                finally:
-                    source.close()
-        except (OSError, sqlite3.Error, ValueError, TypeError):
-            errors += 1
-    # This runs on the 2-second loop: prune hourly and rewrite the source row only
-    # when its status or text changes, so an idle loop does not write the database.
-    with store.connect() as c:
-        if time.time() - (store.state(c, 'agy-tokens:pruned', 0) or 0) >= 3600:
-            c.execute('DELETE FROM agy_token_observations WHERE last_seen<?', (time.time() - 30 * 86400,))
-            store.save_state(c, 'agy-tokens:pruned', time.time())
-        row = c.execute('SELECT data,last_seen FROM agy_token_observations ORDER BY last_seen DESC LIMIT 1').fetchone()
-        if errors:
-            store.source_changed(c, 'antigravity-tokens', 'error', '토큰 관측 파일 읽기 실패 · 기존 관측은 유지합니다.')
-        elif row:
-            value = json.loads(row['data'])
-            counters = {k: v for k, v in value['totals'].items() if k != 'context_window_size'} | value['current']
-            numeric = sum(type(v) is int for v in counters.values())
-            integrated = c.execute('SELECT 1 FROM antigravity_requests LIMIT 1').fetchone() is not None
-            detail = (
-                f'토큰 숫자 {numeric}개 필드 수신 · '
-                + ('소비량은 대화 DB에서 별도 집계' if integrated else '소비량 합계 검증 대기')
-                if numeric
-                else '상태줄 수신 · 토큰 숫자 미제공 (' + value['context_state'] + ')'
-            )
-            if time.time() - row['last_seen'] > 600:
-                detail += ' · 오래된 관측'
-            store.source_changed(
-                c,
-                'antigravity-tokens',
-                ('ok' if integrated else 'partial') if numeric else 'unavailable',
-                detail,
-                row['last_seen'],
-            )
-        else:
-            store.source_changed(
-                c, 'antigravity-tokens', 'unavailable', '토큰 관측 연결됨 · 다음 Antigravity 상태줄 수신 대기'
-            )
-
-
-def status_files(folder):
-    """(path, base route) of every status-line file; Claude homes other than the
-    default write claude-code@<home tag>.json."""
-    folder = Path(folder)
-    found = [(folder / 'claude-code.json', 'claude-code'), (folder / 'antigravity.json', 'antigravity')]
-    try:
-        found += [
-            (p, 'claude-code')
-            for p in sorted(folder.glob('claude-code@*.json'))
-            if re.fullmatch(r'claude-code@[0-9a-f]{12}\.json', p.name)
-        ]
-    except OSError:
-        pass
-    return [(p, route) for p, route in found if p.exists()]
-
-
-def status_route(store, c, path, route, data):
-    """The quota route a status line reports for; None when its account is unknown."""
-    if route != 'claude-code':
-        return route
-    key = data.get('account')
-    if isinstance(key, str) and re.fullmatch('[0-9a-f]{64}', key):
-        from .claude_accounts import route_for
-
-        primary = store.state(c, 'claude_primary_account')
-        if primary or key in (store.state(c, 'claude_accounts:unbound-keys', []) or []):
-            return route_for(key, primary)
-        known = c.execute('SELECT route FROM claude_accounts WHERE account_key=?', (key,)).fetchone()
-        if known:
-            return known[0]
-        return 'claude-code' if path.name == 'claude-code.json' else None
-    # Older wrappers did not identify the account; only the default home's file is used.
-    return 'claude-code' if path.name == 'claude-code.json' else None
-
-
-def collect_status(store, settings):
-    from .config import ended_routes
-    from .store import USER_ENDED_DETAIL
-
-    collect_antigravity_tokens(store, settings)
-    ended = ended_routes(settings)
-    for folder in settings.get('status_inboxes', []):
-        for path, base in status_files(folder):
-            # A Claude file names its account only inside (see status_route).
-            route = None if base == 'claude-code' else base
-            try:
-                data = json.loads(path.read_text())
-                with store.connect() as c:
-                    route = status_route(store, c, path, base, data)
-                    if route is None:
-                        continue
-                    # Kept (committed) before the event is read, so a file whose last event was already
-                    # read, or whose event fails below, still names its account.
-                    if store.state(c, 'status_route:' + str(path)) != route:
-                        store.save_state(c, 'status_route:' + str(path), route)
-                        c.commit()
-                    if route in ended:
-                        # Like the polled sources: an old ok/error must not stay live.
-                        store.source_changed(c, route, 'ended', USER_ENDED_DETAIL)
-                        continue
-                    checked = data['checked']
-                    if checked <= store.state(c, 'status:' + str(path), 0):
-                        continue
-                    count = status_limits(store, c, route, data['data'], checked)
-                    if count:
-                        store.source(c, route, 'ok', '', checked)
-                    else:
-                        existing = c.execute('SELECT status FROM sources WHERE name=?', (route,)).fetchone()
-                        if not existing or existing[0] != 'ok':
-                            store.source(
-                                c,
-                                route,
-                                'unavailable',
-                                '최근 상태줄 이벤트에 한도 필드가 없습니다.',
-                                checked,
-                            )
-                    store.save_state(c, 'status:' + str(path), checked)
-            except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                with store.connect() as c:
-                    # Unread, a file fails the account it last reported; a file of another home
-                    # never read is no account's (the default home's is the original account's).
-                    if route is None:
-                        route = store.state(c, 'status_route:' + str(path)) or (
-                            'claude-code' if path.name == 'claude-code.json' else None
-                        )
-                    if route is None:
-                        continue
-                    if route in ended:
-                        store.source_changed(c, route, 'ended', USER_ENDED_DETAIL)
-                    else:
-                        store.source(c, route, 'error', '상태줄 이벤트를 읽지 못했습니다.')
-
-
-def prune_stale_file_state(store, settings):
-    """Drop state checkpoints for deleted files under currently mounted roots."""
-    roots = []
-    for source in local_sources(store, settings):
-        if source['kind'] in ('antigravity', 'devin', 'opencode'):
-            continue
-        root = Path(source['path'])
-        try:
-            if root.is_dir():
-                roots.append((root, source.get('route')))
-        except OSError:
-            continue
-    if not roots:
-        return 0
-    removed = 0
-    with store.connect() as c:
-        pending_claude = bool(
-            c.execute("SELECT 1 FROM events WHERE route='claude-code' AND account IS NULL LIMIT 1").fetchone()
-        )
-        for root, route in roots:
-            if route == 'claude-code' and pending_claude:
-                continue
-            lo, hi = prefix_bounds('file:' + str(root) + '/')
-            stale = []
-            for (key,) in c.execute('SELECT key FROM state WHERE key>=? AND key<?', (lo, hi)).fetchall():
-                try:
-                    if not Path(key[5:]).exists():
-                        stale.append((key,))
-                except OSError:
-                    continue
-            if stale:
-                c.executemany('DELETE FROM state WHERE key=?', stale)
-                removed += len(stale)
-    return removed
-
-
-def check_hook_versions(store, settings):
-    """Report a non-blocking hint if copied hook/statusline scripts drift behind the running code."""
-    from .claudehook import HOOK_VERSION as CLAUDE_HOOK_VERSION
-    from .statusline import HOOK_VERSION as STATUSLINE_VERSION
-
-    raw_dirs = [
-        settings.get('status_dir', Path(store.path).parent / 'status'),
-        *(settings.get('extra_status_dirs') or []),
-        *(settings.get('status_inboxes') or []),
-    ]
-    dirs = []
-    seen_dirs = set()
-    for p in raw_dirs:
-        if not p:
-            continue
-        folder = Path(p)
-        key = str(folder)
-        if key not in seen_dirs:
-            seen_dirs.add(key)
-            dirs.append(folder)
-    mismatched = []
-    expected = (('statusline.py', STATUSLINE_VERSION), ('claudehook.py', CLAUDE_HOOK_VERSION))
-    for folder in dirs:
-        for filename, version in expected:
-            script = folder / filename
-            try:
-                if not script.is_file():
-                    continue
-                head = script.read_text(errors='ignore')[:4096]
-            except OSError:
-                continue
-            match = re.search(r'^HOOK_VERSION\s*=\s*(\d+)\b', head, re.MULTILINE)
-            if not match or int(match.group(1)) != version:
-                mismatched.append(filename)
-    with store.connect() as c:
-        if mismatched:
-            names = ', '.join(sorted(set(mismatched)))
-            store.source_changed(
-                c,
-                'hook-scripts',
-                'partial',
-                f'설치된 보조 스크립트({names}) 버전이 현재 수집기와 다릅니다 · llm-usage install-hooks 재실행을 권장합니다.',
-            )
-        else:
-            c.execute("DELETE FROM sources WHERE name='hook-scripts'")
-
-
-def prepare_normalization(store, settings):
-    """Never discard retained history before a complete, reviewable replacement exists."""
-    with store.connect() as c:
-        version = store.state(c, 'normalized_version', 0)
-        # A full scan; only a pre-v3 store needs the count.
-        retained = (
-            c.execute(
-                "SELECT COUNT(*) FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'"
-            ).fetchone()[0]
-            if version < 3
-            else 0
-        )
-    if version < 3 and retained:
-        with tempfile.TemporaryDirectory(prefix='normalization-', dir=Path(store.path).parent) as folder:
-            staged = Store(Path(folder) / 'usage.db', thresholds=settings.get('thresholds'))
-            collect_local(staged, settings, include_derived=False)
-            with store.connect() as c:
-                c.execute('ATTACH DATABASE ? AS staged', (staged.path,))
-                c.execute('BEGIN IMMEDIATE')
-                bad = c.execute(
-                    "SELECT COUNT(*) FROM staged.sources WHERE status!='ok' AND name!='antigravity-records'"
-                ).fetchone()[0]
-                # Every retained observation must survive or have explicit proof that
-                # it is inherited. Merely finding a partial copy of a session is unsafe.
-                missing = c.execute("""SELECT COUNT(*) FROM events e WHERE
-                  (e.route IN ('codex','claude-code') OR e.route LIKE 'codex:%')
-                  AND NOT EXISTS (SELECT 1 FROM staged.events n WHERE n.id=e.id)
-                  AND NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=e.id AND e.route!='claude-code')
-                  AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=e.id AND e.route!='claude-code')""").fetchone()[
-                    0
-                ]
-                missing += c.execute('''SELECT COUNT(*) FROM codex_points p
-                  WHERE NOT EXISTS (SELECT 1 FROM staged.codex_points n WHERE n.id=p.id)
-                  AND NOT EXISTS (SELECT 1 FROM staged.inherited_points n WHERE n.id=p.id)''').fetchone()[0]
-                missing += c.execute('''SELECT COUNT(*) FROM codex_responses p WHERE NOT EXISTS
-                  (SELECT 1 FROM staged.codex_responses n WHERE n.id=p.id AND n.session=p.session AND n.usage=p.usage
-                   AND (p.account IS NULL OR n.account IS NULL OR p.account=n.account))''').fetchone()[0]
-                if bad or missing:
-                    store.source(
-                        c,
-                        'normalization',
-                        'error',
-                        '원본을 모두 복구할 수 없어 보정을 보류했습니다. 기존 통계를 유지합니다.',
-                    )
-                    return False
-                c.execute('DELETE FROM codex_points')
-                c.execute('INSERT INTO codex_points SELECT * FROM staged.codex_points')
-                c.execute('''UPDATE staged.codex_responses SET account=
-                  (SELECT p.account FROM main.codex_responses p WHERE p.id=staged.codex_responses.id) WHERE account IS NULL''')
-                c.execute('DELETE FROM codex_response_links')
-                c.execute('DELETE FROM codex_responses')
-                c.execute('INSERT INTO codex_responses SELECT * FROM staged.codex_responses')
-                c.execute('INSERT INTO codex_response_links SELECT * FROM staged.codex_response_links')
-                c.execute('INSERT OR IGNORE INTO inherited_points SELECT * FROM staged.inherited_points')
-                c.execute('DELETE FROM session_quality')
-                # Replaying files is not new account evidence. Keep proven parent
-                # ownership, including for newly recovered advisor children.
-                c.execute('''UPDATE staged.events SET account=COALESCE(
-                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.id),
-                  (SELECT e.account FROM main.events e WHERE e.id=staged.events.parent_id)) WHERE account IS NULL''')
-                c.execute("DELETE FROM events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'")
-                c.execute(
-                    "INSERT INTO events SELECT * FROM staged.events WHERE route IN ('codex','claude-code') OR route LIKE 'codex:%'"
-                )
-                # Native projection and cloud/telemetry deduplication require the
-                # same evidence that produced the copied events and checkpoints.
-                c.execute('INSERT OR IGNORE INTO usage_aliases SELECT * FROM staged.usage_aliases')
-                c.execute('INSERT OR IGNORE INTO usage_links SELECT * FROM staged.usage_links')
-                c.execute('INSERT OR IGNORE INTO usage_origins SELECT * FROM staged.usage_origins')
-                c.execute("DELETE FROM state WHERE key LIKE 'file:%' OR key LIKE 'permanent_errors:%'")
-                c.execute("DELETE FROM import_errors WHERE source LIKE 'file:%'")
-                c.execute("INSERT INTO state SELECT * FROM staged.state WHERE key LIKE 'file:%'")
-                store.save_state(c, 'normalized_version', 3)
-                store.bump_data_version(c)
-    with store.connect() as c:
-        if version < 4:
-            for row in c.execute('SELECT DISTINCT session FROM codex_points').fetchall():
-                store.rebuild_codex(c, row['session'])
-            store.save_state(c, 'normalized_version', 4)
-        store.source(c, 'normalization', 'ok', '카운터 초기화 구간을 구분한 집계')
-    return True
-
-
-def _codex_meta(line):
-    try:
-        d = json.loads(line)
-    except ValueError:
-        return None
-    return d.get('payload', {}) if d.get('type') == 'session_meta' else None
-
-
-def _codex_kind(meta):
-    source = meta.get('source')
-    if meta.get('thread_source') == 'subagent' or (isinstance(source, dict) and source.get('subagent')):
-        return 'sub'
-    if meta.get('forked_from_id') or meta.get('parent_thread_id'):
-        return 'fork'
-    return 'main'
-
-
-def backfill_jsonl(store, path, route):
-    """Attribute pre-migration events from one JSONL record file."""
-    if route.startswith('codex'):
-        meta = None
-        with open_record(path) as f:
-            for line in f:
-                if b'session_meta' not in line:
-                    continue
-                meta = _codex_meta(line)
-                if meta:
-                    break
-        sid = (meta or {}).get('id') or (meta or {}).get('session_id')
-        if not sid:
-            return
-        with store.connect() as c:
-            c.execute(
-                '''UPDATE events SET session=?,project=?,agent_kind=? WHERE session IS NULL
-              AND id IN (SELECT id FROM codex_points WHERE session=?)''',
-                (sid, project_label(meta.get('cwd')), _codex_kind(meta), identity(sid)),
-            )
-            store.bump_data_version(c)
-    elif route == 'claude-code':
-        updates = {}
-        with open_record(path) as f:
-            for line in f:
-                if b'"assistant"' not in line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue
-                if d.get('type') != 'assistant':
-                    continue
-                mid = (d.get('message') or {}).get('id')
-                if mid and mid not in updates:
-                    updates[mid] = (
-                        d.get('sessionId'),
-                        project_label(d.get('cwd')),
-                        'sub' if d.get('isSidechain') else 'main',
-                        identity('claude-code', mid),
-                    )
-        if updates:
-            with store.connect() as c:
-                c.executemany(
-                    'UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
-                    list(updates.values()),
-                )
-                store.bump_data_version(c)
-
-
-def backfill_opencode(store, path):
-    src = open_readonly(path)
-    try:
-        has_session = (
-            src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").fetchone() is not None
-        )
-        cols = {r[1] for r in src.execute('PRAGMA table_info(message)')}
-        rows = src.execute(
-            ('SELECT m.id,m.session_id,s.directory,s.parent_id FROM message m LEFT JOIN session s ON s.id=m.session_id')
-            if has_session
-            else 'SELECT id,' + ('session_id' if 'session_id' in cols else 'NULL') + ',NULL,NULL FROM message'
-        ).fetchall()
-    finally:
-        src.close()
-    with store.connect() as c:
-        c.executemany(
-            'UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL',
-            [(sid, project_label(d), 'sub' if p else 'main', identity('opencode', mid)) for mid, sid, d, p in rows],
-        )
-        store.bump_data_version(c)
-
-
-def backfill_devin(store, settings):
-    from .devin import roots, open_db
-
-    for name, path in roots(settings):
-        if not path.exists():
-            continue
-        src, tmp = open_db(path)
-        try:
-            has_sessions = (
-                src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() is not None
-            )
-            dirs = (
-                {r['id']: r['working_directory'] for r in src.execute('SELECT id,working_directory FROM sessions')}
-                if has_sessions
-                else {}
-            )
-            updates = []
-            for row in src.execute('SELECT session_id,chat_message FROM message_nodes'):
-                try:
-                    d = json.loads(row['chat_message'])
-                except (ValueError, TypeError):
-                    continue
-                if d.get('role') != 'assistant':
-                    continue
-                rid = ((d.get('metadata') or {}).get('metrics') or {}) and (d.get('metadata') or {}).get('request_id')
-                if not rid:
-                    continue
-                updates.append(
-                    (row['session_id'], project_label(dirs.get(row['session_id'])), 'main', identity('devin', rid))
-                )
-        finally:
-            src.close()
-            if tmp:
-                import shutil
-
-                shutil.rmtree(tmp, ignore_errors=True)
-        with store.connect() as c:
-            c.executemany('UPDATE events SET session=?,project=?,agent_kind=? WHERE id=? AND session IS NULL', updates)
-            store.bump_data_version(c)
-
-
-def backfill_attribution(store, settings):
-    """One-time session/project/agent_kind attribution for pre-migration events."""
-    with store.connect() as c:
-        if store.state(c, 'backfill_v2'):
-            return
-        store.source(c, 'session-backfill', 'partial', '세션·프로젝트 귀속 백필 진행 중')
-    failures = []
-    for source in local_sources(store, settings):
-        kind = source.get('kind')
-        route = source.get('route') or ''
-        root = Path(source['path'])
-        if kind in ('antigravity', 'devin') or not root.exists():
-            continue
-        try:
-            if kind == 'opencode':
-                backfill_opencode(store, root)
-            elif route == 'claude-code' or route.startswith('codex'):
-                for path in record_files(root):
-                    backfill_jsonl(store, path, route)
-        except (OSError, sqlite3.Error, EOFError, RecordReadError):
-            failures.append(source['name'])
-    try:
-        backfill_devin(store, settings)
-    except (OSError, sqlite3.Error):
-        failures.append('devin')
-    with store.connect() as c:
-        if failures:
-            # Leave the flag unset so the next collector run retries.
-            store.source(
-                c, 'session-backfill', 'error', '백필 실패 (' + ','.join(failures) + ') · 다음 수집에서 재시도'
-            )
-        else:
-            store.save_state(c, 'backfill_v2', True)
-            store.source(c, 'session-backfill', 'ok', '기존 기록의 세션·프로젝트 귀속 완료')
-
-
-def write_summaries(store, settings):
-    """Opt-in (statusline_summary: true): the one-line quota summary the status-line
-    wrapper appends below the tool's own line. Inboxes the service cannot write
-    (Windows homes under the read-only sandbox) are skipped."""
-    from .config import ended_routes
-    from .notify import brief_line
-
-    line = brief_line(store.limits(ended=ended_routes(settings), names=settings.get('claude_account_names')))
-    for folder in settings.get('status_inboxes', []):
-        try:
-            path = Path(folder)
-            tmp = path / 'summary.txt.tmp'
-            tmp.write_text(line + '\n')
-            os.replace(tmp, path / 'summary.txt')
-        except OSError:
-            pass
-
-
-DAY = 86400
-RETRY_AFTER_FAILURE = 3600
-# The idle loop turns every 2 seconds; its heartbeat is written this often. The page calls
-# the collector stopped after stale_seconds (60 at the least), a restart notice after 10 minutes.
-HEARTBEAT_SECONDS = 30
-LOCAL_SETTINGS_SOURCE = '웹 설정'
-
-
-def report_local_settings(store, settings):
-    """Say so when local.json cannot be read: the collector then runs on the base settings."""
-    problem = local_problem(settings)
-    with store.connect() as c:
-        if problem:
-            store.source_changed(
-                c,
-                LOCAL_SETTINGS_SOURCE,
-                'error',
-                f'local.json을 읽지 못했습니다 ({problem}) · 웹에서 바꾼 알림·구독료·종료 구독 설정이 적용되지 않습니다.',
-            )
-        elif c.execute('SELECT 1 FROM sources WHERE name=?', (LOCAL_SETTINGS_SOURCE,)).fetchone():
-            c.execute('DELETE FROM sources WHERE name=?', (LOCAL_SETTINGS_SOURCE,))
-            c.execute('DELETE FROM source_health WHERE name=?', (LOCAL_SETTINGS_SOURCE,))
 
 
 def sd_notify(message):

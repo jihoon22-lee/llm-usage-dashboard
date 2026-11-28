@@ -228,7 +228,7 @@ class WebRefusalTests(Base):
             )
         self.assertEqual(r.status_code, 400)
         self.assertEqual(len(logs.output), 1)
-        self.assertRegex(logs.output[0], r'usage request refused: ValueError at store\.py:\d+$')
+        self.assertRegex(logs.output[0], r'usage request refused: ValueError at (?:store|usage_query)\.py:\d+$')
         self.assertNotIn('PRIVATE-INPUT', logs.output[0])
 
 
